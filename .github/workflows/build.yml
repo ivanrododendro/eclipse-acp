@@ -20,6 +20,8 @@ jobs:
           cache: maven
       - name: Build p2 repository
         run: mvn --batch-mode --no-transfer-progress clean verify
+      - name: Verify p2 repository isolation
+        run: bash scripts/verify-p2-isolation.sh releng/dev.eclipseacp.repository/target/repository
       - name: Upload p2 repository
         uses: actions/upload-artifact@v4
         with:

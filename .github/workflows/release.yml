@@ -25,6 +25,8 @@ jobs:
           cache: maven
       - name: Build p2 repository
         run: mvn --batch-mode --no-transfer-progress clean verify
+      - name: Verify p2 repository isolation
+        run: bash scripts/verify-p2-isolation.sh releng/dev.eclipseacp.repository/target/repository
       - name: Preserve p2 repository for release job
         uses: actions/upload-artifact@v4
         with:
@@ -51,4 +53,4 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ inputs.release_tag || github.event.release.tag_name }}
-        run: gh release upload "$RELEASE_TAG" "eclipse-acp-p2-${RELEASE_TAG}.zip" "eclipse-acp-p2-${RELEASE_TAG}.zip.sha256" --clobber
+        run: gh release upload "$RELEASE_TAG" "eclipse-acp-p2-$RELEASE_TAG.zip" "eclipse-acp-p2-$RELEASE_TAG.zip.sha256" --clobber
