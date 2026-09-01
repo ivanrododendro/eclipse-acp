@@ -17,13 +17,6 @@
     Apache License, Version 2.0
   </license>
 
-  <requires>
-    <import plugin="org.eclipse.ui"/>
-    <import plugin="org.eclipse.core.runtime"/>
-    <import plugin="org.eclipse.core.resources"/>
-    <import plugin="com.google.gson"/>
-  </requires>
-
   <plugin
         id="dev.eclipseacp.client"
         download-size="0"
