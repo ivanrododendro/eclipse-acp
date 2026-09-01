@@ -42,6 +42,17 @@ The p2 update site is generated in:
 releng/dev.eclipseacp.repository/target/repository
 ```
 
+## Installing safely
+
+The update site contains only the Eclipse ACP feature and bundle; it never embeds or
+updates Eclipse Platform, ASM, Aries, m2e, Jetty, or any other third-party bundle.
+The host Eclipse installation supplies the platform APIs required by ACP.
+
+When installing from **Help → Install New Software…**, keep **Contact all update
+sites during install to find required software** disabled: on Eclipse 2026-06 the
+required platform APIs are already present, and this prevents the installation from
+reconciling unrelated update sites.
+
 ## Run from Eclipse
 
 1. Import the repository as **Existing Maven Projects**.
