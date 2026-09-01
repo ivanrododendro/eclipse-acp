@@ -11,4 +11,34 @@
   </parent>
   <artifactId>dev.eclipseacp.client</artifactId>
   <packaging>eclipse-plugin</packaging>
+
+  <!-- Tycho compiles to target/classes; add it explicitly to the OSGi bundle. -->
+  <build>
+    <plugins>
+      <plugin>
+        <groupId>org.eclipse.tycho</groupId>
+        <artifactId>tycho-packaging-plugin</artifactId>
+        <version>${tycho.version}</version>
+        <configuration>
+          <additionalFileSets>
+            <fileSet>
+              <directory>${project.build.outputDirectory}</directory>
+              <includes>
+                <include>**/*.class</include>
+              </includes>
+            </fileSet>
+            <fileSet>
+              <directory>${project.basedir}</directory>
+              <includes>
+                <include>plugin.xml</include>
+              </includes>
+            </fileSet>
+          </additionalFileSets>
+          <archive>
+            <addMavenDescriptor>false</addMavenDescriptor>
+          </archive>
+        </configuration>
+      </plugin>
+    </plugins>
+  </build>
 </project>
