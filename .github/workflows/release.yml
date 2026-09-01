@@ -1,0 +1,54 @@
+name: Publish release asset
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing GitHub Release tag to receive the p2 archive
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+      - name: Build p2 repository
+        run: mvn --batch-mode --no-transfer-progress clean verify
+      - name: Preserve p2 repository for release job
+        uses: actions/upload-artifact@v4
+        with:
+          name: eclipse-acp-p2
+          path: releng/dev.eclipseacp.repository/target/repository
+
+  attach-p2-asset:
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
+    steps:
+      - name: Download p2 repository
+        uses: actions/download-artifact@v4
+        with:
+          name: eclipse-acp-p2
+          path: release/p2
+      - name: Create archive and checksum
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag || github.event.release.tag_name }}
+        run: |
+          zip -r "eclipse-acp-p2-${RELEASE_TAG}.zip" release/p2
+          sha256sum "eclipse-acp-p2-${RELEASE_TAG}.zip" > "eclipse-acp-p2-${RELEASE_TAG}.zip.sha256"
+      - name: Attach files to GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag || github.event.release.tag_name }}
+        run: gh release upload "$RELEASE_TAG" "eclipse-acp-p2-${RELEASE_TAG}.zip" "eclipse-acp-p2-${RELEASE_TAG}.zip.sha256" --clobber
