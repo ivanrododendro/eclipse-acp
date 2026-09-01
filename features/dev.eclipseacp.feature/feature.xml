@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<feature
+      id="dev.eclipseacp.feature"
+      label="Eclipse ACP Client"
+      version="0.1.0.qualifier"
+      provider-name="Eclipse ACP contributors">
+
+  <description>
+    Agent Client Protocol integration for the Eclipse IDE.
+  </description>
+
+  <copyright>
+    Copyright 2026 Ivan and contributors.
+  </copyright>
+
+  <license url="https://www.apache.org/licenses/LICENSE-2.0">
+    Apache License, Version 2.0
+  </license>
+
+  <requires>
+    <import plugin="org.eclipse.ui"/>
+    <import plugin="org.eclipse.core.runtime"/>
+    <import plugin="org.eclipse.core.resources"/>
+    <import plugin="com.google.gson"/>
+  </requires>
+
+  <plugin
+        id="dev.eclipseacp.client"
+        download-size="0"
+        install-size="0"
+        version="0.0.0"
+        unpack="false"/>
+</feature>

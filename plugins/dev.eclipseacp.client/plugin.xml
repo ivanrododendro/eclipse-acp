@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?eclipse version="3.4"?>
+<plugin>
+  <extension point="org.eclipse.ui.views">
+    <category
+          id="dev.eclipseacp.client.views.category"
+          name="ACP"/>
+    <view
+          allowMultiple="false"
+          category="dev.eclipseacp.client.views.category"
+          class="dev.eclipseacp.client.ui.AcpChatView"
+          id="dev.eclipseacp.client.views.chat"
+          name="ACP Chat"
+          restorable="true"/>
+  </extension>
+
+  <extension point="org.eclipse.ui.preferencePages">
+    <page
+          class="dev.eclipseacp.client.preferences.AcpPreferencePage"
+          id="dev.eclipseacp.client.preferences"
+          name="ACP"/>
+  </extension>
+
+  <extension point="org.eclipse.core.runtime.preferences">
+    <initializer class="dev.eclipseacp.client.preferences.AcpPreferenceInitializer"/>
+  </extension>
+</plugin>
