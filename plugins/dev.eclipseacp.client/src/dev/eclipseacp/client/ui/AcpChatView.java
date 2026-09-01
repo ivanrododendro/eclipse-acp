@@ -21,7 +21,6 @@ import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Display;
 import org.eclipse.swt.widgets.Label;
 import org.eclipse.swt.widgets.Text;
-import org.eclipse.ui.IFileEditorInput;
 import org.eclipse.ui.IWorkbenchPart;
 import org.eclipse.ui.part.ViewPart;
 
@@ -153,9 +152,9 @@ public final class AcpChatView extends ViewPart implements AcpListener {
         }
 
         var editor = getSite().getPage().getActiveEditor();
-        if (editor != null && editor.getEditorInput() instanceof IFileEditorInput fileInput) {
-            IFile file = fileInput.getFile();
-            if (file.getProject().getLocation() != null) {
+        if (editor != null) {
+            IFile file = editor.getEditorInput().getAdapter(IFile.class);
+            if (file != null && file.getProject().getLocation() != null) {
                 return file.getProject().getLocation().toFile().toPath();
             }
         }
