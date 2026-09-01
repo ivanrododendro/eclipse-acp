@@ -40,4 +40,17 @@ if grep -Eq "namespace='org\.eclipse\.equinox\.p2\.iu' name='(org\.eclipse\.|com
   exit 1
 fi
 
+bundle_jar="$(find "$repository_dir/plugins" -maxdepth 1 -type f -name 'dev.eclipseacp.client_*.jar' -print -quit)"
+if [[ -z "$bundle_jar" ]]; then
+  echo "Missing Eclipse ACP bundle in the p2 repository." >&2
+  exit 1
+fi
+
+for required_entry in plugin.xml dev/eclipseacp/client/ui/AcpChatView.class; do
+  if ! unzip -l "$bundle_jar" | awk '{print $4}' | grep -Fxq "$required_entry"; then
+    echo "The Eclipse ACP bundle is missing required entry: $required_entry" >&2
+    exit 1
+  fi
+done
+
 echo "p2 repository isolation verified: only Eclipse ACP units are published."
