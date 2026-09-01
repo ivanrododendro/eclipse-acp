@@ -20,3 +20,8 @@ jobs:
           cache: maven
       - name: Build p2 repository
         run: mvn --batch-mode --no-transfer-progress clean verify
+      - name: Upload p2 repository
+        uses: actions/upload-artifact@v4
+        with:
+          name: eclipse-acp-p2
+          path: releng/dev.eclipseacp.repository/target/repository

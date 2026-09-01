@@ -12,9 +12,10 @@ Early MVP. The plug-in currently provides:
 - ACP v1 initialization and session creation;
 - streamed agent text in the Eclipse view;
 - project-aware working directory selection;
+- explicit dialogs for ACP permission requests;
 - configurable command and arguments for `vibe-acp`.
 
-File-system callbacks, terminal integration, permission dialogs, rich diffs and ACP v2 are planned next.
+File-system callbacks, terminal integration, rich diffs and ACP v2 are planned next.
 
 ## Requirements
 
@@ -65,7 +66,7 @@ Mistral model/provider
 ## Security
 
 The plug-in does not store Mistral API keys. Authentication remains owned by the selected ACP agent.
-The MVP deliberately advertises no Eclipse file-system or terminal capabilities; those capabilities will be added together with explicit user approval flows.
+The MVP deliberately advertises no Eclipse file-system or terminal capabilities. Agent permission requests are always presented to the user, with rejection selected by default.
 
 ## License
 
