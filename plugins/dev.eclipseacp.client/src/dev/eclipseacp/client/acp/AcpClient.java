@@ -14,9 +14,13 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonPrimitive;
+import dev.eclipseacp.client.agent.AgentCapabilities;
+import dev.eclipseacp.client.agent.AgentClient;
 
-public final class AcpClient implements AutoCloseable, JsonRpcHandler {
+/** ACP v1 adapter. The rest of the plug-in talks to AgentClient only. */
+public final class AcpClient implements AgentClient, JsonRpcHandler {
     private static final int PROTOCOL_VERSION = 1;
+    private static final String GFM_SYSTEM_INSTRUCTION = "System instruction: Format every response using GitHub Flavored Markdown (GFM). Use headings, lists, tables, links, and fenced code blocks when they improve clarity. Do not use raw HTML unless explicitly requested.";
 
     private final AcpListener listener;
     private final String command;
@@ -24,6 +28,8 @@ public final class AcpClient implements AutoCloseable, JsonRpcHandler {
     private Process process;
     private JsonRpcConnection connection;
     private String sessionId;
+    private volatile boolean applyingSystemInstruction;
+    private volatile AgentCapabilities capabilities = AgentCapabilities.NONE;
 
     public AcpClient(String command, String arguments, AcpListener listener) {
         this.command = Objects.requireNonNull(command).trim();
@@ -59,14 +65,32 @@ public final class AcpClient implements AutoCloseable, JsonRpcHandler {
         listener.onStatus("Initializing " + command + "…");
         return initialize()
                 .thenCompose(ignored -> newSession(workingDirectory))
+                .thenCompose(ignored -> applySystemInstruction())
                 .thenAccept(ignored -> listener.onStatus("Connected"));
     }
+
+    /** ACP v1 has no native system role; this establishes an invisible session bootstrap instruction. */
+    private CompletableFuture<Void> applySystemInstruction() {
+        applyingSystemInstruction = true;
+        return sendPrompt(GFM_SYSTEM_INSTRUCTION, false)
+                .whenComplete((ignored, error) -> applyingSystemInstruction = false);
+    }
+
+    @Override
+    public AgentCapabilities capabilities() { return capabilities; }
 
     public CompletableFuture<Void> prompt(String text) {
         if (sessionId == null) {
             return CompletableFuture.failedFuture(new IllegalStateException("ACP session is not connected"));
         }
 
+        return sendPrompt(text, true);
+    }
+
+    private CompletableFuture<Void> sendPrompt(String text, boolean announce) {
+        if (sessionId == null) {
+            return CompletableFuture.failedFuture(new IllegalStateException("ACP session is not connected"));
+        }
         JsonObject content = new JsonObject();
         content.addProperty("type", "text");
         content.addProperty("text", text);
@@ -77,9 +101,9 @@ public final class AcpClient implements AutoCloseable, JsonRpcHandler {
         params.addProperty("sessionId", sessionId);
         params.add("prompt", prompt);
 
-        listener.onStatus("Agent working…");
+        if (announce) listener.onStatus("Agent working…");
         return connection.request("session/prompt", params)
-                .thenAccept(result -> listener.onStatus(stopReason(result)));
+                .thenAccept(result -> { if (announce) listener.onStatus(stopReason(result)); });
     }
 
     public void cancel() throws IOException {
@@ -109,8 +133,16 @@ public final class AcpClient implements AutoCloseable, JsonRpcHandler {
             if (negotiated != PROTOCOL_VERSION) {
                 throw new IllegalStateException("Unsupported ACP protocol version: " + negotiated);
             }
+            capabilities = capabilities(result);
             return result;
         });
+    }
+
+    private static AgentCapabilities capabilities(JsonObject result) {
+        JsonObject caps = result.has("agentCapabilities") && result.get("agentCapabilities").isJsonObject()
+                ? result.getAsJsonObject("agentCapabilities") : new JsonObject();
+        return new AgentCapabilities(caps.has("sessionRequestPermission") || caps.has("permissions"),
+                caps.has("modes"), caps.has("fileSystem") || caps.has("fs"), caps.has("terminal"));
     }
 
     private CompletableFuture<JsonObject> newSession(Path workingDirectory) {
@@ -137,7 +169,7 @@ public final class AcpClient implements AutoCloseable, JsonRpcHandler {
 
         if ("agent_message_chunk".equals(kind)) {
             String text = textFrom(update.get("content"));
-            if (!text.isEmpty()) {
+            if (!applyingSystemInstruction && !text.isEmpty()) {
                 listener.onAgentText(text);
             }
         } else if ("agent_thought_chunk".equals(kind)) {
@@ -284,6 +316,7 @@ public final class AcpClient implements AutoCloseable, JsonRpcHandler {
     @Override
     public void close() {
         sessionId = null;
+        capabilities = AgentCapabilities.NONE;
 
         Process child = process;
         process = null;

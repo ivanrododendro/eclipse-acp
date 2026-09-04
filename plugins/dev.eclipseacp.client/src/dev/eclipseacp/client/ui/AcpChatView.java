@@ -5,47 +5,61 @@ import java.nio.file.Path;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 
-import org.eclipse.core.resources.IFile;
-import org.eclipse.core.resources.IResource;
+import org.eclipse.core.resources.IProject;
 import org.eclipse.core.resources.ResourcesPlugin;
 import org.eclipse.jface.dialogs.MessageDialog;
-import org.eclipse.jface.viewers.IStructuredSelection;
 import org.eclipse.swt.SWT;
-import org.eclipse.swt.custom.StyledText;
+import org.eclipse.swt.browser.Browser;
 import org.eclipse.swt.events.KeyAdapter;
 import org.eclipse.swt.events.KeyEvent;
 import org.eclipse.swt.layout.GridData;
 import org.eclipse.swt.layout.GridLayout;
 import org.eclipse.swt.widgets.Button;
+import org.eclipse.swt.widgets.Combo;
 import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Display;
 import org.eclipse.swt.widgets.Label;
 import org.eclipse.swt.widgets.Text;
-import org.eclipse.ui.IWorkbenchPart;
 import org.eclipse.ui.part.ViewPart;
 
-import dev.eclipseacp.client.acp.AcpClient;
 import dev.eclipseacp.client.acp.AcpListener;
 import dev.eclipseacp.client.acp.PermissionOption;
+import dev.eclipseacp.client.agent.AgentClient;
+import dev.eclipseacp.client.agent.AgentClientFactory;
+import dev.eclipseacp.client.agent.AgentProvider;
+import dev.eclipseacp.client.preferences.AgentProviderRegistry;
 import dev.eclipseacp.client.preferences.AcpPreferences;
 
 public final class AcpChatView extends ViewPart implements AcpListener {
-    private StyledText transcript;
+    public static final String ID = "dev.eclipseacp.client.views.chat";
+    private Browser transcript;
+    private final StringBuilder transcriptMarkdown = new StringBuilder();
     private Text prompt;
-    private Button connectButton;
     private Button sendButton;
     private Button stopButton;
     private Label status;
-    private AcpClient client;
+    private Combo projectSelector;
+    private AgentClient client;
+    private IProject selectedProject;
     private boolean agentMessageOpen;
 
     @Override
     public void createPartControl(Composite parent) {
         parent.setLayout(new GridLayout(1, false));
 
-        transcript = new StyledText(parent, SWT.BORDER | SWT.MULTI | SWT.READ_ONLY | SWT.WRAP | SWT.V_SCROLL);
+        Composite header = new Composite(parent, SWT.NONE);
+        header.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
+        header.setLayout(new GridLayout(2, false));
+        Label projectLabel = new Label(header, SWT.NONE);
+        projectLabel.setText("Project:");
+        projectSelector = new Combo(header, SWT.DROP_DOWN | SWT.READ_ONLY);
+        projectSelector.setLayoutData(new GridData(SWT.END, SWT.CENTER, true, false));
+        loadProjects();
+        projectSelector.addListener(SWT.Selection, ignored -> selectProjectFromCombo());
+
+        transcript = new Browser(parent, SWT.BORDER);
         transcript.setLayoutData(new GridData(SWT.FILL, SWT.FILL, true, true));
-        transcript.setAlwaysShowScrollBars(false);
+        transcript.setText(GfmRenderer.document(""));
 
         prompt = new Text(parent, SWT.BORDER | SWT.MULTI | SWT.WRAP | SWT.V_SCROLL);
         GridData promptData = new GridData(SWT.FILL, SWT.FILL, true, false);
@@ -63,11 +77,7 @@ public final class AcpChatView extends ViewPart implements AcpListener {
 
         Composite actions = new Composite(parent, SWT.NONE);
         actions.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
-        actions.setLayout(new GridLayout(4, false));
-
-        connectButton = new Button(actions, SWT.PUSH);
-        connectButton.setText("Connect");
-        connectButton.addListener(SWT.Selection, ignored -> connect());
+        actions.setLayout(new GridLayout(3, false));
 
         sendButton = new Button(actions, SWT.PUSH);
         sendButton.setText("Send");
@@ -84,15 +94,21 @@ public final class AcpChatView extends ViewPart implements AcpListener {
         status.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
     }
 
-    private void connect() {
+    /** Called only by the project/resource context-menu command. */
+    public void openSessionFor(IProject project) {
+        if (project == null || !project.exists() || !project.isOpen() || project.getLocation() == null) {
+            onError("Cannot open ACP session", new IllegalArgumentException("The selected project is not open"));
+            return;
+        }
         disconnect();
-        String command = AcpPreferences.store().getString(AcpPreferences.AGENT_COMMAND);
-        String arguments = AcpPreferences.store().getString(AcpPreferences.AGENT_ARGUMENTS);
-        String agentName = AcpPreferences.store().getString(AcpPreferences.AGENT_NAME);
+        selectedProject = project;
+        selectProject(project);
+        AgentProvider provider = new AgentProviderRegistry(AcpPreferences.store()).active();
+        String agentName = provider.name();
 
-        append("Connecting to " + agentName + " in " + workingDirectory() + "…\n\n");
-        connectButton.setEnabled(false);
-        AcpClient newClient = new AcpClient(command, arguments, this);
+        append("Connecting to " + agentName + " in " + project.getLocation() + "…\n\n");
+        projectSelector.setEnabled(false);
+        AgentClient newClient = AgentClientFactory.create(provider, this);
         client = newClient;
         newClient.connect(workingDirectory()).whenComplete((ignored, error) -> ui(() -> {
             if (client != newClient) {
@@ -104,10 +120,31 @@ public final class AcpChatView extends ViewPart implements AcpListener {
                 return;
             }
             sendButton.setEnabled(true);
-            connectButton.setText("Reconnect");
-            connectButton.setEnabled(true);
             prompt.setFocus();
         }));
+    }
+
+    private void loadProjects() {
+        if (projectSelector == null || projectSelector.isDisposed()) return;
+        projectSelector.removeAll();
+        for (IProject project : ResourcesPlugin.getWorkspace().getRoot().getProjects()) {
+            if (project.isOpen()) projectSelector.add(project.getName());
+        }
+    }
+
+    private void selectProjectFromCombo() {
+        int index = projectSelector.getSelectionIndex();
+        if (index < 0) return;
+        int openIndex = 0;
+        for (IProject project : ResourcesPlugin.getWorkspace().getRoot().getProjects()) {
+            if (project.isOpen()) {
+                if (openIndex++ == index) { selectedProject = project; status.setText("Ready to open a session for " + project.getName()); break; }
+            }
+        }
+    }
+
+    private void selectProject(IProject project) {
+        for (int i = 0; i < projectSelector.getItemCount(); i++) if (projectSelector.getItem(i).equals(project.getName())) { projectSelector.select(i); break; }
     }
 
     private void sendPrompt() {
@@ -117,12 +154,12 @@ public final class AcpChatView extends ViewPart implements AcpListener {
         }
         prompt.setText("");
         agentMessageOpen = false;
-        append("You:\n" + text + "\n\nAgent:\n");
+        append("## You\n\n" + text + "\n\n## Agent\n\n");
         agentMessageOpen = true;
         sendButton.setEnabled(false);
         stopButton.setEnabled(true);
 
-        AcpClient activeClient = client;
+        AgentClient activeClient = client;
         activeClient.prompt(text).whenComplete((ignored, error) -> ui(() -> {
             if (client != activeClient) {
                 return; // The response belongs to an earlier connection.
@@ -150,23 +187,9 @@ public final class AcpChatView extends ViewPart implements AcpListener {
     }
 
     private Path workingDirectory() {
-        IWorkbenchPart activePart = getSite().getPage().getActivePart();
-        if (activePart != null && activePart.getSite().getSelectionProvider() != null) {
-            var selection = activePart.getSite().getSelectionProvider().getSelection();
-            if (selection instanceof IStructuredSelection structured && structured.getFirstElement() instanceof IResource resource
-                    && resource.getProject().getLocation() != null) {
-                return resource.getProject().getLocation().toFile().toPath();
-            }
+        if (selectedProject != null && selectedProject.getLocation() != null) {
+            return selectedProject.getLocation().toFile().toPath();
         }
-
-        var editor = getSite().getPage().getActiveEditor();
-        if (editor != null) {
-            IFile file = editor.getEditorInput().getAdapter(IFile.class);
-            if (file != null && file.getProject().getLocation() != null) {
-                return file.getProject().getLocation().toFile().toPath();
-            }
-        }
-
         return ResourcesPlugin.getWorkspace().getRoot().getLocation().toFile().toPath();
     }
 
@@ -189,7 +212,7 @@ public final class AcpChatView extends ViewPart implements AcpListener {
     public void onError(String message, Throwable error) {
         ui(() -> {
             String detail = error == null || error.getMessage() == null ? "" : ": " + error.getMessage();
-            append("\n[Error] " + message + detail + "\n\n");
+            append("\n> **Error:** " + message + detail + "\n\n");
             onStatus("Error");
         });
     }
@@ -231,12 +254,12 @@ public final class AcpChatView extends ViewPart implements AcpListener {
         if (transcript == null || transcript.isDisposed()) {
             return;
         }
-        transcript.append(text);
-        transcript.setTopIndex(transcript.getLineCount() - 1);
+        transcriptMarkdown.append(text);
+        transcript.setText(GfmRenderer.document(transcriptMarkdown.toString()));
     }
 
     private void disconnect() {
-        AcpClient previousClient = client;
+        AgentClient previousClient = client;
         client = null;
         if (previousClient != null) {
             // Closing a subprocess pipe can wait for a blocked reader. Never do it on SWT's UI thread.
@@ -248,9 +271,7 @@ public final class AcpChatView extends ViewPart implements AcpListener {
         if (stopButton != null && !stopButton.isDisposed()) {
             stopButton.setEnabled(false);
         }
-        if (connectButton != null && !connectButton.isDisposed()) {
-            connectButton.setEnabled(true);
-        }
+        if (projectSelector != null && !projectSelector.isDisposed()) projectSelector.setEnabled(true);
     }
 
     private void ui(Runnable action) {

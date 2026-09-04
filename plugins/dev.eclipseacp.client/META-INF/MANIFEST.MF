@@ -7,9 +7,12 @@ Bundle-Vendor: Eclipse ACP contributors
 Bundle-RequiredExecutionEnvironment: JavaSE-21
 Require-Bundle: org.eclipse.core.runtime,
  org.eclipse.core.resources,
+ org.eclipse.core.commands,
  org.eclipse.ui,
  org.eclipse.jface,
  org.eclipse.swt,
+ org.commonmark,
+ org.commonmark.ext-gfm-tables,
  com.google.gson
 Bundle-ActivationPolicy: lazy
 Automatic-Module-Name: dev.eclipseacp.client

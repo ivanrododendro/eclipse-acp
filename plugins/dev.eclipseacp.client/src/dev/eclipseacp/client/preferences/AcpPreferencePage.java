@@ -1,35 +1,36 @@
 package dev.eclipseacp.client.preferences;
 
-import org.eclipse.jface.preference.FieldEditorPreferencePage;
-import org.eclipse.jface.preference.StringFieldEditor;
+import org.eclipse.jface.preference.PreferencePage;
+import org.eclipse.swt.SWT;
+import org.eclipse.swt.layout.GridData;
+import org.eclipse.swt.layout.GridLayout;
+import org.eclipse.swt.widgets.Button;
+import org.eclipse.swt.widgets.Composite;
+import org.eclipse.swt.widgets.Label;
+import org.eclipse.swt.widgets.List;
+import org.eclipse.swt.widgets.Text;
 import org.eclipse.ui.IWorkbench;
 import org.eclipse.ui.IWorkbenchPreferencePage;
+import dev.eclipseacp.client.agent.AgentProvider;
 
-public final class AcpPreferencePage extends FieldEditorPreferencePage implements IWorkbenchPreferencePage {
-    public AcpPreferencePage() {
-        super(GRID);
-        setPreferenceStore(AcpPreferences.store());
-        setDescription("Configure the local ACP agent launched by Eclipse.");
+public final class AcpPreferencePage extends PreferencePage implements IWorkbenchPreferencePage {
+    private List providerList; private Text name; private Text command; private Text arguments; private AgentProviderRegistry registry;
+    @Override protected Composite createContents(Composite parent) {
+        registry = new AgentProviderRegistry(AcpPreferences.store());
+        Composite root = new Composite(parent, SWT.NONE); root.setLayout(new GridLayout(2, false));
+        providerList = new List(root, SWT.BORDER | SWT.SINGLE | SWT.V_SCROLL); providerList.setLayoutData(new GridData(SWT.FILL, SWT.FILL, true, true));
+        Composite edit = new Composite(root, SWT.NONE); edit.setLayoutData(new GridData(SWT.FILL, SWT.TOP, true, false)); edit.setLayout(new GridLayout(2, false));
+        new Label(edit, SWT.NONE).setText("Name:"); name = field(edit); new Label(edit, SWT.NONE).setText("Command:"); command = field(edit); new Label(edit, SWT.NONE).setText("Arguments:"); arguments = field(edit);
+        Button fresh = new Button(edit, SWT.PUSH); fresh.setText("New provider"); fresh.addListener(SWT.Selection, e -> { providerList.deselectAll(); name.setText(""); command.setText(""); arguments.setText(""); });
+        Button save = new Button(edit, SWT.PUSH); save.setText("Add / update"); save.addListener(SWT.Selection, e -> saveProvider());
+        Button select = new Button(edit, SWT.PUSH); select.setText("Use selected"); select.addListener(SWT.Selection, e -> { int i = providerList.getSelectionIndex(); if (i >= 0) { registry.select(registry.list().get(i).id()); refresh(); } });
+        Button remove = new Button(edit, SWT.PUSH); remove.setText("Remove"); remove.addListener(SWT.Selection, e -> { int i = providerList.getSelectionIndex(); if (i >= 0) { registry.remove(registry.list().get(i).id()); refresh(); } });
+        providerList.addListener(SWT.Selection, e -> loadSelected()); refresh(); return root;
     }
-
-    @Override
-    protected void createFieldEditors() {
-        addField(new StringFieldEditor(
-                AcpPreferences.AGENT_NAME,
-                "Agent name:",
-                getFieldEditorParent()));
-        addField(new StringFieldEditor(
-                AcpPreferences.AGENT_COMMAND,
-                "Command:",
-                getFieldEditorParent()));
-        addField(new StringFieldEditor(
-                AcpPreferences.AGENT_ARGUMENTS,
-                "Arguments:",
-                getFieldEditorParent()));
-    }
-
-    @Override
-    public void init(IWorkbench workbench) {
-        // No workbench-specific initialization required.
-    }
+    private Text field(Composite parent) { Text t = new Text(parent, SWT.BORDER); t.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false)); return t; }
+    private void refresh() { providerList.removeAll(); for (AgentProvider p : registry.list()) providerList.add(p.name() + (p.id().equals(registry.active().id()) ? " (active)" : "")); if (providerList.getItemCount() > 0) providerList.select(0); loadSelected(); }
+    private void loadSelected() { int i = providerList.getSelectionIndex(); if (i >= 0) { AgentProvider p = registry.list().get(i); name.setText(p.name()); command.setText(p.command()); arguments.setText(p.arguments()); } }
+    private void saveProvider() { int i = providerList.getSelectionIndex(); String id = i >= 0 ? registry.list().get(i).id() : name.getText().trim().toLowerCase().replaceAll("[^a-z0-9]+", "-"); AgentProvider p = new AgentProvider(id, name.getText(), command.getText(), arguments.getText()); if (i >= 0) registry.update(p); else registry.add(p); refresh(); }
+    @Override public boolean performOk() { return true; }
+    @Override public void init(IWorkbench workbench) { }
 }

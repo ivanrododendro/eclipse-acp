@@ -21,6 +21,34 @@
           name="ACP"/>
   </extension>
 
+  <extension point="org.eclipse.ui.commands">
+    <command
+          id="dev.eclipseacp.client.commands.openChat"
+          name="Open ACP Chat for Project"/>
+  </extension>
+
+  <extension point="org.eclipse.ui.handlers">
+    <handler
+          class="dev.eclipseacp.client.ui.OpenAcpChatHandler"
+          commandId="dev.eclipseacp.client.commands.openChat"/>
+  </extension>
+
+  <extension point="org.eclipse.ui.popupMenus">
+    <objectContribution
+          adaptable="true"
+          objectClass="org.eclipse.core.resources.IResource"
+          id="dev.eclipseacp.client.popup.openChat">
+      <menu
+            id="dev.eclipseacp.client.popup.menu"
+            label="ACP">
+        <command
+              commandId="dev.eclipseacp.client.commands.openChat"
+              label="Open ACP Chat for Project"
+              style="push"/>
+      </menu>
+    </objectContribution>
+  </extension>
+
   <extension point="org.eclipse.core.runtime.preferences">
     <initializer class="dev.eclipseacp.client.preferences.AcpPreferenceInitializer"/>
   </extension>
