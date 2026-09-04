@@ -1,0 +1,14 @@
+[
+  {
+    "id": "vibe",
+    "name": "Mistral Vibe",
+    "command": "vibe-acp",
+    "arguments": ""
+  },
+  {
+    "id": "local-agent",
+    "name": "Local ACP agent",
+    "command": "/path/to/agent-acp",
+    "arguments": "--stdio"
+  }
+]

@@ -13,9 +13,13 @@ Early MVP. The plug-in currently provides:
 - streamed agent text in the Eclipse view;
 - project-aware working directory selection;
 - explicit dialogs for ACP permission requests;
-- configurable command and arguments for `vibe-acp`.
+- configurable command and arguments for multiple ACP agents/providers;
+- provider list management (add, edit, remove, select active) persisted in Eclipse preferences;
+- capability negotiation at connection time, with optional features ignored when not advertised.
+- safe CommonMark rendering with GFM tables in the chat transcript;
+- a session bootstrap instruction asking agents to format answers as GitHub Flavored Markdown.
 
-File-system callbacks, terminal integration, rich diffs and ACP v2 are planned next.
+File-system callbacks, terminal integration, rich diffs and ACP v2 are planned next. ACP details are isolated behind the agent client abstraction so these additions do not require UI/session changes.
 
 ## Requirements
 
@@ -33,8 +37,11 @@ vibe-acp --help
 ## Build
 
 ```shell
-mvn clean verify
+# Maven 3.9+ is required. On this workstation, mvnd provides Maven 3.9.14.
+mvnd clean verify
 ```
+
+With another Maven 3.9+ installation, the equivalent command is `mvn clean verify`.
 
 The p2 update site is generated in:
 
@@ -58,8 +65,9 @@ reconciling unrelated update sites.
 1. Import the repository as **Existing Maven Projects**.
 2. Set `releng/dev.eclipseacp.target/dev.eclipseacp.target.target` as the active target platform.
 3. Launch an **Eclipse Application** containing `dev.eclipseacp.client`.
-4. Open **Window → Show View → Other… → ACP → ACP Chat**.
-5. Configure the agent under **Window → Preferences → ACP** if `vibe-acp` is not on Eclipse's `PATH`.
+4. Configure providers under **Window → Preferences → ACP**. The original Vibe settings are migrated automatically as the `vibe` provider.
+5. In Project Explorer, right-click a project or any child resource and choose **ACP → Open ACP Chat for Project**. The session always uses the owning project directory.
+6. Use the project selector at the top-right of the chat to choose the next project. It never opens or switches a session by itself; opening remains an explicit project-context action.
 
 ## Architecture
 
@@ -68,7 +76,7 @@ Eclipse ACP Chat
       |
       | ACP / JSON-RPC 2.0, newline-delimited stdio
       v
-  vibe-acp
+  selected ACP provider (for example `vibe-acp`)
       |
       v
 Mistral model/provider
@@ -78,6 +86,8 @@ Mistral model/provider
 
 The plug-in does not store Mistral API keys. Authentication remains owned by the selected ACP agent.
 The MVP deliberately advertises no Eclipse file-system or terminal capabilities. Agent permission requests are always presented to the user, with rejection selected by default.
+
+ACP v1 has no standard `system` message role. The client therefore sends the Markdown directive as an initial, hidden session instruction after `session/new`, without adding provider-specific protocol fields.
 
 ## License
 
