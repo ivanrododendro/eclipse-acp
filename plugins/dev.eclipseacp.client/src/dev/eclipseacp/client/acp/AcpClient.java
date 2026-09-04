@@ -284,17 +284,22 @@ public final class AcpClient implements AutoCloseable, JsonRpcHandler {
     @Override
     public void close() {
         sessionId = null;
-        if (connection != null) {
-            try {
-                connection.close();
-            } catch (IOException ignored) {
-                // Process shutdown below closes the remaining streams.
-            }
-            connection = null;
+
+        Process child = process;
+        process = null;
+        JsonRpcConnection activeConnection = connection;
+        connection = null;
+
+        // Terminate the child first: this unblocks the JSON-RPC reader before its streams are closed.
+        if (child != null) {
+            child.destroy();
         }
-        if (process != null) {
-            process.destroy();
-            process = null;
+        if (activeConnection != null) {
+            try {
+                activeConnection.close();
+            } catch (IOException ignored) {
+                // The child process may already have closed the streams.
+            }
         }
     }
 }
