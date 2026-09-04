@@ -92,8 +92,12 @@ public final class AcpChatView extends ViewPart implements AcpListener {
 
         append("Connecting to " + agentName + " in " + workingDirectory() + "…\n\n");
         connectButton.setEnabled(false);
-        client = new AcpClient(command, arguments, this);
-        client.connect(workingDirectory()).whenComplete((ignored, error) -> ui(() -> {
+        AcpClient newClient = new AcpClient(command, arguments, this);
+        client = newClient;
+        newClient.connect(workingDirectory()).whenComplete((ignored, error) -> ui(() -> {
+            if (client != newClient) {
+                return; // A newer connection replaced this one.
+            }
             if (error != null) {
                 onError("Could not start " + agentName, unwrap(error));
                 disconnect();
@@ -118,14 +122,18 @@ public final class AcpChatView extends ViewPart implements AcpListener {
         sendButton.setEnabled(false);
         stopButton.setEnabled(true);
 
-        client.prompt(text).whenComplete((ignored, error) -> ui(() -> {
+        AcpClient activeClient = client;
+        activeClient.prompt(text).whenComplete((ignored, error) -> ui(() -> {
+            if (client != activeClient) {
+                return; // The response belongs to an earlier connection.
+            }
             if (error != null) {
                 onError("Prompt failed", unwrap(error));
             } else if (agentMessageOpen) {
                 append("\n\n");
             }
             agentMessageOpen = false;
-            sendButton.setEnabled(client != null);
+            sendButton.setEnabled(true);
             stopButton.setEnabled(false);
         }));
     }
@@ -228,13 +236,19 @@ public final class AcpChatView extends ViewPart implements AcpListener {
     }
 
     private void disconnect() {
-        if (client != null) {
-            client.close();
-            client = null;
+        AcpClient previousClient = client;
+        client = null;
+        if (previousClient != null) {
+            // Closing a subprocess pipe can wait for a blocked reader. Never do it on SWT's UI thread.
+            CompletableFuture.runAsync(previousClient::close);
         }
         if (sendButton != null && !sendButton.isDisposed()) {
             sendButton.setEnabled(false);
+        }
+        if (stopButton != null && !stopButton.isDisposed()) {
             stopButton.setEnabled(false);
+        }
+        if (connectButton != null && !connectButton.isDisposed()) {
             connectButton.setEnabled(true);
         }
     }
