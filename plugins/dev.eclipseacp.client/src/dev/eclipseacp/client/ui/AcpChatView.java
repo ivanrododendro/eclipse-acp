@@ -1,12 +1,11 @@
 package dev.eclipseacp.client.ui;
 
 import java.io.IOException;
-import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 
 import org.eclipse.core.resources.IProject;
-import org.eclipse.core.resources.ResourcesPlugin;
 import org.eclipse.jface.dialogs.MessageDialog;
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.browser.Browser;
@@ -34,15 +33,26 @@ import dev.eclipseacp.client.preferences.AcpPreferences;
 public final class AcpChatView extends ViewPart implements AcpListener {
     public static final String ID = "dev.eclipseacp.client.views.chat";
     private Browser transcript;
-    private final StringBuilder transcriptMarkdown = new StringBuilder();
     private Text prompt;
     private Button sendButton;
     private Button stopButton;
     private Label status;
     private Combo projectSelector;
-    private AgentClient client;
-    private IProject selectedProject;
-    private boolean agentMessageOpen;
+    private final List<ChatSession> sessions = new ArrayList<>();
+    private ChatSession activeSession;
+
+    private static final class ChatSession {
+        private final IProject project;
+        private final String label;
+        private final StringBuilder transcriptMarkdown = new StringBuilder();
+        private AgentClient client;
+        private boolean agentMessageOpen;
+
+        private ChatSession(IProject project, String label) {
+            this.project = project;
+            this.label = label;
+        }
+    }
 
     @Override
     public void createPartControl(Composite parent) {
@@ -55,7 +65,6 @@ public final class AcpChatView extends ViewPart implements AcpListener {
         projectLabel.setText("Project:");
         projectSelector = new Combo(header, SWT.DROP_DOWN | SWT.READ_ONLY);
         projectSelector.setLayoutData(new GridData(SWT.END, SWT.CENTER, true, false));
-        loadProjects();
         projectSelector.addListener(SWT.Selection, ignored -> selectProjectFromCombo());
 
         transcript = new Browser(parent, SWT.BORDER);
@@ -107,125 +116,136 @@ public final class AcpChatView extends ViewPart implements AcpListener {
             onError("Cannot open ACP session", new IllegalArgumentException("The selected project is not open"));
             return;
         }
-        disconnect();
-        selectedProject = project;
-        selectProject(project);
         AgentProvider provider = new AgentProviderRegistry(AcpPreferences.store()).active();
         String agentName = provider.name();
 
-        append("Connecting to " + agentName + " in " + project.getLocation() + "…\n\n");
-        projectSelector.setEnabled(false);
-        AgentClient newClient = AgentClientFactory.create(provider, this);
-        client = newClient;
-        newClient.connect(workingDirectory()).whenComplete((ignored, error) -> ui(() -> {
-            if (client != newClient) {
+        ChatSession session = new ChatSession(project, sessionLabel(project));
+        sessions.add(session);
+        projectSelector.add(session.label);
+        activeSession = session;
+        projectSelector.select(projectSelector.getItemCount() - 1);
+        renderTranscript();
+        append(session, "Connecting to " + agentName + " in " + project.getLocation() + "…\n\n");
+        AgentClient newClient = AgentClientFactory.create(provider, listenerFor(session));
+        session.client = newClient;
+        newClient.connect(project.getLocation().toFile().toPath()).whenComplete((ignored, error) -> ui(() -> {
+            if (session.client != newClient) {
                 return; // A newer connection replaced this one.
             }
             if (error != null) {
-                onError("Could not start " + agentName, unwrap(error));
-                disconnect();
+                onError(session, "Could not start " + agentName, unwrap(error));
+                closeSession(session);
                 return;
             }
-            sendButton.setEnabled(true);
-            prompt.setFocus();
+            updateControls();
+            if (activeSession == session) prompt.setFocus();
         }));
-    }
-
-    private void loadProjects() {
-        if (projectSelector == null || projectSelector.isDisposed()) return;
-        projectSelector.removeAll();
-        for (IProject project : ResourcesPlugin.getWorkspace().getRoot().getProjects()) {
-            if (project.isOpen()) projectSelector.add(project.getName());
-        }
     }
 
     private void selectProjectFromCombo() {
         int index = projectSelector.getSelectionIndex();
-        if (index < 0) return;
-        int openIndex = 0;
-        for (IProject project : ResourcesPlugin.getWorkspace().getRoot().getProjects()) {
-            if (project.isOpen()) {
-                if (openIndex++ == index) { selectedProject = project; status.setText("Ready to open a session for " + project.getName()); break; }
-            }
-        }
+        if (index < 0 || index >= sessions.size()) return;
+        activeSession = sessions.get(index);
+        renderTranscript();
+        updateControls();
     }
 
-    private void selectProject(IProject project) {
-        for (int i = 0; i < projectSelector.getItemCount(); i++) if (projectSelector.getItem(i).equals(project.getName())) { projectSelector.select(i); break; }
+    private String sessionLabel(IProject project) {
+        int number = 1;
+        for (ChatSession session : sessions) {
+            if (session.project.equals(project)) number++;
+        }
+        return number == 1 ? project.getName() : project.getName() + " (session " + number + ")";
     }
 
     private void sendPrompt() {
         String text = prompt.getText().trim();
-        if (text.isEmpty() || client == null) {
+        ChatSession session = activeSession;
+        if (text.isEmpty() || session == null || session.client == null) {
             return;
         }
         prompt.setText("");
-        agentMessageOpen = false;
-        append("## You\n\n" + text + "\n\n## Agent\n\n");
-        agentMessageOpen = true;
-        sendButton.setEnabled(false);
-        stopButton.setEnabled(true);
+        session.agentMessageOpen = false;
+        append(session, "## You\n\n" + text + "\n\n## Agent\n\n");
+        session.agentMessageOpen = true;
+        updateControls();
 
-        AgentClient activeClient = client;
+        AgentClient activeClient = session.client;
         activeClient.prompt(text).whenComplete((ignored, error) -> ui(() -> {
-            if (client != activeClient) {
+            if (session.client != activeClient) {
                 return; // The response belongs to an earlier connection.
             }
             if (error != null) {
-                onError("Prompt failed", unwrap(error));
-            } else if (agentMessageOpen) {
-                append("\n\n");
+                onError(session, "Prompt failed", unwrap(error));
+            } else if (session.agentMessageOpen) {
+                append(session, "\n\n");
             }
-            agentMessageOpen = false;
-            sendButton.setEnabled(true);
-            stopButton.setEnabled(false);
+            session.agentMessageOpen = false;
+            updateControls();
         }));
     }
 
     private void cancel() {
-        if (client == null) {
+        if (activeSession == null || activeSession.client == null) {
             return;
         }
         try {
-            client.cancel();
+            activeSession.client.cancel();
         } catch (IOException exception) {
-            onError("Could not cancel the current prompt", exception);
+            onError(activeSession, "Could not cancel the current prompt", exception);
         }
     }
 
-    private Path workingDirectory() {
-        if (selectedProject != null && selectedProject.getLocation() != null) {
-            return selectedProject.getLocation().toFile().toPath();
-        }
-        return ResourcesPlugin.getWorkspace().getRoot().getLocation().toFile().toPath();
+    private AcpListener listenerFor(ChatSession session) {
+        return new AcpListener() {
+            @Override public void onAgentText(String text) { ui(() -> append(session, text)); }
+            @Override public void onStatus(String value) { setStatus(session, value); }
+            @Override public void onError(String message, Throwable error) { AcpChatView.this.onError(session, message, error); }
+            @Override public CompletableFuture<String> requestPermission(String title, List<PermissionOption> options) {
+                return requestPermissionFor(session, title, options);
+            }
+        };
     }
 
     @Override
     public void onAgentText(String text) {
-        ui(() -> append(text));
+        ui(() -> append(activeSession, text));
     }
 
     @Override
     public void onStatus(String value) {
+        setStatus(activeSession, value);
+    }
+
+    @Override
+    public void onError(String message, Throwable error) {
+        onError(activeSession, message, error);
+    }
+
+    private void setStatus(ChatSession session, String value) {
         ui(() -> {
-            if (status != null && !status.isDisposed()) {
+            if (session == activeSession && status != null && !status.isDisposed()) {
                 status.setText(value);
                 status.getParent().layout();
             }
         });
     }
 
-    @Override
-    public void onError(String message, Throwable error) {
+    private void onError(ChatSession session, String message, Throwable error) {
         ui(() -> {
+            if (session == null) return;
             String detail = error == null || error.getMessage() == null ? "" : ": " + error.getMessage();
-            append("\n> **Error:** " + message + detail + "\n\n");
-            onStatus("Error");
+            append(session, "\n> **Error:** " + message + detail + "\n\n");
+            setStatus(session, "Error");
         });
     }
 
     @Override
     public CompletableFuture<String> requestPermission(String title, List<PermissionOption> options) {
+        return requestPermissionFor(activeSession, title, options);
+    }
+
+    private CompletableFuture<String> requestPermissionFor(ChatSession session, String title, List<PermissionOption> options) {
         CompletableFuture<String> result = new CompletableFuture<>();
         ui(() -> {
             if (options.isEmpty() || getSite().getShell().isDisposed()) {
@@ -257,15 +277,30 @@ public final class AcpChatView extends ViewPart implements AcpListener {
         return options.size() - 1;
     }
 
-    private void append(String text) {
-        if (transcript == null || transcript.isDisposed()) {
+    private void append(ChatSession session, String text) {
+        if (session == null) {
             return;
         }
-        transcriptMarkdown.append(text);
-        transcript.setText(GfmRenderer.document(transcriptMarkdown.toString()));
+        session.transcriptMarkdown.append(text);
+        if (session != activeSession || transcript == null || transcript.isDisposed()) return;
+        transcript.setText(GfmRenderer.document(session.transcriptMarkdown.toString()));
         // setText starts an asynchronous page load; the progress listener above
         // repeats this after the new document has been laid out.
         scrollTranscriptToBottom();
+    }
+
+    private void renderTranscript() {
+        if (transcript == null || transcript.isDisposed() || activeSession == null) return;
+        transcript.setText(GfmRenderer.document(activeSession.transcriptMarkdown.toString()));
+        scrollTranscriptToBottom();
+    }
+
+    private void updateControls() {
+        if (sendButton == null || sendButton.isDisposed()) return;
+        boolean connected = activeSession != null && activeSession.client != null;
+        sendButton.setEnabled(connected && !activeSession.agentMessageOpen);
+        stopButton.setEnabled(connected && activeSession.agentMessageOpen);
+        projectSelector.setEnabled(true);
     }
 
     private void scrollTranscriptToBottom() {
@@ -275,20 +310,44 @@ public final class AcpChatView extends ViewPart implements AcpListener {
         transcript.execute("window.scrollTo(0, Math.max(document.body.scrollHeight, document.documentElement.scrollHeight));");
     }
 
-    private void disconnect() {
-        AgentClient previousClient = client;
-        client = null;
+    private void closeSession(ChatSession session) {
+        AgentClient previousClient = session.client;
+        session.client = null;
         if (previousClient != null) {
             // Closing a subprocess pipe can wait for a blocked reader. Never do it on SWT's UI thread.
             CompletableFuture.runAsync(previousClient::close);
         }
+        int index = sessions.indexOf(session);
+        if (index >= 0) {
+            sessions.remove(index);
+            if (projectSelector != null && !projectSelector.isDisposed()) projectSelector.remove(index);
+        }
+        if (activeSession == session) {
+            activeSession = sessions.isEmpty() ? null : sessions.get(Math.min(index, sessions.size() - 1));
+            if (activeSession != null) projectSelector.select(sessions.indexOf(activeSession));
+            renderTranscript();
+        }
+        updateControls();
+    }
+
+    private void disconnect() {
+        for (ChatSession session : new ArrayList<>(sessions)) {
+            AgentClient previousClient = session.client;
+            session.client = null;
+            if (previousClient != null) CompletableFuture.runAsync(previousClient::close);
+        }
+        sessions.clear();
+        activeSession = null;
         if (sendButton != null && !sendButton.isDisposed()) {
             sendButton.setEnabled(false);
         }
         if (stopButton != null && !stopButton.isDisposed()) {
             stopButton.setEnabled(false);
         }
-        if (projectSelector != null && !projectSelector.isDisposed()) projectSelector.setEnabled(true);
+        if (projectSelector != null && !projectSelector.isDisposed()) {
+            projectSelector.removeAll();
+            projectSelector.setEnabled(true);
+        }
     }
 
     private void ui(Runnable action) {

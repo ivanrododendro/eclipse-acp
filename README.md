@@ -67,7 +67,7 @@ reconciling unrelated update sites.
 3. Launch an **Eclipse Application** containing `dev.eclipseacp.client`.
 4. Configure providers under **Window → Preferences → ACP**. The original Vibe settings are migrated automatically as the `vibe` provider.
 5. In Project Explorer, right-click a project or any child resource and choose **ACP → Open ACP Chat for Project**. The session always uses the owning project directory.
-6. Use the project selector at the top-right of the chat to choose the next project. It never opens or switches a session by itself; opening remains an explicit project-context action.
+6. Each invocation creates a separate ACP session and adds it to the selector at the top-right of the chat. Select an existing entry to switch session and restore its conversation history; opening remains an explicit project-context action.
 
 ## Architecture
 
