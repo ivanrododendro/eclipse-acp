@@ -3,10 +3,13 @@ package dev.eclipseacp.client.preferences;
 import java.util.ArrayList;
 import java.util.List;
 
+import org.eclipse.core.runtime.preferences.InstanceScope;
 import org.eclipse.jface.preference.IPreferenceStore;
+import org.osgi.service.prefs.BackingStoreException;
 import com.google.gson.Gson;
 import com.google.gson.reflect.TypeToken;
 import dev.eclipseacp.client.agent.AgentProvider;
+import dev.eclipseacp.client.PluginIds;
 
 /** Persistent provider registry with a one-time migration from the original Vibe fields. */
 public final class AgentProviderRegistry {
@@ -41,5 +44,13 @@ public final class AgentProviderRegistry {
     }
     private String value(String key, String fallback) { String value = store.getString(key); return value.isBlank() ? fallback : value; }
     private void require(String id) { if (providers.stream().noneMatch(p -> p.id().equals(id))) throw new IllegalArgumentException("Unknown provider: " + id); }
-    private void save() { store.setValue(AcpPreferences.PROVIDERS_JSON, GSON.toJson(providers)); store.setValue(AcpPreferences.ACTIVE_PROVIDER, activeId); }
+    private void save() {
+        store.setValue(AcpPreferences.PROVIDERS_JSON, GSON.toJson(providers));
+        store.setValue(AcpPreferences.ACTIVE_PROVIDER, activeId);
+        try {
+            InstanceScope.INSTANCE.getNode(PluginIds.PLUGIN_ID).flush();
+        } catch (BackingStoreException exception) {
+            throw new IllegalStateException("Cannot persist ACP providers", exception);
+        }
+    }
 }
