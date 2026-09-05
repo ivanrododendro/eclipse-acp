@@ -36,6 +36,7 @@ public final class AcpChatView extends ViewPart implements AcpListener {
     private Text prompt;
     private Button sendButton;
     private Button stopButton;
+    private Button closeButton;
     private Label status;
     private Combo projectSelector;
     private final List<ChatSession> sessions = new ArrayList<>();
@@ -93,7 +94,7 @@ public final class AcpChatView extends ViewPart implements AcpListener {
 
         Composite actions = new Composite(parent, SWT.NONE);
         actions.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
-        actions.setLayout(new GridLayout(3, false));
+        actions.setLayout(new GridLayout(4, false));
 
         sendButton = new Button(actions, SWT.PUSH);
         sendButton.setText("Send");
@@ -104,6 +105,11 @@ public final class AcpChatView extends ViewPart implements AcpListener {
         stopButton.setText("Stop");
         stopButton.setEnabled(false);
         stopButton.addListener(SWT.Selection, ignored -> cancel());
+
+        closeButton = new Button(actions, SWT.PUSH);
+        closeButton.setText("Close");
+        closeButton.setEnabled(false);
+        closeButton.addListener(SWT.Selection, ignored -> closeActiveSession());
 
         status = new Label(actions, SWT.NONE);
         status.setText("Not connected");
@@ -300,7 +306,14 @@ public final class AcpChatView extends ViewPart implements AcpListener {
         boolean connected = activeSession != null && activeSession.client != null;
         sendButton.setEnabled(connected && !activeSession.agentMessageOpen);
         stopButton.setEnabled(connected && activeSession.agentMessageOpen);
+        closeButton.setEnabled(connected);
         projectSelector.setEnabled(true);
+    }
+
+    private void closeActiveSession() {
+        if (activeSession != null) {
+            closeSession(activeSession);
+        }
     }
 
     private void scrollTranscriptToBottom() {
@@ -343,6 +356,9 @@ public final class AcpChatView extends ViewPart implements AcpListener {
         }
         if (stopButton != null && !stopButton.isDisposed()) {
             stopButton.setEnabled(false);
+        }
+        if (closeButton != null && !closeButton.isDisposed()) {
+            closeButton.setEnabled(false);
         }
         if (projectSelector != null && !projectSelector.isDisposed()) {
             projectSelector.removeAll();
