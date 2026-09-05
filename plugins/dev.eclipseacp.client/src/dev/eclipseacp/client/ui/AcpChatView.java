@@ -56,6 +56,7 @@ public final class AcpChatView extends ViewPart implements AcpListener {
     private Button applyButton;
     private Button rejectButton;
     private Button undoButton;
+    private Button contextButton;
     private Label status;
     private Combo projectSelector;
     private final List<ChatSession> sessions = new ArrayList<>();
@@ -78,6 +79,7 @@ public final class AcpChatView extends ViewPart implements AcpListener {
         private final WorkspaceDiffApplier diffApplier = new WorkspaceDiffApplier();
 
         private String persistedSessionId;
+        private String initialPrompt;
 
         private ChatSession(IProject project, String label, String providerId, boolean reviewFileChanges) {
             this.project = project;
@@ -126,7 +128,7 @@ public final class AcpChatView extends ViewPart implements AcpListener {
 
         Composite actions = new Composite(parent, SWT.NONE);
         actions.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
-        actions.setLayout(new GridLayout(9, false));
+        actions.setLayout(new GridLayout(10, false));
 
         sendButton = new Button(actions, SWT.PUSH);
         sendButton.setText("Send");
@@ -168,6 +170,12 @@ public final class AcpChatView extends ViewPart implements AcpListener {
         undoButton.setEnabled(false);
         undoButton.addListener(SWT.Selection, ignored -> undoApply());
 
+        contextButton = new Button(actions, SWT.PUSH);
+        contextButton.setText("Add context");
+        contextButton.setToolTipText("Insert @file, @selection, @java, @problems and @console references");
+        contextButton.setEnabled(false);
+        contextButton.addListener(SWT.Selection, ignored -> addContextReferences());
+
         status = new Label(actions, SWT.NONE);
         status.setText("Not connected");
         status.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
@@ -177,6 +185,11 @@ public final class AcpChatView extends ViewPart implements AcpListener {
 
     /** Called only by the project/resource context-menu command. */
     public void openSessionFor(IProject project) {
+        openSessionFor(project, null);
+    }
+
+    /** Opens a project session and, once connected, sends an explicit contextual action prompt. */
+    public void openSessionFor(IProject project, String initialPrompt) {
         if (project == null || !project.exists() || !project.isOpen() || project.getLocation() == null) {
             onError("Cannot open ACP session", new IllegalArgumentException("The selected project is not open"));
             return;
@@ -186,6 +199,7 @@ public final class AcpChatView extends ViewPart implements AcpListener {
 
         boolean reviewFileChanges = AcpPreferences.store().getBoolean(AcpPreferences.REVIEW_FILE_CHANGES);
         ChatSession session = new ChatSession(project, sessionLabel(project), provider.id(), reviewFileChanges);
+        session.initialPrompt = initialPrompt;
         sessions.add(session);
         projectSelector.add(session.label);
         activeSession = session;
@@ -215,7 +229,11 @@ public final class AcpChatView extends ViewPart implements AcpListener {
             session.persistedSessionId = newClient.sessionId();
             persistSessions();
             updateControls();
-            if (activeSession == session) prompt.setFocus();
+            if (session.initialPrompt != null && !session.initialPrompt.isBlank()) {
+                String initial = session.initialPrompt;
+                session.initialPrompt = null;
+                sendPrompt(session, initial);
+            } else if (activeSession == session) prompt.setFocus();
         }));
     }
 
@@ -269,14 +287,20 @@ public final class AcpChatView extends ViewPart implements AcpListener {
             return;
         }
         prompt.setText("");
+        sendPrompt(session, text);
+    }
+
+    private void sendPrompt(ChatSession session, String text) {
+        if (session == null || session.client == null || text == null || text.isBlank()) return;
+        String expanded = EclipseContext.expand(text, session.project, getSite().getPage());
         session.agentMessageOpen = false;
         session.restoredAgentMessageOpen = false;
-        append(session, "## You\n\n" + text + "\n\n## Agent\n\n");
+        append(session, "## You\n\n" + expanded + "\n\n## Agent\n\n");
         session.agentMessageOpen = true;
         updateControls();
 
         AgentClient activeClient = session.client;
-        activeClient.prompt(text).whenComplete((ignored, error) -> ui(() -> {
+        activeClient.prompt(expanded).whenComplete((ignored, error) -> ui(() -> {
             if (session.client != activeClient) {
                 return; // The response belongs to an earlier connection.
             }
@@ -625,6 +649,13 @@ public final class AcpChatView extends ViewPart implements AcpListener {
         });
     }
 
+    private void addContextReferences() {
+        if (activeSession == null) return;
+        String references = "@file\n@selection\n@java\n@problems\n@console\n";
+        prompt.insert(references);
+        prompt.setFocus();
+    }
+
     private static int defaultPermissionIndex(List<PermissionOption> options) {
         for (int index = 0; index < options.size(); index++) {
             if (options.get(index).kind().startsWith("reject")) {
@@ -682,6 +713,7 @@ public final class AcpChatView extends ViewPart implements AcpListener {
         applyButton.setEnabled(hasDiffs);
         rejectButton.setEnabled(hasDiffs);
         undoButton.setEnabled(reviewFileChanges && activeSession.diffApplier.canUndo());
+        contextButton.setEnabled(connected);
         projectSelector.setEnabled(true);
     }
 
@@ -757,6 +789,7 @@ public final class AcpChatView extends ViewPart implements AcpListener {
         if (applyButton != null && !applyButton.isDisposed()) applyButton.setEnabled(false);
         if (rejectButton != null && !rejectButton.isDisposed()) rejectButton.setEnabled(false);
         if (undoButton != null && !undoButton.isDisposed()) undoButton.setEnabled(false);
+        if (contextButton != null && !contextButton.isDisposed()) contextButton.setEnabled(false);
         if (projectSelector != null && !projectSelector.isDisposed()) {
             projectSelector.removeAll();
             projectSelector.setEnabled(true);

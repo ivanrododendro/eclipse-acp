@@ -5,6 +5,8 @@ import org.eclipse.core.resources.IResource;
 import org.eclipse.core.runtime.IAdaptable;
 import org.eclipse.jface.viewers.IStructuredSelection;
 import org.eclipse.ui.IWorkbenchPage;
+import org.eclipse.ui.IEditorPart;
+import org.eclipse.ui.IEditorInput;
 import org.eclipse.ui.handlers.HandlerUtil;
 import org.eclipse.core.commands.AbstractHandler;
 import org.eclipse.core.commands.ExecutionEvent;
@@ -19,14 +21,23 @@ public final class OpenAcpChatHandler extends AbstractHandler {
                 ? structured.getFirstElement() : null;
         IResource resource = element instanceof IResource direct ? direct
                 : element instanceof IAdaptable adaptable ? adaptable.getAdapter(IResource.class) : null;
+        IWorkbenchPage page = HandlerUtil.getActiveWorkbenchWindowChecked(event).getActivePage();
+        if (resource == null && page != null) {
+            IEditorPart editor = page.getActiveEditor();
+            IEditorInput input = editor == null ? null : editor.getEditorInput();
+            resource = input instanceof IAdaptable adaptable ? adaptable.getAdapter(IResource.class) : null;
+        }
         IProject project = resource == null ? null : resource.getProject();
         if (project == null || !project.exists() || !project.isOpen()) {
             throw new ExecutionException("Select an open Eclipse project or one of its resources");
         }
         try {
-            IWorkbenchPage page = HandlerUtil.getActiveWorkbenchWindowChecked(event).getActivePage();
+            String action = event.getParameter("dev.eclipseacp.client.commands.openChat.action");
+            // Collect before showing the chat view: this preserves a console selection and the invoking editor state.
+            String prompt = action == null ? null
+                    : EclipseContext.expand(EclipseContext.actionPrompt(action, project, page), project, page);
             AcpChatView view = (AcpChatView) page.showView(AcpChatView.ID);
-            view.openSessionFor(project);
+            view.openSessionFor(project, prompt);
             return null;
         } catch (Exception exception) {
             throw new ExecutionException("Could not open ACP chat", exception);

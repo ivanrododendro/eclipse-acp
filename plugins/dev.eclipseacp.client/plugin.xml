@@ -24,7 +24,12 @@
   <extension point="org.eclipse.ui.commands">
     <command
           id="dev.eclipseacp.client.commands.openChat"
-          name="Open ACP Chat for Project"/>
+          name="Open ACP Chat for Project">
+      <commandParameter
+            id="dev.eclipseacp.client.commands.openChat.action"
+            name="ACP action"
+            optional="true"/>
+    </command>
   </extension>
 
   <extension point="org.eclipse.ui.handlers">
@@ -46,6 +51,20 @@
             </iterate>
           </with>
         </visibleWhen>
+      </command>
+    </menuContribution>
+    <menuContribution locationURI="popup:org.eclipse.ui.popup.any?after=additions">
+      <command commandId="dev.eclipseacp.client.commands.openChat" label="ACP: Explain selection" style="push">
+        <parameter name="dev.eclipseacp.client.commands.openChat.action" value="explain"/>
+      </command>
+      <command commandId="dev.eclipseacp.client.commands.openChat" label="ACP: Fix problems" style="push">
+        <parameter name="dev.eclipseacp.client.commands.openChat.action" value="fix"/>
+      </command>
+      <command commandId="dev.eclipseacp.client.commands.openChat" label="ACP: Refactor selection" style="push">
+        <parameter name="dev.eclipseacp.client.commands.openChat.action" value="refactor"/>
+      </command>
+      <command commandId="dev.eclipseacp.client.commands.openChat" label="ACP: Test selection" style="push">
+        <parameter name="dev.eclipseacp.client.commands.openChat.action" value="test"/>
       </command>
     </menuContribution>
   </extension>
