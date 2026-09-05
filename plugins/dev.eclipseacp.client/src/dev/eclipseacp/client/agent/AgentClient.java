@@ -8,6 +8,12 @@ import java.util.concurrent.CompletableFuture;
 /** UI-facing agent contract; protocol versions must not leak beyond this package. */
 public interface AgentClient extends AutoCloseable {
     CompletableFuture<Void> connect(Path workingDirectory);
+    /** Connect to an already persisted agent-side session without creating a new one. */
+    default CompletableFuture<Void> restoreSession(String sessionId, Path workingDirectory) {
+        return CompletableFuture.failedFuture(new UnsupportedOperationException("Session restore is not supported"));
+    }
+    /** The active agent-side session ID, once connected. */
+    default String sessionId() { return null; }
     CompletableFuture<Void> prompt(String text);
     void cancel() throws IOException;
     AgentCapabilities capabilities();

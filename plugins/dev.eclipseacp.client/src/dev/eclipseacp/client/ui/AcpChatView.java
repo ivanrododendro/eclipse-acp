@@ -10,7 +10,10 @@ import java.util.concurrent.CompletableFuture;
 import com.google.gson.JsonObject;
 
 import org.eclipse.core.resources.IProject;
+import org.eclipse.core.resources.ResourcesPlugin;
 import org.eclipse.jface.dialogs.MessageDialog;
+import org.eclipse.jface.viewers.ArrayContentProvider;
+import org.eclipse.jface.viewers.LabelProvider;
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.browser.Browser;
 import org.eclipse.swt.browser.ProgressAdapter;
@@ -25,6 +28,7 @@ import org.eclipse.swt.widgets.Display;
 import org.eclipse.swt.widgets.Label;
 import org.eclipse.swt.widgets.Text;
 import org.eclipse.ui.part.ViewPart;
+import org.eclipse.ui.dialogs.ListDialog;
 
 import dev.eclipseacp.client.acp.AcpListener;
 import dev.eclipseacp.client.acp.FileDiff;
@@ -36,6 +40,7 @@ import dev.eclipseacp.client.acp.ToolCall;
 import dev.eclipseacp.client.agent.AgentClient;
 import dev.eclipseacp.client.agent.AgentClientFactory;
 import dev.eclipseacp.client.agent.AgentProvider;
+import dev.eclipseacp.client.agent.SessionInfo;
 import dev.eclipseacp.client.preferences.AgentProviderRegistry;
 import dev.eclipseacp.client.preferences.AcpPreferences;
 
@@ -45,29 +50,39 @@ public final class AcpChatView extends ViewPart implements AcpListener {
     private Text prompt;
     private Button sendButton;
     private Button stopButton;
+    private Button newSessionButton;
     private Button closeButton;
+    private Button historyButton;
     private Button applyButton;
     private Button rejectButton;
     private Button undoButton;
     private Label status;
     private Combo projectSelector;
     private final List<ChatSession> sessions = new ArrayList<>();
+    private final SessionHistoryStore sessionHistory = new SessionHistoryStore();
+    private final Map<String, SessionHistoryStore.Entry> savedSessions = new LinkedHashMap<>();
     private ChatSession activeSession;
 
     private static final class ChatSession {
         private final IProject project;
         private final String label;
+        private final String providerId;
         private final boolean reviewFileChanges;
         private final StringBuilder transcriptMarkdown = new StringBuilder();
         private AgentClient client;
         private boolean agentMessageOpen;
+        private boolean acceptingRestoredTranscript;
+        private boolean restoredAgentMessageOpen;
         private final Map<String, ToolCall> toolCalls = new LinkedHashMap<>();
         private final Map<String, FileDiff> pendingChanges = new LinkedHashMap<>();
         private final WorkspaceDiffApplier diffApplier = new WorkspaceDiffApplier();
 
-        private ChatSession(IProject project, String label, boolean reviewFileChanges) {
+        private String persistedSessionId;
+
+        private ChatSession(IProject project, String label, String providerId, boolean reviewFileChanges) {
             this.project = project;
             this.label = label;
+            this.providerId = providerId;
             this.reviewFileChanges = reviewFileChanges;
         }
     }
@@ -111,7 +126,7 @@ public final class AcpChatView extends ViewPart implements AcpListener {
 
         Composite actions = new Composite(parent, SWT.NONE);
         actions.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
-        actions.setLayout(new GridLayout(7, false));
+        actions.setLayout(new GridLayout(9, false));
 
         sendButton = new Button(actions, SWT.PUSH);
         sendButton.setText("Send");
@@ -123,10 +138,20 @@ public final class AcpChatView extends ViewPart implements AcpListener {
         stopButton.setEnabled(false);
         stopButton.addListener(SWT.Selection, ignored -> cancel());
 
+        newSessionButton = new Button(actions, SWT.PUSH);
+        newSessionButton.setText("New session");
+        newSessionButton.setEnabled(false);
+        newSessionButton.addListener(SWT.Selection, ignored -> openNewSessionForActiveProject());
+
         closeButton = new Button(actions, SWT.PUSH);
         closeButton.setText("Close");
         closeButton.setEnabled(false);
         closeButton.addListener(SWT.Selection, ignored -> closeActiveSession());
+
+        historyButton = new Button(actions, SWT.PUSH);
+        historyButton.setText("Sessions…");
+        historyButton.setEnabled(false);
+        historyButton.addListener(SWT.Selection, ignored -> chooseAgentSession());
 
         applyButton = new Button(actions, SWT.PUSH);
         applyButton.setText("Apply changes");
@@ -146,6 +171,8 @@ public final class AcpChatView extends ViewPart implements AcpListener {
         status = new Label(actions, SWT.NONE);
         status.setText("Not connected");
         status.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
+
+        restoreSavedSessions();
     }
 
     /** Called only by the project/resource context-menu command. */
@@ -158,7 +185,7 @@ public final class AcpChatView extends ViewPart implements AcpListener {
         String agentName = provider.name();
 
         boolean reviewFileChanges = AcpPreferences.store().getBoolean(AcpPreferences.REVIEW_FILE_CHANGES);
-        ChatSession session = new ChatSession(project, sessionLabel(project), reviewFileChanges);
+        ChatSession session = new ChatSession(project, sessionLabel(project), provider.id(), reviewFileChanges);
         sessions.add(session);
         projectSelector.add(session.label);
         activeSession = session;
@@ -166,20 +193,57 @@ public final class AcpChatView extends ViewPart implements AcpListener {
         renderTranscript();
         append(session, "Connecting to " + agentName + " in " + project.getLocation() + "…"
                 + (reviewFileChanges ? " Changes will be reviewed before applying." : " Changes apply immediately.") + "\n\n");
-        AgentClient newClient = AgentClientFactory.create(provider, listenerFor(session), reviewFileChanges);
+        connect(session, provider, null, false, agentName);
+    }
+
+    private void connect(ChatSession session, AgentProvider provider, String restoredSessionId,
+            boolean restored, String agentName) {
+        AgentClient newClient = AgentClientFactory.create(provider, listenerFor(session), session.reviewFileChanges);
         session.client = newClient;
-        newClient.connect(project.getLocation().toFile().toPath()).whenComplete((ignored, error) -> ui(() -> {
+        CompletableFuture<Void> connection = restoredSessionId == null
+                ? newClient.connect(session.project.getLocation().toFile().toPath())
+                : newClient.restoreSession(restoredSessionId, session.project.getLocation().toFile().toPath());
+        connection.whenComplete((ignored, error) -> ui(() -> {
             if (session.client != newClient) {
                 return; // A newer connection replaced this one.
             }
             if (error != null) {
                 onError(session, "Could not start " + agentName, unwrap(error));
-                closeSession(session);
+                if (!restored) closeSession(session);
                 return;
             }
+            session.persistedSessionId = newClient.sessionId();
+            persistSessions();
             updateControls();
             if (activeSession == session) prompt.setFocus();
         }));
+    }
+
+    private void restoreSavedSessions() {
+        List<AgentProvider> providers = new AgentProviderRegistry(AcpPreferences.store()).list();
+        List<SessionHistoryStore.Entry> entries = sessionHistory.load();
+        for (SessionHistoryStore.Entry entry : entries) {
+            savedSessions.put(sessionKey(entry), entry);
+            IProject project = ResourcesPlugin.getWorkspace().getRoot().getProject(entry.projectName());
+            if (!project.exists() || !project.isOpen() || project.getLocation() == null
+                    || !project.getLocation().toString().equals(entry.projectPath())) continue;
+            AgentProvider provider = providers.stream().filter(candidate -> candidate.id().equals(entry.providerId()))
+                    .findFirst().orElse(null);
+            if (provider == null) continue;
+            ChatSession session = new ChatSession(project, entry.label(), entry.providerId(),
+                    AcpPreferences.store().getBoolean(AcpPreferences.REVIEW_FILE_CHANGES));
+            session.persistedSessionId = entry.sessionId();
+            session.transcriptMarkdown.append(entry.transcript() == null ? "" : entry.transcript());
+            sessions.add(session);
+            projectSelector.add(session.label);
+            if (activeSession == null) activeSession = session;
+            connect(session, provider, entry.sessionId(), true, provider.name());
+        }
+        if (activeSession != null) {
+            projectSelector.select(sessions.indexOf(activeSession));
+            renderTranscript();
+            updateControls();
+        }
     }
 
     private void selectProjectFromCombo() {
@@ -206,6 +270,7 @@ public final class AcpChatView extends ViewPart implements AcpListener {
         }
         prompt.setText("");
         session.agentMessageOpen = false;
+        session.restoredAgentMessageOpen = false;
         append(session, "## You\n\n" + text + "\n\n## Agent\n\n");
         session.agentMessageOpen = true;
         updateControls();
@@ -236,9 +301,102 @@ public final class AcpChatView extends ViewPart implements AcpListener {
         }
     }
 
+    private void openNewSessionForActiveProject() {
+        ChatSession previous = activeSession;
+        if (previous == null) return;
+        IProject project = previous.project;
+        // ACP agents commonly persist the durable session record on session/close.
+        // closeSession also retains its local history entry before removing the tab.
+        closeSession(previous);
+        openSessionFor(project);
+    }
+
+    private void chooseAgentSession() {
+        ChatSession session = activeSession;
+        if (session == null || session.client == null) return;
+        AgentClient client = session.client;
+        listAllSessions(client, session.project.getLocation().toFile().toPath(), null, new ArrayList<>())
+                .whenComplete((available, error) -> ui(() -> {
+                    if (session.client != client) return;
+                    if (error != null) {
+                        onError(session, "Could not list agent sessions", unwrap(error));
+                        return;
+                    }
+                    ListDialog dialog = new ListDialog(getSite().getShell());
+                    dialog.setTitle("ACP sessions");
+                    dialog.setMessage("Select a session to restore:");
+                    dialog.setContentProvider(ArrayContentProvider.getInstance());
+                    dialog.setLabelProvider(new LabelProvider() {
+                        @Override public String getText(Object element) {
+                            SessionInfo info = (SessionInfo) element;
+                            String title = info.title().isBlank() ? info.id() : info.title();
+                            return info.updatedAt().isBlank() ? title : title + " — " + info.updatedAt();
+                        }
+                    });
+                    List<SessionInfo> projectSessions = available.stream()
+                            .filter(info -> belongsToProject(info, session.project.getLocation().toFile().toPath()))
+                            .toList();
+                    if (projectSessions.isEmpty()) {
+                        setStatus(session, "No saved sessions for this project");
+                        return;
+                    }
+                    dialog.setInput(projectSessions);
+                    if (dialog.open() != org.eclipse.jface.window.Window.OK
+                            || dialog.getResult() == null || dialog.getResult().length == 0) return;
+                    restoreListedSession(session, client, (SessionInfo) dialog.getResult()[0]);
+                }));
+    }
+
+    private CompletableFuture<List<SessionInfo>> listAllSessions(AgentClient client, java.nio.file.Path cwd,
+            String cursor, List<SessionInfo> collected) {
+        return client.listSessions(cwd, cursor).thenCompose(page -> {
+            collected.addAll(page.sessions());
+            return page.nextCursor() == null || page.nextCursor().isBlank()
+                    ? CompletableFuture.completedFuture(List.copyOf(collected))
+                    : listAllSessions(client, cwd, page.nextCursor(), collected);
+        });
+    }
+
+    private static boolean belongsToProject(SessionInfo info, java.nio.file.Path projectDirectory) {
+        try {
+            return java.nio.file.Path.of(info.cwd()).toAbsolutePath().normalize()
+                    .equals(projectDirectory.toAbsolutePath().normalize());
+        } catch (RuntimeException exception) {
+            return false;
+        }
+    }
+
+    private void restoreListedSession(ChatSession session, AgentClient client, SessionInfo selected) {
+        String oldSessionId = session.persistedSessionId;
+        String oldTranscript = session.transcriptMarkdown.toString();
+        session.transcriptMarkdown.setLength(0);
+        session.acceptingRestoredTranscript = true;
+        session.restoredAgentMessageOpen = false;
+        renderTranscript();
+        CompletableFuture<Void> restored = client.capabilities().sessionResume()
+                ? client.resumeSession(selected.id(), session.project.getLocation().toFile().toPath())
+                : client.loadSession(selected.id(), session.project.getLocation().toFile().toPath());
+        restored.whenComplete((ignored, error) -> ui(() -> {
+            if (session.client != client) return;
+            if (error != null) {
+                session.acceptingRestoredTranscript = false;
+                session.persistedSessionId = oldSessionId;
+                session.transcriptMarkdown.append(oldTranscript);
+                renderTranscript();
+                onError(session, "Could not restore the selected session", unwrap(error));
+                return;
+            }
+            session.acceptingRestoredTranscript = false;
+            session.persistedSessionId = selected.id();
+            persistSessions();
+            setStatus(session, "Session restored");
+        }));
+    }
+
     private AcpListener listenerFor(ChatSession session) {
         return new AcpListener() {
-            @Override public void onAgentText(String text) { ui(() -> append(session, text)); }
+            @Override public void onAgentText(String text) { ui(() -> appendAgentText(session, text)); }
+            @Override public void onUserText(String text) { ui(() -> appendRestoredUserText(session, text)); }
             @Override public void onStatus(String value) { setStatus(session, value); }
             @Override public void onError(String message, Throwable error) { AcpChatView.this.onError(session, message, error); }
             @Override public CompletableFuture<String> requestPermission(String title, List<PermissionOption> options) {
@@ -276,7 +434,12 @@ public final class AcpChatView extends ViewPart implements AcpListener {
 
     @Override
     public void onAgentText(String text) {
-        ui(() -> append(activeSession, text));
+        ui(() -> appendAgentText(activeSession, text));
+    }
+
+    @Override
+    public void onUserText(String text) {
+        ui(() -> appendRestoredUserText(activeSession, text));
     }
 
     @Override
@@ -476,11 +639,27 @@ public final class AcpChatView extends ViewPart implements AcpListener {
             return;
         }
         session.transcriptMarkdown.append(text);
+        persistSessions();
         if (session != activeSession || transcript == null || transcript.isDisposed()) return;
         transcript.setText(GfmRenderer.document(session.transcriptMarkdown.toString()));
         // setText starts an asynchronous page load; the progress listener above
         // repeats this after the new document has been laid out.
         scrollTranscriptToBottom();
+    }
+
+    private void appendRestoredUserText(ChatSession session, String text) {
+        if (session == null || !session.acceptingRestoredTranscript || text.isEmpty()) return;
+        append(session, "## You\n\n" + text + "\n\n");
+        session.restoredAgentMessageOpen = false;
+    }
+
+    private void appendAgentText(ChatSession session, String text) {
+        if (session == null || text.isEmpty()) return;
+        if (session.acceptingRestoredTranscript && !session.restoredAgentMessageOpen) {
+            append(session, "## Agent\n\n");
+            session.restoredAgentMessageOpen = true;
+        }
+        append(session, text);
     }
 
     private void renderTranscript() {
@@ -494,7 +673,10 @@ public final class AcpChatView extends ViewPart implements AcpListener {
         boolean connected = activeSession != null && activeSession.client != null;
         sendButton.setEnabled(connected && !activeSession.agentMessageOpen);
         stopButton.setEnabled(connected && activeSession.agentMessageOpen);
+        newSessionButton.setEnabled(connected && activeSession.project.isOpen());
         closeButton.setEnabled(connected);
+        historyButton.setEnabled(connected && activeSession.client.capabilities().sessionList()
+                && (activeSession.client.capabilities().sessionResume() || activeSession.client.capabilities().loadSession()));
         boolean reviewFileChanges = connected && activeSession.reviewFileChanges;
         boolean hasDiffs = reviewFileChanges && !pendingDiffs(activeSession).isEmpty();
         applyButton.setEnabled(hasDiffs);
@@ -533,7 +715,23 @@ public final class AcpChatView extends ViewPart implements AcpListener {
             if (activeSession != null) projectSelector.select(sessions.indexOf(activeSession));
             renderTranscript();
         }
+        persistSessions();
         updateControls();
+    }
+
+    private void persistSessions() {
+        for (ChatSession session : sessions) {
+            if (session.persistedSessionId == null || session.persistedSessionId.isBlank()) continue;
+            SessionHistoryStore.Entry entry = new SessionHistoryStore.Entry(session.providerId, session.project.getName(),
+                    session.project.getLocation().toString(), session.persistedSessionId, session.label,
+                    session.transcriptMarkdown.toString());
+            savedSessions.put(sessionKey(entry), entry);
+        }
+        sessionHistory.save(List.copyOf(savedSessions.values()));
+    }
+
+    private static String sessionKey(SessionHistoryStore.Entry entry) {
+        return entry.providerId() + '\u0000' + entry.projectPath() + '\u0000' + entry.sessionId();
     }
 
     private void disconnect() {
@@ -544,15 +742,18 @@ public final class AcpChatView extends ViewPart implements AcpListener {
         }
         sessions.clear();
         activeSession = null;
+        // Deliberately retain history: closing Eclipse must not discard resumable ACP sessions.
         if (sendButton != null && !sendButton.isDisposed()) {
             sendButton.setEnabled(false);
         }
         if (stopButton != null && !stopButton.isDisposed()) {
             stopButton.setEnabled(false);
         }
+        if (newSessionButton != null && !newSessionButton.isDisposed()) newSessionButton.setEnabled(false);
         if (closeButton != null && !closeButton.isDisposed()) {
             closeButton.setEnabled(false);
         }
+        if (historyButton != null && !historyButton.isDisposed()) historyButton.setEnabled(false);
         if (applyButton != null && !applyButton.isDisposed()) applyButton.setEnabled(false);
         if (rejectButton != null && !rejectButton.isDisposed()) rejectButton.setEnabled(false);
         if (undoButton != null && !undoButton.isDisposed()) undoButton.setEnabled(false);

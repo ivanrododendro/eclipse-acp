@@ -8,6 +8,11 @@ import dev.eclipseacp.client.agent.AuthMethod;
 public interface AcpListener {
     void onAgentText(String text);
 
+    /** Text from a user-message update, normally emitted while an existing session is replayed. */
+    default void onUserText(String text) {
+        // Optional: ordinary prompts are already rendered by the client UI.
+    }
+
     void onStatus(String status);
 
     void onError(String message, Throwable error);

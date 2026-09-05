@@ -14,6 +14,8 @@ public final class AcpPreferences {
     public static final String ACTIVE_PROVIDER = "activeProvider";
     /** When enabled, ACP file writes are staged for Apply/Reject review. Disabled by default. */
     public static final String REVIEW_FILE_CHANGES = "reviewFileChanges";
+    /** JSON history of locally known ACP sessions, used to restore the chat after restart. */
+    public static final String SESSION_HISTORY_JSON = "sessionHistoryJson";
 
     private static final IPreferenceStore STORE =
             new ScopedPreferenceStore(InstanceScope.INSTANCE, PluginIds.PLUGIN_ID);

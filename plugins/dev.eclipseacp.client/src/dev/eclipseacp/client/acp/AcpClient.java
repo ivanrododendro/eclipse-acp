@@ -27,8 +27,6 @@ import dev.eclipseacp.client.agent.SessionPage;
 /** ACP v1 adapter. The rest of the plug-in talks to AgentClient only. */
 public final class AcpClient implements AgentClient, JsonRpcHandler {
     private static final int PROTOCOL_VERSION = 1;
-    private static final String GFM_SYSTEM_INSTRUCTION = "System instruction: Format every response using GitHub Flavored Markdown (GFM). Use headings, lists, tables, links, and fenced code blocks when they improve clarity. Do not use raw HTML unless explicitly requested.";
-
     private final AcpListener listener;
     private final String command;
     private final String arguments;
@@ -36,7 +34,6 @@ public final class AcpClient implements AgentClient, JsonRpcHandler {
     private Process process;
     private JsonRpcConnection connection;
     private String sessionId;
-    private volatile boolean applyingSystemInstruction;
     private volatile AgentCapabilities capabilities = AgentCapabilities.NONE;
     private volatile List<AuthMethod> authenticationMethods = List.of();
     private final ToolCallTracker toolCalls = new ToolCallTracker();
@@ -53,6 +50,23 @@ public final class AcpClient implements AgentClient, JsonRpcHandler {
     }
 
     public CompletableFuture<Void> connect(Path workingDirectory) {
+        return connect(workingDirectory, null);
+    }
+
+    @Override
+    public CompletableFuture<Void> restoreSession(String restoredSessionId, Path workingDirectory) {
+        if (restoredSessionId == null || restoredSessionId.isBlank()) {
+            return CompletableFuture.failedFuture(new IllegalArgumentException("The ACP session ID is empty"));
+        }
+        return connect(workingDirectory, restoredSessionId);
+    }
+
+    @Override
+    public String sessionId() {
+        return sessionId;
+    }
+
+    private CompletableFuture<Void> connect(Path workingDirectory, String restoredSessionId) {
         AcpLog.info("ACP connection requested: command='" + command + "', workingDirectory='" + workingDirectory
                 + "', reviewFileChanges=" + reviewFileChanges);
         if (command.isBlank()) {
@@ -85,8 +99,9 @@ public final class AcpClient implements AgentClient, JsonRpcHandler {
         AcpLog.info("ACP JSON-RPC reader started; sending initialize");
         listener.onStatus("Initializing " + command + "…");
         CompletableFuture<Void> connectionFuture = initialize()
-                .thenCompose(ignored -> newSession(workingDirectory))
-                .thenCompose(ignored -> applySystemInstruction())
+                .thenCompose(ignored -> restoredSessionId == null
+                        ? newSession(workingDirectory).thenAccept(result -> { })
+                        : restoreAfterInitialize(restoredSessionId, workingDirectory))
                 .thenAccept(ignored -> listener.onStatus("Connected"));
         connectionFuture.whenComplete((ignored, error) -> {
             if (error == null) {
@@ -98,11 +113,11 @@ public final class AcpClient implements AgentClient, JsonRpcHandler {
         return connectionFuture;
     }
 
-    /** ACP v1 has no native system role; this establishes an invisible session bootstrap instruction. */
-    private CompletableFuture<Void> applySystemInstruction() {
-        applyingSystemInstruction = true;
-        return sendPrompt(GFM_SYSTEM_INSTRUCTION, false)
-                .whenComplete((ignored, error) -> applyingSystemInstruction = false);
+    private CompletableFuture<Void> restoreAfterInitialize(String restoredSessionId, Path workingDirectory) {
+        if (capabilities.sessionResume()) return resumeSession(restoredSessionId, workingDirectory);
+        if (capabilities.loadSession()) return loadSession(restoredSessionId, workingDirectory);
+        return CompletableFuture.failedFuture(new UnsupportedOperationException(
+                "The ACP agent does not support session/resume or session/load"));
     }
 
     @Override
@@ -343,9 +358,12 @@ public final class AcpClient implements AgentClient, JsonRpcHandler {
         String kind = string(update, "sessionUpdate");
         listener.onSessionUpdate(new AcpSessionUpdate(string(params, "sessionId"), kind, update.deepCopy()));
 
-        if ("agent_message_chunk".equals(kind)) {
+        if ("user_message_chunk".equals(kind)) {
             String text = textFrom(update.get("content"));
-            if (!applyingSystemInstruction && !text.isEmpty()) {
+            if (!text.isEmpty()) listener.onUserText(text);
+        } else if ("agent_message_chunk".equals(kind)) {
+            String text = textFrom(update.get("content"));
+            if (!text.isEmpty()) {
                 listener.onAgentText(text);
             }
         } else if ("agent_thought_chunk".equals(kind)) {
