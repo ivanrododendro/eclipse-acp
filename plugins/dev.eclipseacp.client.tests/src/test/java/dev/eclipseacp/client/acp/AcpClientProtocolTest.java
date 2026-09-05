@@ -142,6 +142,44 @@ public class AcpClientProtocolTest {
         assertEquals("hello", listener.update.payload().getAsJsonObject("content").get("text").getAsString());
     }
 
+    @Test
+    public void mergesToolCallUpdatesAndRetainsOnlyTheLatestDiffCollection() {
+        ToolCallTracker tracker = new ToolCallTracker();
+        JsonObject started = new JsonObject();
+        started.addProperty("toolCallId", "call-1");
+        started.addProperty("title", "Edit greeting");
+        started.addProperty("kind", "edit");
+        started.addProperty("status", "pending");
+        var initialContent = new com.google.gson.JsonArray();
+        initialContent.add(diff("/workspace/hello.txt", "old", "first"));
+        started.add("content", initialContent);
+
+        ToolCall initial = tracker.accept(started);
+
+        JsonObject update = new JsonObject();
+        update.addProperty("toolCallId", "call-1");
+        update.addProperty("status", "completed");
+        var finalContent = new com.google.gson.JsonArray();
+        finalContent.add(diff("/workspace/hello.txt", "old", "final"));
+        update.add("content", finalContent);
+        ToolCall finalCall = tracker.accept(update);
+
+        assertEquals("Edit greeting", finalCall.title());
+        assertEquals("completed", finalCall.status());
+        assertEquals(1, finalCall.diffs().size());
+        assertEquals("final", finalCall.diffs().get(0).newText());
+        assertEquals("first", initial.diffs().get(0).newText());
+    }
+
+    private static JsonObject diff(String path, String oldText, String newText) {
+        JsonObject diff = new JsonObject();
+        diff.addProperty("type", "diff");
+        diff.addProperty("path", path);
+        diff.addProperty("oldText", oldText);
+        diff.addProperty("newText", newText);
+        return diff;
+    }
+
     private static final class CapturingListener implements AcpListener {
         private String text;
         private AcpSessionUpdate update;

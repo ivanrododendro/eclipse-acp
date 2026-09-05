@@ -32,21 +32,29 @@ public final class AcpClient implements AgentClient, JsonRpcHandler {
     private final AcpListener listener;
     private final String command;
     private final String arguments;
+    private final boolean reviewFileChanges;
     private Process process;
     private JsonRpcConnection connection;
     private String sessionId;
     private volatile boolean applyingSystemInstruction;
     private volatile AgentCapabilities capabilities = AgentCapabilities.NONE;
     private volatile List<AuthMethod> authenticationMethods = List.of();
+    private final ToolCallTracker toolCalls = new ToolCallTracker();
 
     public AcpClient(String command, String arguments, AcpListener listener) {
+        this(command, arguments, listener, false);
+    }
+
+    public AcpClient(String command, String arguments, AcpListener listener, boolean reviewFileChanges) {
         this.command = Objects.requireNonNull(command).trim();
         this.arguments = arguments == null ? "" : arguments;
         this.listener = Objects.requireNonNull(listener);
+        this.reviewFileChanges = reviewFileChanges;
     }
 
     public CompletableFuture<Void> connect(Path workingDirectory) {
-        AcpLog.info("ACP connection requested: command='" + command + "', workingDirectory='" + workingDirectory + "'");
+        AcpLog.info("ACP connection requested: command='" + command + "', workingDirectory='" + workingDirectory
+                + "', reviewFileChanges=" + reviewFileChanges);
         if (command.isBlank()) {
             AcpLog.warn("ACP connection rejected because the command is empty", null);
             return CompletableFuture.failedFuture(new IllegalArgumentException("The ACP command is empty"));
@@ -181,8 +189,13 @@ public final class AcpClient implements AgentClient, JsonRpcHandler {
 
         JsonObject params = new JsonObject();
         params.addProperty("protocolVersion", PROTOCOL_VERSION);
-        // We do not advertise terminal authentication until Eclipse can launch and host an interactive terminal.
-        params.add("clientCapabilities", new JsonObject());
+        // Files are always mediated by Eclipse; review is a client-side policy selected for this session.
+        JsonObject fileSystem = new JsonObject();
+        fileSystem.addProperty("readTextFile", true);
+        fileSystem.addProperty("writeTextFile", true);
+        JsonObject clientCapabilities = new JsonObject();
+        clientCapabilities.add("fs", fileSystem);
+        params.add("clientCapabilities", clientCapabilities);
         params.add("clientInfo", clientInfo);
 
         AcpLog.info("Sending ACP request: method='initialize', protocolVersion=" + PROTOCOL_VERSION);
@@ -338,10 +351,10 @@ public final class AcpClient implements AgentClient, JsonRpcHandler {
         } else if ("agent_thought_chunk".equals(kind)) {
             listener.onStatus("Agent reasoning…");
         } else if ("tool_call".equals(kind) || "tool_call_update".equals(kind)) {
-            String title = string(update, "title");
-            if (title.isBlank()) title = string(object(update.get("toolCall")), "title");
-            if (!title.isBlank()) {
-                listener.onStatus(title);
+            ToolCall toolCall = toolCalls.accept(update);
+            if (toolCall != null) {
+                listener.onToolCall(toolCall);
+                listener.onStatus(toolCall.title() + " (" + toolCall.status() + ")");
             }
         } else if ("plan".equals(kind) || "plan_update".equals(kind)) {
             listener.onStatus("Plan updated");
@@ -351,6 +364,8 @@ public final class AcpClient implements AgentClient, JsonRpcHandler {
     @Override
     public CompletableFuture<JsonElement> onRequest(String method, JsonObject params) {
         AcpLog.info("ACP server request received: method='" + method + "'");
+        if ("fs/read_text_file".equals(method)) return readTextFile(params);
+        if ("fs/write_text_file".equals(method)) return stageFileWrite(params);
         if (!"session/request_permission".equals(method)) {
             return CompletableFuture.failedFuture(new UnsupportedOperationException("Unsupported ACP method: " + method));
         }
@@ -368,13 +383,15 @@ public final class AcpClient implements AgentClient, JsonRpcHandler {
         }
 
         JsonObject toolCall = object(params.get("toolCall"));
+        ToolCall permissionToolCall = toolCalls.accept(toolCall);
+        if (permissionToolCall != null) listener.onToolCall(permissionToolCall);
         String title = string(params, "title");
-        if (title.isBlank()) title = string(toolCall, "title");
+        if (title.isBlank()) title = permissionToolCall == null ? string(toolCall, "title") : permissionToolCall.title();
         if (title.isBlank()) {
             title = "The agent requests permission";
         }
 
-        return listener.requestPermission(title, options).thenApply(optionId -> {
+        return listener.requestPermission(new PermissionRequest(title, permissionToolCall, options)).thenApply(optionId -> {
             JsonObject outcome = new JsonObject();
             if (optionId == null) {
                 outcome.addProperty("outcome", "cancelled");
@@ -386,6 +403,22 @@ public final class AcpClient implements AgentClient, JsonRpcHandler {
             result.add("outcome", outcome);
             return result;
         });
+    }
+
+    private CompletableFuture<JsonElement> readTextFile(JsonObject params) {
+        Integer line = integer(params, "line");
+        Integer limit = integer(params, "limit");
+        return listener.readTextFile(new FileReadRequest(string(params, "sessionId"), string(params, "path"), line, limit))
+                .thenApply(content -> {
+                    JsonObject result = new JsonObject();
+                    result.addProperty("content", content);
+                    return result;
+                });
+    }
+
+    private CompletableFuture<JsonElement> stageFileWrite(JsonObject params) {
+        return listener.stageFileWrite(new FileWriteRequest(string(params, "sessionId"), string(params, "path"), string(params, "content")))
+                .thenApply(ignored -> new JsonObject());
     }
 
     private void streamStandardError(Process child) {
@@ -444,6 +477,10 @@ public final class AcpClient implements AgentClient, JsonRpcHandler {
         return object.has(member) && object.get(member).isJsonPrimitive()
                 ? object.get(member).getAsString()
                 : "";
+    }
+
+    private static Integer integer(JsonObject object, String member) {
+        return object.has(member) && object.get(member).isJsonPrimitive() ? object.get(member).getAsInt() : null;
     }
 
     private CompletableFuture<JsonObject> request(String method, JsonObject params) {

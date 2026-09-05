@@ -2,8 +2,12 @@ package dev.eclipseacp.client.ui;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+
+import com.google.gson.JsonObject;
 
 import org.eclipse.core.resources.IProject;
 import org.eclipse.jface.dialogs.MessageDialog;
@@ -23,7 +27,12 @@ import org.eclipse.swt.widgets.Text;
 import org.eclipse.ui.part.ViewPart;
 
 import dev.eclipseacp.client.acp.AcpListener;
+import dev.eclipseacp.client.acp.FileDiff;
+import dev.eclipseacp.client.acp.FileReadRequest;
+import dev.eclipseacp.client.acp.FileWriteRequest;
+import dev.eclipseacp.client.acp.PermissionRequest;
 import dev.eclipseacp.client.acp.PermissionOption;
+import dev.eclipseacp.client.acp.ToolCall;
 import dev.eclipseacp.client.agent.AgentClient;
 import dev.eclipseacp.client.agent.AgentClientFactory;
 import dev.eclipseacp.client.agent.AgentProvider;
@@ -37,6 +46,9 @@ public final class AcpChatView extends ViewPart implements AcpListener {
     private Button sendButton;
     private Button stopButton;
     private Button closeButton;
+    private Button applyButton;
+    private Button rejectButton;
+    private Button undoButton;
     private Label status;
     private Combo projectSelector;
     private final List<ChatSession> sessions = new ArrayList<>();
@@ -45,13 +57,18 @@ public final class AcpChatView extends ViewPart implements AcpListener {
     private static final class ChatSession {
         private final IProject project;
         private final String label;
+        private final boolean reviewFileChanges;
         private final StringBuilder transcriptMarkdown = new StringBuilder();
         private AgentClient client;
         private boolean agentMessageOpen;
+        private final Map<String, ToolCall> toolCalls = new LinkedHashMap<>();
+        private final Map<String, FileDiff> pendingChanges = new LinkedHashMap<>();
+        private final WorkspaceDiffApplier diffApplier = new WorkspaceDiffApplier();
 
-        private ChatSession(IProject project, String label) {
+        private ChatSession(IProject project, String label, boolean reviewFileChanges) {
             this.project = project;
             this.label = label;
+            this.reviewFileChanges = reviewFileChanges;
         }
     }
 
@@ -94,7 +111,7 @@ public final class AcpChatView extends ViewPart implements AcpListener {
 
         Composite actions = new Composite(parent, SWT.NONE);
         actions.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
-        actions.setLayout(new GridLayout(4, false));
+        actions.setLayout(new GridLayout(7, false));
 
         sendButton = new Button(actions, SWT.PUSH);
         sendButton.setText("Send");
@@ -111,6 +128,21 @@ public final class AcpChatView extends ViewPart implements AcpListener {
         closeButton.setEnabled(false);
         closeButton.addListener(SWT.Selection, ignored -> closeActiveSession());
 
+        applyButton = new Button(actions, SWT.PUSH);
+        applyButton.setText("Apply changes");
+        applyButton.setEnabled(false);
+        applyButton.addListener(SWT.Selection, ignored -> applyChanges());
+
+        rejectButton = new Button(actions, SWT.PUSH);
+        rejectButton.setText("Reject changes");
+        rejectButton.setEnabled(false);
+        rejectButton.addListener(SWT.Selection, ignored -> rejectChanges());
+
+        undoButton = new Button(actions, SWT.PUSH);
+        undoButton.setText("Undo apply");
+        undoButton.setEnabled(false);
+        undoButton.addListener(SWT.Selection, ignored -> undoApply());
+
         status = new Label(actions, SWT.NONE);
         status.setText("Not connected");
         status.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
@@ -125,14 +157,16 @@ public final class AcpChatView extends ViewPart implements AcpListener {
         AgentProvider provider = new AgentProviderRegistry(AcpPreferences.store()).active();
         String agentName = provider.name();
 
-        ChatSession session = new ChatSession(project, sessionLabel(project));
+        boolean reviewFileChanges = AcpPreferences.store().getBoolean(AcpPreferences.REVIEW_FILE_CHANGES);
+        ChatSession session = new ChatSession(project, sessionLabel(project), reviewFileChanges);
         sessions.add(session);
         projectSelector.add(session.label);
         activeSession = session;
         projectSelector.select(projectSelector.getItemCount() - 1);
         renderTranscript();
-        append(session, "Connecting to " + agentName + " in " + project.getLocation() + "…\n\n");
-        AgentClient newClient = AgentClientFactory.create(provider, listenerFor(session));
+        append(session, "Connecting to " + agentName + " in " + project.getLocation() + "…"
+                + (reviewFileChanges ? " Changes will be reviewed before applying." : " Changes apply immediately.") + "\n\n");
+        AgentClient newClient = AgentClientFactory.create(provider, listenerFor(session), reviewFileChanges);
         session.client = newClient;
         newClient.connect(project.getLocation().toFile().toPath()).whenComplete((ignored, error) -> ui(() -> {
             if (session.client != newClient) {
@@ -210,6 +244,33 @@ public final class AcpChatView extends ViewPart implements AcpListener {
             @Override public CompletableFuture<String> requestPermission(String title, List<PermissionOption> options) {
                 return requestPermissionFor(session, title, options);
             }
+            @Override public CompletableFuture<String> requestPermission(PermissionRequest request) {
+                return requestPermissionFor(session, request);
+            }
+            @Override public void onToolCall(ToolCall toolCall) { ui(() -> updateToolCall(session, toolCall)); }
+            @Override public CompletableFuture<String> readTextFile(FileReadRequest request) {
+                return CompletableFuture.supplyAsync(() -> {
+                    try { return session.diffApplier.read(session.project, request.path(), request.line(), request.limit()); }
+                    catch (Exception error) { throw new java.util.concurrent.CompletionException(error); }
+                });
+            }
+            @Override public CompletableFuture<Void> stageFileWrite(FileWriteRequest request) {
+                return CompletableFuture.runAsync(() -> {
+                    try {
+                        FileDiff diff = session.diffApplier.preview(session.project, request.path(), request.content());
+                        if (!session.reviewFileChanges) {
+                            session.diffApplier.apply(session.project, List.of(diff));
+                            ui(() -> append(session, "> **File write applied:** `" + diff.path() + "`\n\n"));
+                            return;
+                        }
+                        ui(() -> {
+                            session.pendingChanges.put(diff.path(), diff);
+                            append(session, "> **File write staged:** `" + diff.path() + "`\n\n");
+                            updateControls();
+                        });
+                    } catch (Exception error) { throw new java.util.concurrent.CompletionException(error); }
+                });
+            }
         };
     }
 
@@ -252,19 +313,25 @@ public final class AcpChatView extends ViewPart implements AcpListener {
     }
 
     private CompletableFuture<String> requestPermissionFor(ChatSession session, String title, List<PermissionOption> options) {
+        return requestPermissionFor(session, new PermissionRequest(title, null, options));
+    }
+
+    private CompletableFuture<String> requestPermissionFor(ChatSession session, PermissionRequest request) {
         CompletableFuture<String> result = new CompletableFuture<>();
         ui(() -> {
+            List<PermissionOption> options = request.options();
             if (options.isEmpty() || getSite().getShell().isDisposed()) {
                 result.complete(null);
                 return;
             }
             String[] labels = options.stream().map(PermissionOption::name).toArray(String[]::new);
             int defaultIndex = defaultPermissionIndex(options);
+            String detail = permissionDetail(request);
             MessageDialog dialog = new MessageDialog(
                     getSite().getShell(),
                     "ACP permission",
                     null,
-                    title,
+                    detail,
                     MessageDialog.QUESTION,
                     labels,
                     defaultIndex);
@@ -272,6 +339,127 @@ public final class AcpChatView extends ViewPart implements AcpListener {
             result.complete(selected >= 0 && selected < options.size() ? options.get(selected).id() : null);
         });
         return result;
+    }
+
+    private static String permissionDetail(PermissionRequest request) {
+        ToolCall tool = request.toolCall();
+        if (tool == null) return request.title();
+        StringBuilder detail = new StringBuilder(request.title());
+        detail.append("\n\nTool: ").append(tool.kind());
+        if (!tool.locations().isEmpty()) {
+            detail.append("\nFiles:");
+            tool.locations().forEach(location -> detail.append("\n• ").append(location.path())
+                    .append(location.line() == null ? "" : ":" + location.line()));
+        }
+        if (!tool.diffs().isEmpty()) detail.append("\nChanges proposed: ").append(tool.diffs().size());
+        if (tool.rawInput() instanceof JsonObject input) {
+            appendPermissionField(detail, "Command", input, "command");
+            appendPermissionField(detail, "Working directory", input, "cwd");
+            appendPermissionField(detail, "Path", input, "path");
+        }
+        return detail.toString();
+    }
+
+    private static void appendPermissionField(StringBuilder detail, String label, JsonObject input, String field) {
+        if (input.has(field) && input.get(field).isJsonPrimitive()) {
+            detail.append('\n').append(label).append(": ").append(input.get(field).getAsString());
+        }
+    }
+
+    private void updateToolCall(ChatSession session, ToolCall toolCall) {
+        session.toolCalls.put(toolCall.id(), toolCall);
+        if (session.reviewFileChanges) toolCall.diffs().forEach(diff -> session.pendingChanges.put(diff.path(), diff));
+        append(session, "\n> **Tool " + toolCall.kind() + ":** " + toolCall.title() + " — " + toolCall.status()
+                + (toolCall.hasDiffs() ? " (" + toolCall.diffs().size() + " file change(s) ready for review)" : "")
+                + toolDiffPreview(toolCall.diffs()) + "\n\n");
+        updateControls();
+        if (!session.reviewFileChanges && toolCall.hasDiffs()) applyImmediately(session, toolCall.diffs());
+    }
+
+    private void applyImmediately(ChatSession session, List<FileDiff> diffs) {
+        CompletableFuture.runAsync(() -> {
+            try {
+                session.diffApplier.apply(session.project, diffs);
+                ui(() -> setStatus(session, "Changes applied"));
+            } catch (Exception error) { onError(session, "Could not apply agent changes", error); }
+        });
+    }
+
+    private static String toolDiffPreview(List<FileDiff> diffs) {
+        if (diffs.isEmpty()) return "";
+        StringBuilder preview = new StringBuilder();
+        for (FileDiff diff : diffs) {
+            preview.append("\n\n```diff\n--- ").append(diff.path()).append("\n+++ ").append(diff.path()).append("\n");
+            appendDiffLines(preview, '-', diff.oldText());
+            appendDiffLines(preview, '+', diff.newText());
+            preview.append("```");
+        }
+        return preview.toString();
+    }
+
+    private static void appendDiffLines(StringBuilder preview, char prefix, String text) {
+        if (text == null) return;
+        String[] lines = text.split("\\R", -1);
+        int maximumLines = 40;
+        for (int index = 0; index < Math.min(lines.length, maximumLines); index++) {
+            preview.append(prefix).append(lines[index]).append('\n');
+        }
+        if (lines.length > maximumLines) preview.append(prefix).append("… ").append(lines.length - maximumLines).append(" more lines\n");
+    }
+
+    private List<FileDiff> pendingDiffs(ChatSession session) {
+        if (session == null) return List.of();
+        return List.copyOf(session.pendingChanges.values());
+    }
+
+    private void applyChanges() {
+        ChatSession session = activeSession;
+        if (session == null) return;
+        List<FileDiff> diffs = pendingDiffs(session);
+        CompletableFuture.runAsync(() -> {
+            try {
+                int count = session.diffApplier.apply(session.project, diffs);
+                ui(() -> {
+                    session.pendingChanges.clear();
+                    append(session, "> Applied " + count + " reviewed file change(s).\n\n");
+                    setStatus(session, "Changes applied");
+                    updateControls();
+                });
+            } catch (Exception error) { onError(session, "Could not apply reviewed changes", error); }
+        });
+    }
+
+    private void rejectChanges() {
+        ChatSession session = activeSession;
+        if (session == null) return;
+        List<FileDiff> diffs = pendingDiffs(session);
+        CompletableFuture.runAsync(() -> {
+            try {
+                int reverted = session.diffApplier.reject(session.project, diffs);
+                ui(() -> {
+                    session.pendingChanges.clear();
+                    append(session, "> Rejected " + diffs.size() + " reviewed file change(s)"
+                            + (reverted == 0 ? "." : " and reverted " + reverted + " direct write(s).") + "\n\n");
+                    setStatus(session, "Changes rejected");
+                    updateControls();
+                });
+            } catch (Exception error) { onError(session, "Could not reject reviewed changes", error); }
+        });
+    }
+
+    private void undoApply() {
+        ChatSession session = activeSession;
+        if (session == null) return;
+        CompletableFuture.runAsync(() -> {
+            try {
+                int count = session.diffApplier.undo();
+                ui(() -> {
+                    append(session, "> Undid " + count + " applied file change(s).\n\n");
+                    setStatus(session, "Changes undone");
+                    updateControls();
+                });
+            } catch (Exception error) { onError(session, "Could not undo applied changes", error); }
+        });
     }
 
     private static int defaultPermissionIndex(List<PermissionOption> options) {
@@ -307,6 +495,11 @@ public final class AcpChatView extends ViewPart implements AcpListener {
         sendButton.setEnabled(connected && !activeSession.agentMessageOpen);
         stopButton.setEnabled(connected && activeSession.agentMessageOpen);
         closeButton.setEnabled(connected);
+        boolean reviewFileChanges = connected && activeSession.reviewFileChanges;
+        boolean hasDiffs = reviewFileChanges && !pendingDiffs(activeSession).isEmpty();
+        applyButton.setEnabled(hasDiffs);
+        rejectButton.setEnabled(hasDiffs);
+        undoButton.setEnabled(reviewFileChanges && activeSession.diffApplier.canUndo());
         projectSelector.setEnabled(true);
     }
 
@@ -360,6 +553,9 @@ public final class AcpChatView extends ViewPart implements AcpListener {
         if (closeButton != null && !closeButton.isDisposed()) {
             closeButton.setEnabled(false);
         }
+        if (applyButton != null && !applyButton.isDisposed()) applyButton.setEnabled(false);
+        if (rejectButton != null && !rejectButton.isDisposed()) rejectButton.setEnabled(false);
+        if (undoButton != null && !undoButton.isDisposed()) undoButton.setEnabled(false);
         if (projectSelector != null && !projectSelector.isDisposed()) {
             projectSelector.removeAll();
             projectSelector.setEnabled(true);

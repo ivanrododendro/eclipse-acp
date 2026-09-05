@@ -12,6 +12,8 @@ public final class AcpPreferences {
     public static final String AGENT_ARGUMENTS = "agentArguments";
     public static final String PROVIDERS_JSON = "providersJson";
     public static final String ACTIVE_PROVIDER = "activeProvider";
+    /** When enabled, ACP file writes are staged for Apply/Reject review. Disabled by default. */
+    public static final String REVIEW_FILE_CHANGES = "reviewFileChanges";
 
     private static final IPreferenceStore STORE =
             new ScopedPreferenceStore(InstanceScope.INSTANCE, PluginIds.PLUGIN_ID);

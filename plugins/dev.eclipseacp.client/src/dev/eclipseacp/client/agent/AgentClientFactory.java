@@ -5,5 +5,7 @@ import dev.eclipseacp.client.acp.AcpListener;
 
 public final class AgentClientFactory {
     private AgentClientFactory() {}
-    public static AgentClient create(AgentProvider provider, AcpListener listener) { return new AcpClient(provider.command(), provider.arguments(), listener); }
+    public static AgentClient create(AgentProvider provider, AcpListener listener, boolean reviewFileChanges) {
+        return new AcpClient(provider.command(), provider.arguments(), listener, reviewFileChanges);
+    }
 }

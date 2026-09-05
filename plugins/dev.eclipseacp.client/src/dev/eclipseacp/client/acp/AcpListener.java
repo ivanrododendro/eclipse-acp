@@ -14,6 +14,26 @@ public interface AcpListener {
 
     CompletableFuture<String> requestPermission(String title, List<PermissionOption> options);
 
+    /** Called with the full tool context when the agent asks the user for permission. */
+    default CompletableFuture<String> requestPermission(PermissionRequest request) {
+        return requestPermission(request.title(), request.options());
+    }
+
+    /** Receives the merged state of a tool call, including any replacement diffs. */
+    default void onToolCall(ToolCall toolCall) {
+        // Optional for listeners that do not render tool activity.
+    }
+
+    /** Reads an agent-requested file through the client instead of exposing a raw filesystem API. */
+    default CompletableFuture<String> readTextFile(FileReadRequest request) {
+        return CompletableFuture.failedFuture(new UnsupportedOperationException("Client file reading is not supported"));
+    }
+
+    /** Stages an agent-requested write until the user explicitly applies or rejects it. */
+    default CompletableFuture<Void> stageFileWrite(FileWriteRequest request) {
+        return CompletableFuture.failedFuture(new UnsupportedOperationException("Client file writing is not supported"));
+    }
+
     /** Receives every ACP update, including variants the current UI does not render yet. */
     default void onSessionUpdate(AcpSessionUpdate update) {
         // Optional for listeners that only render plain agent text.
