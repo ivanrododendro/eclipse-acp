@@ -10,6 +10,7 @@ import org.eclipse.core.resources.ResourcesPlugin;
 import org.eclipse.jface.dialogs.MessageDialog;
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.browser.Browser;
+import org.eclipse.swt.browser.ProgressAdapter;
 import org.eclipse.swt.events.KeyAdapter;
 import org.eclipse.swt.events.KeyEvent;
 import org.eclipse.swt.layout.GridData;
@@ -59,6 +60,12 @@ public final class AcpChatView extends ViewPart implements AcpListener {
 
         transcript = new Browser(parent, SWT.BORDER);
         transcript.setLayoutData(new GridData(SWT.FILL, SWT.FILL, true, true));
+        transcript.addProgressListener(new ProgressAdapter() {
+            @Override
+            public void completed(org.eclipse.swt.browser.ProgressEvent event) {
+                scrollTranscriptToBottom();
+            }
+        });
         transcript.setText(GfmRenderer.document(""));
 
         prompt = new Text(parent, SWT.BORDER | SWT.MULTI | SWT.WRAP | SWT.V_SCROLL);
@@ -256,6 +263,16 @@ public final class AcpChatView extends ViewPart implements AcpListener {
         }
         transcriptMarkdown.append(text);
         transcript.setText(GfmRenderer.document(transcriptMarkdown.toString()));
+        // setText starts an asynchronous page load; the progress listener above
+        // repeats this after the new document has been laid out.
+        scrollTranscriptToBottom();
+    }
+
+    private void scrollTranscriptToBottom() {
+        if (transcript == null || transcript.isDisposed()) {
+            return;
+        }
+        transcript.execute("window.scrollTo(0, Math.max(document.body.scrollHeight, document.documentElement.scrollHeight));");
     }
 
     private void disconnect() {
