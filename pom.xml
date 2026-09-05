@@ -21,6 +21,7 @@
   <modules>
     <module>releng/dev.eclipseacp.target</module>
     <module>plugins/dev.eclipseacp.client</module>
+    <module>plugins/dev.eclipseacp.client.tests</module>
     <module>features/dev.eclipseacp.feature</module>
     <module>releng/dev.eclipseacp.repository</module>
   </modules>

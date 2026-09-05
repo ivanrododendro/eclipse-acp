@@ -17,6 +17,7 @@ import com.google.gson.Gson;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
+import dev.eclipseacp.client.AcpLog;
 
 final class JsonRpcConnection implements Closeable {
     private final Gson gson = new Gson();
@@ -37,6 +38,7 @@ final class JsonRpcConnection implements Closeable {
     }
 
     void start() {
+        AcpLog.info("Starting ACP JSON-RPC reader thread");
         Thread thread = new Thread(this::readLoop, "eclipse-acp-jsonrpc");
         thread.setDaemon(true);
         thread.start();
@@ -44,6 +46,7 @@ final class JsonRpcConnection implements Closeable {
 
     CompletableFuture<JsonObject> request(String method, JsonObject params) {
         long id = nextId.getAndIncrement();
+        AcpLog.info("JSON-RPC request sent: id=" + id + ", method='" + method + "'");
         JsonObject message = envelope(method, params);
         message.addProperty("id", id);
 
@@ -52,6 +55,7 @@ final class JsonRpcConnection implements Closeable {
         try {
             send(message);
         } catch (IOException exception) {
+            AcpLog.error("JSON-RPC request could not be written: id=" + id + ", method='" + method + "'", exception);
             pending.remove(Long.toString(id));
             future.completeExceptionally(exception);
         }
@@ -59,6 +63,7 @@ final class JsonRpcConnection implements Closeable {
     }
 
     void notification(String method, JsonObject params) throws IOException {
+        AcpLog.info("JSON-RPC notification sent: method='" + method + "'");
         send(envelope(method, params));
     }
 
@@ -75,14 +80,17 @@ final class JsonRpcConnection implements Closeable {
             String line;
             while (!closed && (line = reader.readLine()) != null) {
                 if (!line.isBlank()) {
+                    AcpLog.info("JSON-RPC message received: " + summarize(line));
                     dispatch(JsonParser.parseString(line).getAsJsonObject());
                 }
             }
             if (!closed) {
+                AcpLog.warn("ACP agent closed its output stream", null);
                 failPending(new IOException("ACP agent closed its output stream"));
             }
         } catch (Exception exception) {
             if (!closed) {
+                AcpLog.error("ACP JSON-RPC reader failed", exception);
                 failPending(exception);
                 errorHandler.accept(exception);
             }
@@ -107,8 +115,11 @@ final class JsonRpcConnection implements Closeable {
                 return;
             }
             if (message.has("error")) {
+                AcpLog.error("JSON-RPC error response received: id=" + key(message.get("id")),
+                        new IOException(message.get("error").toString()));
                 future.completeExceptionally(new IOException("ACP error: " + message.get("error")));
             } else {
+                AcpLog.info("JSON-RPC response received: id=" + key(message.get("id")));
                 future.complete(objectOrEmpty(message.get("result")));
             }
         }
@@ -134,7 +145,9 @@ final class JsonRpcConnection implements Closeable {
             message.add("result", result == null ? new JsonObject() : result);
             try {
                 send(message);
+                AcpLog.info("JSON-RPC response sent: id=" + id);
             } catch (IOException exception) {
+                AcpLog.error("Could not send JSON-RPC response: id=" + id, exception);
                 errorHandler.accept(exception);
             }
         });
@@ -152,6 +165,7 @@ final class JsonRpcConnection implements Closeable {
         try {
             send(message);
         } catch (IOException exception) {
+            AcpLog.error("Could not send JSON-RPC error response: id=" + id, exception);
             errorHandler.accept(exception);
         }
     }
@@ -177,6 +191,13 @@ final class JsonRpcConnection implements Closeable {
                 : id.toString();
     }
 
+    private static String summarize(String line) {
+        JsonObject message = JsonParser.parseString(line).getAsJsonObject();
+        String method = message.has("method") ? message.get("method").getAsString() : "<response>";
+        String id = message.has("id") ? ", id=" + key(message.get("id")) : "";
+        return "method='" + method + "'" + id;
+    }
+
     private void failPending(Throwable error) {
         pending.values().forEach(future -> future.completeExceptionally(error));
         pending.clear();
@@ -184,6 +205,7 @@ final class JsonRpcConnection implements Closeable {
 
     @Override
     public void close() throws IOException {
+        AcpLog.info("Closing ACP JSON-RPC connection");
         closed = true;
         failPending(new IOException("ACP connection closed"));
         reader.close();

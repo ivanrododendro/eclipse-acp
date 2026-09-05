@@ -6,16 +6,23 @@ import java.io.OutputStreamWriter;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonPrimitive;
+import dev.eclipseacp.client.AcpLog;
 import dev.eclipseacp.client.agent.AgentCapabilities;
 import dev.eclipseacp.client.agent.AgentClient;
+import dev.eclipseacp.client.agent.AuthMethod;
+import dev.eclipseacp.client.agent.SessionInfo;
+import dev.eclipseacp.client.agent.SessionPage;
 
 /** ACP v1 adapter. The rest of the plug-in talks to AgentClient only. */
 public final class AcpClient implements AgentClient, JsonRpcHandler {
@@ -30,6 +37,7 @@ public final class AcpClient implements AgentClient, JsonRpcHandler {
     private String sessionId;
     private volatile boolean applyingSystemInstruction;
     private volatile AgentCapabilities capabilities = AgentCapabilities.NONE;
+    private volatile List<AuthMethod> authenticationMethods = List.of();
 
     public AcpClient(String command, String arguments, AcpListener listener) {
         this.command = Objects.requireNonNull(command).trim();
@@ -38,7 +46,9 @@ public final class AcpClient implements AgentClient, JsonRpcHandler {
     }
 
     public CompletableFuture<Void> connect(Path workingDirectory) {
+        AcpLog.info("ACP connection requested: command='" + command + "', workingDirectory='" + workingDirectory + "'");
         if (command.isBlank()) {
+            AcpLog.warn("ACP connection rejected because the command is empty", null);
             return CompletableFuture.failedFuture(new IllegalArgumentException("The ACP command is empty"));
         }
 
@@ -50,6 +60,7 @@ public final class AcpClient implements AgentClient, JsonRpcHandler {
             ProcessBuilder builder = new ProcessBuilder(processCommand);
             builder.directory(workingDirectory.toFile());
             process = builder.start();
+            AcpLog.info("ACP agent process started: pid=" + process.pid() + ", executable='" + command + "'");
 
             connection = new JsonRpcConnection(
                     new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8),
@@ -59,14 +70,24 @@ public final class AcpClient implements AgentClient, JsonRpcHandler {
             connection.start();
             streamStandardError(process);
         } catch (IOException exception) {
+            AcpLog.error("Could not start ACP agent process", exception);
             return CompletableFuture.failedFuture(exception);
         }
 
+        AcpLog.info("ACP JSON-RPC reader started; sending initialize");
         listener.onStatus("Initializing " + command + "…");
-        return initialize()
+        CompletableFuture<Void> connectionFuture = initialize()
                 .thenCompose(ignored -> newSession(workingDirectory))
                 .thenCompose(ignored -> applySystemInstruction())
                 .thenAccept(ignored -> listener.onStatus("Connected"));
+        connectionFuture.whenComplete((ignored, error) -> {
+            if (error == null) {
+                AcpLog.info("ACP connection established: sessionId='" + sessionId + "'");
+            } else {
+                AcpLog.error("ACP connection failed during initialization/session setup", unwrap(error));
+            }
+        });
+        return connectionFuture;
     }
 
     /** ACP v1 has no native system role; this establishes an invisible session bootstrap instruction. */
@@ -78,6 +99,30 @@ public final class AcpClient implements AgentClient, JsonRpcHandler {
 
     @Override
     public AgentCapabilities capabilities() { return capabilities; }
+
+    @Override
+    public List<AuthMethod> authenticationMethods() { return authenticationMethods; }
+
+    @Override
+    public CompletableFuture<Void> authenticate(String methodId) {
+        AuthMethod method = authenticationMethods.stream().filter(candidate -> candidate.id().equals(methodId)).findFirst()
+                .orElseThrow(() -> new IllegalArgumentException("Unknown ACP authentication method: " + methodId));
+        if (method.isTerminal()) {
+            return CompletableFuture.failedFuture(new UnsupportedOperationException(
+                    "Terminal authentication requires an Eclipse terminal integration"));
+        }
+        JsonObject params = new JsonObject();
+        params.addProperty("methodId", method.id());
+        return request("authenticate", params).thenAccept(ignored -> listener.onStatus("Authenticated"));
+    }
+
+    @Override
+    public CompletableFuture<Void> logout() {
+        if (!capabilities.logout()) {
+            return CompletableFuture.failedFuture(new UnsupportedOperationException("The ACP agent does not support logout"));
+        }
+        return request("logout", new JsonObject()).thenAccept(ignored -> listener.onStatus("Logged out"));
+    }
 
     public CompletableFuture<Void> prompt(String text) {
         if (sessionId == null) {
@@ -102,8 +147,20 @@ public final class AcpClient implements AgentClient, JsonRpcHandler {
         params.add("prompt", prompt);
 
         if (announce) listener.onStatus("Agent working…");
+        AcpLog.info("Sending ACP request: method='session/prompt', sessionId='" + sessionId
+                + "', textLength=" + text.length());
         return connection.request("session/prompt", params)
-                .thenAccept(result -> { if (announce) listener.onStatus(stopReason(result)); });
+                .thenAccept(result -> {
+                    AcpLog.info("ACP request completed: method='session/prompt', sessionId='" + sessionId
+                            + "', stopReason='" + stopReason(result) + "'");
+                    if (announce) listener.onStatus(stopReason(result));
+                })
+                .whenComplete((ignored, error) -> {
+                    if (error != null) {
+                        AcpLog.error("ACP request failed: method='session/prompt', sessionId='" + sessionId + "'",
+                                unwrap(error));
+                    }
+                });
     }
 
     public void cancel() throws IOException {
@@ -113,6 +170,7 @@ public final class AcpClient implements AgentClient, JsonRpcHandler {
         JsonObject params = new JsonObject();
         params.addProperty("sessionId", sessionId);
         connection.notification("session/cancel", params);
+        AcpLog.info("ACP notification sent: method='session/cancel', sessionId='" + sessionId + "'");
         listener.onStatus("Cancellation requested");
     }
 
@@ -123,9 +181,11 @@ public final class AcpClient implements AgentClient, JsonRpcHandler {
 
         JsonObject params = new JsonObject();
         params.addProperty("protocolVersion", PROTOCOL_VERSION);
+        // We do not advertise terminal authentication until Eclipse can launch and host an interactive terminal.
         params.add("clientCapabilities", new JsonObject());
         params.add("clientInfo", clientInfo);
 
+        AcpLog.info("Sending ACP request: method='initialize', protocolVersion=" + PROTOCOL_VERSION);
         return connection.request("initialize", params).thenApply(result -> {
             int negotiated = result.has("protocolVersion")
                     ? result.get("protocolVersion").getAsInt()
@@ -134,15 +194,57 @@ public final class AcpClient implements AgentClient, JsonRpcHandler {
                 throw new IllegalStateException("Unsupported ACP protocol version: " + negotiated);
             }
             capabilities = capabilities(result);
+            authenticationMethods = authenticationMethods(result);
+            listener.onAuthenticationMethods(authenticationMethods);
+            AcpLog.info("ACP initialize completed: negotiatedProtocolVersion=" + negotiated
+                    + ", capabilities=" + capabilities);
             return result;
         });
     }
 
-    private static AgentCapabilities capabilities(JsonObject result) {
+    static AgentCapabilities capabilities(JsonObject result) {
         JsonObject caps = result.has("agentCapabilities") && result.get("agentCapabilities").isJsonObject()
                 ? result.getAsJsonObject("agentCapabilities") : new JsonObject();
-        return new AgentCapabilities(caps.has("sessionRequestPermission") || caps.has("permissions"),
-                caps.has("modes"), caps.has("fileSystem") || caps.has("fs"), caps.has("terminal"));
+        JsonObject session = object(caps.get("sessionCapabilities"));
+        JsonObject prompt = object(caps.get("promptCapabilities"));
+        JsonObject mcp = object(caps.get("mcpCapabilities"));
+        JsonObject auth = object(caps.get("auth"));
+        return new AgentCapabilities(
+                bool(caps, "loadSession"),
+                present(session, "list"),
+                present(session, "resume"),
+                present(session, "close"),
+                present(session, "delete"),
+                present(session, "additionalDirectories"),
+                bool(prompt, "image"),
+                bool(prompt, "audio"),
+                bool(prompt, "embeddedContext"),
+                bool(mcp, "http"),
+                bool(mcp, "sse"),
+                present(auth, "logout"));
+    }
+
+    static List<AuthMethod> authenticationMethods(JsonObject result) {
+        if (!result.has("authMethods") || !result.get("authMethods").isJsonArray()) return List.of();
+        List<AuthMethod> methods = new ArrayList<>();
+        for (JsonElement element : result.getAsJsonArray("authMethods")) {
+            JsonObject raw = object(element);
+            String id = string(raw, "id");
+            if (id.isBlank()) continue;
+            List<String> args = new ArrayList<>();
+            if (raw.has("args") && raw.get("args").isJsonArray()) {
+                for (JsonElement argument : raw.getAsJsonArray("args")) if (argument.isJsonPrimitive()) args.add(argument.getAsString());
+            }
+            Map<String, String> environment = new LinkedHashMap<>();
+            JsonObject rawEnvironment = object(raw.get("env"));
+            for (String name : rawEnvironment.keySet()) {
+                if (rawEnvironment.get(name).isJsonPrimitive()) environment.put(name, rawEnvironment.get(name).getAsString());
+            }
+            String type = string(raw, "type");
+            methods.add(new AuthMethod(id, string(raw, "name"), string(raw, "description"),
+                    type.isBlank() ? "agent" : type, List.copyOf(args), Map.copyOf(environment)));
+        }
+        return List.copyOf(methods);
     }
 
     private CompletableFuture<JsonObject> newSession(Path workingDirectory) {
@@ -150,22 +252,83 @@ public final class AcpClient implements AgentClient, JsonRpcHandler {
         params.addProperty("cwd", workingDirectory.toAbsolutePath().normalize().toString());
         params.add("mcpServers", new JsonArray());
 
+        AcpLog.info("Sending ACP request: method='session/new', cwd='" + params.get("cwd").getAsString() + "'");
         return connection.request("session/new", params).thenApply(result -> {
             if (!result.has("sessionId")) {
                 throw new IllegalStateException("ACP agent did not return a sessionId");
             }
             sessionId = result.get("sessionId").getAsString();
+            AcpLog.info("ACP session created: sessionId='" + sessionId + "'");
             return result;
         });
     }
 
     @Override
+    public CompletableFuture<SessionPage> listSessions(Path workingDirectory, String cursor) {
+        if (!capabilities.sessionList()) {
+            return CompletableFuture.failedFuture(new UnsupportedOperationException("The ACP agent does not support session/list"));
+        }
+        JsonObject params = new JsonObject();
+        if (workingDirectory != null) params.addProperty("cwd", workingDirectory.toAbsolutePath().normalize().toString());
+        if (cursor != null && !cursor.isBlank()) params.addProperty("cursor", cursor);
+        return request("session/list", params).thenApply(AcpClient::sessionPage);
+    }
+
+    @Override
+    public CompletableFuture<Void> loadSession(String loadedSessionId, Path workingDirectory) {
+        if (!capabilities.loadSession()) {
+            return CompletableFuture.failedFuture(new UnsupportedOperationException("The ACP agent does not support session/load"));
+        }
+        return attachSession("session/load", loadedSessionId, workingDirectory);
+    }
+
+    @Override
+    public CompletableFuture<Void> resumeSession(String resumedSessionId, Path workingDirectory) {
+        if (!capabilities.sessionResume()) {
+            return CompletableFuture.failedFuture(new UnsupportedOperationException("The ACP agent does not support session/resume"));
+        }
+        return attachSession("session/resume", resumedSessionId, workingDirectory);
+    }
+
+    private CompletableFuture<Void> attachSession(String method, String restoredSessionId, Path workingDirectory) {
+        if (restoredSessionId == null || restoredSessionId.isBlank()) {
+            return CompletableFuture.failedFuture(new IllegalArgumentException("The ACP session ID is empty"));
+        }
+        String previousSessionId = sessionId;
+        sessionId = restoredSessionId; // Required before load replays session/update notifications.
+        JsonObject params = sessionParameters(workingDirectory);
+        params.addProperty("sessionId", restoredSessionId);
+        return request(method, params).thenAccept(ignored -> listener.onStatus("Session restored"))
+                .whenComplete((ignored, error) -> { if (error != null) sessionId = previousSessionId; });
+    }
+
+    @Override
+    public CompletableFuture<Void> closeSession() {
+        if (sessionId == null || connection == null || !capabilities.sessionClose()) return CompletableFuture.completedFuture(null);
+        JsonObject params = new JsonObject();
+        params.addProperty("sessionId", sessionId);
+        return connection.request("session/close", params).thenAccept(ignored -> listener.onStatus("Session closed"));
+    }
+
+    @Override
+    public CompletableFuture<Void> deleteSession(String deletedSessionId) {
+        if (!capabilities.sessionDelete()) {
+            return CompletableFuture.failedFuture(new UnsupportedOperationException("The ACP agent does not support session/delete"));
+        }
+        JsonObject params = new JsonObject();
+        params.addProperty("sessionId", Objects.requireNonNull(deletedSessionId).trim());
+        return request("session/delete", params).thenAccept(ignored -> { });
+    }
+
+    @Override
     public void onNotification(String method, JsonObject params) {
+        AcpLog.info("ACP notification received: method='" + method + "'");
         if (!"session/update".equals(method)) {
             return;
         }
         JsonObject update = object(params.get("update"));
         String kind = string(update, "sessionUpdate");
+        listener.onSessionUpdate(new AcpSessionUpdate(string(params, "sessionId"), kind, update.deepCopy()));
 
         if ("agent_message_chunk".equals(kind)) {
             String text = textFrom(update.get("content"));
@@ -176,6 +339,7 @@ public final class AcpClient implements AgentClient, JsonRpcHandler {
             listener.onStatus("Agent reasoning…");
         } else if ("tool_call".equals(kind) || "tool_call_update".equals(kind)) {
             String title = string(update, "title");
+            if (title.isBlank()) title = string(object(update.get("toolCall")), "title");
             if (!title.isBlank()) {
                 listener.onStatus(title);
             }
@@ -186,6 +350,7 @@ public final class AcpClient implements AgentClient, JsonRpcHandler {
 
     @Override
     public CompletableFuture<JsonElement> onRequest(String method, JsonObject params) {
+        AcpLog.info("ACP server request received: method='" + method + "'");
         if (!"session/request_permission".equals(method)) {
             return CompletableFuture.failedFuture(new UnsupportedOperationException("Unsupported ACP method: " + method));
         }
@@ -203,7 +368,8 @@ public final class AcpClient implements AgentClient, JsonRpcHandler {
         }
 
         JsonObject toolCall = object(params.get("toolCall"));
-        String title = string(toolCall, "title");
+        String title = string(params, "title");
+        if (title.isBlank()) title = string(toolCall, "title");
         if (title.isBlank()) {
             title = "The agent requests permission";
         }
@@ -228,11 +394,13 @@ public final class AcpClient implements AgentClient, JsonRpcHandler {
                 String line;
                 while ((line = reader.readLine()) != null) {
                     if (!line.isBlank()) {
+                        AcpLog.info("ACP agent stderr: " + line);
                         listener.onStatus("Agent: " + line);
                     }
                 }
             } catch (IOException exception) {
                 if (child.isAlive()) {
+                    AcpLog.error("Cannot read ACP agent diagnostics", exception);
                     listener.onError("Cannot read ACP agent diagnostics", exception);
                 }
             }
@@ -278,6 +446,51 @@ public final class AcpClient implements AgentClient, JsonRpcHandler {
                 : "";
     }
 
+    private CompletableFuture<JsonObject> request(String method, JsonObject params) {
+        if (connection == null) return CompletableFuture.failedFuture(new IllegalStateException("ACP connection is not connected"));
+        AcpLog.info("Sending ACP request: method='" + method + "'");
+        return connection.request(method, params);
+    }
+
+    private JsonObject sessionParameters(Path workingDirectory) {
+        if (workingDirectory == null) throw new IllegalArgumentException("The ACP working directory is required");
+        JsonObject params = new JsonObject();
+        params.addProperty("cwd", workingDirectory.toAbsolutePath().normalize().toString());
+        params.add("mcpServers", new JsonArray());
+        return params;
+    }
+
+    static SessionPage sessionPage(JsonObject result) {
+        return new SessionPage(sessionInfos(result.get("sessions")), string(result, "nextCursor"));
+    }
+
+    private static List<SessionInfo> sessionInfos(JsonElement element) {
+        if (element == null || !element.isJsonArray()) return List.of();
+        List<SessionInfo> sessions = new ArrayList<>();
+        for (JsonElement item : element.getAsJsonArray()) {
+            JsonObject raw = object(item);
+            String id = string(raw, "sessionId");
+            String cwd = string(raw, "cwd");
+            if (id.isBlank() || cwd.isBlank()) continue;
+            List<String> directories = new ArrayList<>();
+            if (raw.has("additionalDirectories") && raw.get("additionalDirectories").isJsonArray()) {
+                for (JsonElement directory : raw.getAsJsonArray("additionalDirectories")) {
+                    if (directory.isJsonPrimitive()) directories.add(directory.getAsString());
+                }
+            }
+            sessions.add(new SessionInfo(id, cwd, List.copyOf(directories), string(raw, "title"), string(raw, "updatedAt")));
+        }
+        return List.copyOf(sessions);
+    }
+
+    private static boolean bool(JsonObject object, String member) {
+        return object.has(member) && object.get(member).isJsonPrimitive() && object.get(member).getAsBoolean();
+    }
+
+    private static boolean present(JsonObject object, String member) {
+        return object.has(member) && !object.get(member).isJsonNull();
+    }
+
     static List<String> parseArguments(String commandLine) {
         List<String> result = new ArrayList<>();
         StringBuilder current = new StringBuilder();
@@ -315,8 +528,15 @@ public final class AcpClient implements AgentClient, JsonRpcHandler {
 
     @Override
     public void close() {
+        AcpLog.info("Closing ACP connection: sessionId='" + sessionId + "'");
+        try {
+            closeSession().get(2, TimeUnit.SECONDS);
+        } catch (Exception exception) {
+            AcpLog.warn("ACP session could not be closed cleanly", unwrap(exception));
+        }
         sessionId = null;
         capabilities = AgentCapabilities.NONE;
+        authenticationMethods = List.of();
 
         Process child = process;
         process = null;
@@ -331,8 +551,13 @@ public final class AcpClient implements AgentClient, JsonRpcHandler {
             try {
                 activeConnection.close();
             } catch (IOException ignored) {
+                AcpLog.warn("ACP connection streams were already closed", ignored);
                 // The child process may already have closed the streams.
             }
         }
+    }
+
+    private static Throwable unwrap(Throwable error) {
+        return error.getCause() == null ? error : error.getCause();
     }
 }

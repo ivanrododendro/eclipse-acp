@@ -33,20 +33,21 @@
           commandId="dev.eclipseacp.client.commands.openChat"/>
   </extension>
 
-  <extension point="org.eclipse.ui.popupMenus">
-    <objectContribution
-          adaptable="true"
-          objectClass="org.eclipse.core.resources.IResource"
-          id="dev.eclipseacp.client.popup.openChat">
-      <menu
-            id="dev.eclipseacp.client.popup.menu"
-            label="ACP">
-        <command
-              commandId="dev.eclipseacp.client.commands.openChat"
-              label="Open ACP Chat for Project"
-              style="push"/>
-      </menu>
-    </objectContribution>
+  <extension point="org.eclipse.ui.menus">
+    <menuContribution locationURI="popup:org.eclipse.ui.popup.any?after=additions">
+      <command
+            commandId="dev.eclipseacp.client.commands.openChat"
+            label="Open ACP Chat for Project"
+            style="push">
+        <visibleWhen checkEnabled="false">
+          <with variable="selection">
+            <iterate ifEmpty="false">
+              <adapt type="org.eclipse.core.resources.IResource"/>
+            </iterate>
+          </with>
+        </visibleWhen>
+      </command>
+    </menuContribution>
   </extension>
 
   <extension point="org.eclipse.core.runtime.preferences">

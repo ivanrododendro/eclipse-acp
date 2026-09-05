@@ -2,6 +2,7 @@ package dev.eclipseacp.client.agent;
 
 import java.io.IOException;
 import java.nio.file.Path;
+import java.util.List;
 import java.util.concurrent.CompletableFuture;
 
 /** UI-facing agent contract; protocol versions must not leak beyond this package. */
@@ -10,5 +11,27 @@ public interface AgentClient extends AutoCloseable {
     CompletableFuture<Void> prompt(String text);
     void cancel() throws IOException;
     AgentCapabilities capabilities();
+    default List<AuthMethod> authenticationMethods() { return List.of(); }
+    default CompletableFuture<Void> authenticate(String methodId) {
+        return CompletableFuture.failedFuture(new UnsupportedOperationException("Authentication is not supported"));
+    }
+    default CompletableFuture<Void> logout() {
+        return CompletableFuture.failedFuture(new UnsupportedOperationException("Logout is not supported"));
+    }
+    default CompletableFuture<SessionPage> listSessions(Path workingDirectory, String cursor) {
+        return CompletableFuture.failedFuture(new UnsupportedOperationException("Session listing is not supported"));
+    }
+    default CompletableFuture<Void> loadSession(String sessionId, Path workingDirectory) {
+        return CompletableFuture.failedFuture(new UnsupportedOperationException("Session loading is not supported"));
+    }
+    default CompletableFuture<Void> resumeSession(String sessionId, Path workingDirectory) {
+        return CompletableFuture.failedFuture(new UnsupportedOperationException("Session resume is not supported"));
+    }
+    default CompletableFuture<Void> closeSession() {
+        return CompletableFuture.completedFuture(null);
+    }
+    default CompletableFuture<Void> deleteSession(String sessionId) {
+        return CompletableFuture.failedFuture(new UnsupportedOperationException("Session deletion is not supported"));
+    }
     @Override void close();
 }

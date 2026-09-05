@@ -1,4 +1,11 @@
 target/
 .metadata/
 .settings/
+bin/
+.classpath
+.project
+.buildpath
+.factorypath
+.externalToolBuilders/
+.recommenders/
 *.log
