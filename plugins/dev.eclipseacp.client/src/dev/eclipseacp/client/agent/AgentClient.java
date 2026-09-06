@@ -25,6 +25,10 @@ public interface AgentClient extends AutoCloseable {
     default CompletableFuture<Void> setConfigOption(String configId, JsonElement value) {
         return CompletableFuture.failedFuture(new UnsupportedOperationException("Configuration options are not supported"));
     }
+    /** Changes an option while preserving the ACP value discriminator when one is required. */
+    default CompletableFuture<Void> setConfigOption(String configId, String valueType, JsonElement value) {
+        return setConfigOption(configId, value);
+    }
     void cancel() throws IOException;
     AgentCapabilities capabilities();
     default List<AuthMethod> authenticationMethods() { return List.of(); }

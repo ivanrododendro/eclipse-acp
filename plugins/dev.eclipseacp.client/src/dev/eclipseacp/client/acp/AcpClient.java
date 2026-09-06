@@ -218,13 +218,23 @@ public final class AcpClient implements AgentClient, JsonRpcHandler {
 
     @Override
     public CompletableFuture<Void> setConfigOption(String configId, JsonElement value) {
+        return setConfigOption(configId, value != null && value.isJsonPrimitive()
+                && value.getAsJsonPrimitive().isBoolean() ? "boolean" : null, value);
+    }
+
+    @Override
+    public CompletableFuture<Void> setConfigOption(String configId, String valueType, JsonElement value) {
         if (sessionId == null) return CompletableFuture.failedFuture(new IllegalStateException("ACP session is not connected"));
         if (configId == null || configId.isBlank()) return CompletableFuture.failedFuture(new IllegalArgumentException("Configuration option ID is empty"));
         JsonObject params = new JsonObject();
         params.addProperty("sessionId", sessionId);
         params.addProperty("configId", configId);
+        if (valueType != null && !valueType.isBlank()) params.addProperty("type", valueType);
         params.add("value", value == null ? com.google.gson.JsonNull.INSTANCE : value);
-        return request("session/set_config_option", params).thenAccept(ignored -> listener.onStatus("Configuration updated"));
+        return request("session/set_config_option", params).thenAccept(result -> {
+            publishConfigOptions(result);
+            listener.onStatus("Configuration updated");
+        });
     }
 
     public void cancel() throws IOException {
@@ -251,6 +261,11 @@ public final class AcpClient implements AgentClient, JsonRpcHandler {
         fileSystem.addProperty("writeTextFile", true);
         JsonObject clientCapabilities = new JsonObject();
         clientCapabilities.add("fs", fileSystem);
+        JsonObject configOptions = new JsonObject();
+        configOptions.add("boolean", new JsonObject());
+        JsonObject session = new JsonObject();
+        session.add("configOptions", configOptions);
+        clientCapabilities.add("session", session);
         params.add("clientCapabilities", clientCapabilities);
         params.add("clientInfo", clientInfo);
 
@@ -327,9 +342,17 @@ public final class AcpClient implements AgentClient, JsonRpcHandler {
                 throw new IllegalStateException("ACP agent did not return a sessionId");
             }
             sessionId = result.get("sessionId").getAsString();
+            publishConfigOptions(result);
             AcpLog.info("ACP session created: sessionId='" + sessionId + "'");
             return result;
         });
+    }
+
+    /** Delivers option state returned by session/new and session/set_config_option like a normal update. */
+    private void publishConfigOptions(JsonObject result) {
+        if (result != null && result.has("configOptions") && result.get("configOptions").isJsonArray()) {
+            listener.onSessionUpdate(new AcpSessionUpdate(sessionId, "config_option_update", result.deepCopy()));
+        }
     }
 
     @Override
@@ -367,7 +390,10 @@ public final class AcpClient implements AgentClient, JsonRpcHandler {
         sessionId = restoredSessionId; // Required before load replays session/update notifications.
         JsonObject params = sessionParameters(workingDirectory);
         params.addProperty("sessionId", restoredSessionId);
-        return request(method, params).thenAccept(ignored -> listener.onStatus("Session restored"))
+        return request(method, params).thenAccept(result -> {
+            publishConfigOptions(result);
+            listener.onStatus("Session restored");
+        })
                 .whenComplete((ignored, error) -> { if (error != null) sessionId = previousSessionId; });
     }
 

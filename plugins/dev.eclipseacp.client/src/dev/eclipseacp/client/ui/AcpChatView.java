@@ -11,7 +11,6 @@ import java.util.concurrent.CompletableFuture;
 
 import com.google.gson.JsonObject;
 import com.google.gson.JsonElement;
-import com.google.gson.JsonParser;
 
 import org.eclipse.core.resources.IProject;
 import org.eclipse.jface.dialogs.MessageDialog;
@@ -72,10 +71,14 @@ public final class AcpChatView extends ViewPart implements AcpListener {
     private Button commandsButton;
     private Button settingsButton;
     private Button attachButton;
+    private Combo modelSelector;
+    private Combo thoughtLevelSelector;
+    private Combo collaborationModeSelector;
     private Label status;
     private Composite reviewBar;
     private Label reviewSummary;
     private Composite composer;
+    private Composite collaborationBar;
     private Combo projectSelector;
     private String chatFontFamily = "sans-serif";
     private int chatFontSizePoints = 10;
@@ -180,6 +183,22 @@ public final class AcpChatView extends ViewPart implements AcpListener {
         composerLayout.marginWidth = 10;
         composerLayout.marginHeight = 8;
         composer.setLayout(composerLayout);
+
+        collaborationBar = new Composite(composer, SWT.NONE);
+        collaborationBar.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
+        org.eclipse.swt.layout.RowLayout collaborationLayout = new org.eclipse.swt.layout.RowLayout();
+        collaborationLayout.marginLeft = collaborationLayout.marginRight = collaborationLayout.marginTop
+                = collaborationLayout.marginBottom = 0;
+        collaborationLayout.center = true;
+        collaborationBar.setLayout(collaborationLayout);
+        Label collaborationLabel = new Label(collaborationBar, SWT.NONE);
+        collaborationLabel.setText("Collaboration:");
+        collaborationModeSelector = new Combo(collaborationBar, SWT.DROP_DOWN | SWT.READ_ONLY);
+        collaborationModeSelector.setToolTipText("Collaboration mode for the active ACP session");
+        collaborationModeSelector.setEnabled(false);
+        collaborationModeSelector.addListener(SWT.Selection, ignored -> changeConfigOption(collaborationModeSelector,
+                collaborationModeOption(activeSession), "Collaboration mode"));
+
         prompt = new Text(composer, SWT.MULTI | SWT.WRAP | SWT.V_SCROLL);
         GridData promptData = new GridData(SWT.FILL, SWT.FILL, true, false);
         promptData.heightHint = 64;
@@ -214,6 +233,7 @@ public final class AcpChatView extends ViewPart implements AcpListener {
         actions.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
         org.eclipse.swt.layout.RowLayout actionsLayout = new org.eclipse.swt.layout.RowLayout();
         actionsLayout.wrap = true;
+        actionsLayout.center = true;
         actionsLayout.spacing = 3;
         actionsLayout.marginLeft = actionsLayout.marginRight = 0;
         actions.setLayout(actionsLayout);
@@ -272,6 +292,17 @@ public final class AcpChatView extends ViewPart implements AcpListener {
         contextButton.setToolTipText("Insert @file, @selection, @java, @problems and @console references");
         contextButton.setEnabled(false);
         contextButton.addListener(SWT.Selection, ignored -> addContextReferences());
+
+        modelSelector = new Combo(actions, SWT.DROP_DOWN | SWT.READ_ONLY);
+        modelSelector.setToolTipText("Model for the active ACP session");
+        modelSelector.setEnabled(false);
+        modelSelector.addListener(SWT.Selection, ignored -> changeModel());
+
+        thoughtLevelSelector = new Combo(actions, SWT.DROP_DOWN | SWT.READ_ONLY);
+        thoughtLevelSelector.setToolTipText("Reasoning level for the active ACP session");
+        thoughtLevelSelector.setEnabled(false);
+        thoughtLevelSelector.addListener(SWT.Selection, ignored -> changeConfigOption(thoughtLevelSelector,
+                thoughtLevelOption(activeSession), "Reasoning level"));
 
         commandsButton = new Button(actions, SWT.PUSH);
         commandsButton.setText("Commands");
@@ -576,7 +607,7 @@ public final class AcpChatView extends ViewPart implements AcpListener {
         }
         case "usage_update" -> {
             if (!AcpPreferences.store().getBoolean(AcpPreferences.HIDE_AGENT_COMMANDS_IN_CHAT)) {
-                append(session, "> **Usage:** " + usageText(payload) + "\n\n");
+                append(session, "> **Usage:** " + sessionUsageText(payload) + "\n\n");
             }
         }
         case "terminal_output", "terminal_output_update" -> {
@@ -593,10 +624,142 @@ public final class AcpChatView extends ViewPart implements AcpListener {
         String id = jsonString(option, "configId");
         if (id.isBlank()) id = jsonString(option, "id");
         if (!id.isBlank()) session.configOptions.put(id, new ConfigOption(id, nonBlank(jsonString(option, "name"), id),
-                jsonString(option, "description"), option.has("value") ? option.get("value").deepCopy() : null));
+                jsonString(option, "description"), jsonString(option, "category"), configValue(option), configChoices(option)));
     }
 
-    private static String usageText(JsonObject payload) {
+    private static JsonElement configValue(JsonObject option) {
+        JsonElement value = option.has("currentValue") ? option.get("currentValue") : option.get("value");
+        return value == null ? null : value.deepCopy();
+    }
+
+    private static List<ConfigOption.Choice> configChoices(JsonObject option) {
+        if (!option.has("options") || !option.get("options").isJsonArray()) return List.of();
+        List<ConfigOption.Choice> choices = new ArrayList<>();
+        for (JsonElement raw : option.getAsJsonArray("options")) {
+            if (raw.isJsonPrimitive()) {
+                String value = raw.getAsString();
+                choices.add(new ConfigOption.Choice(value, value, ""));
+            } else if (raw.isJsonObject()) {
+                JsonObject choice = raw.getAsJsonObject();
+                String value = jsonString(choice, "value");
+                if (!value.isBlank()) choices.add(new ConfigOption.Choice(value,
+                        nonBlank(jsonString(choice, "label"), nonBlank(jsonString(choice, "name"), value)),
+                        jsonString(choice, "description")));
+            }
+        }
+        return List.copyOf(choices);
+    }
+
+    private static ConfigOption modelOption(ChatSession session) {
+        if (session == null) return null;
+        return session.configOptions.values().stream()
+                .filter(option -> !option.choices().isEmpty())
+                .filter(option -> "model".equalsIgnoreCase(option.category())
+                        || "model".equalsIgnoreCase(option.id())
+                        || "model".equalsIgnoreCase(option.name()))
+                .findFirst().orElse(null);
+    }
+
+    private static ConfigOption collaborationModeOption(ChatSession session) {
+        return optionByCategoryOrId(session, "collaboration_mode", "collaboration mode");
+    }
+
+    private static ConfigOption thoughtLevelOption(ChatSession session) {
+        return optionByCategoryOrId(session, "thought_level", "Reasoning level");
+    }
+
+    private static ConfigOption optionByCategoryOrId(ChatSession session, String key, String displayName) {
+        if (session == null) return null;
+        return session.configOptions.values().stream().filter(option -> !option.choices().isEmpty())
+                .filter(option -> key.equalsIgnoreCase(option.category()) || key.equalsIgnoreCase(option.id())
+                        || displayName.equalsIgnoreCase(option.name()))
+                .findFirst().orElse(null);
+    }
+
+    private void refreshModelSelector() {
+        if (modelSelector == null || modelSelector.isDisposed()) return;
+        ConfigOption option = modelOption(activeSession);
+        modelSelector.removeAll();
+        if (option == null) {
+            modelSelector.setEnabled(false);
+            modelSelector.setToolTipText("The ACP agent has not advertised a model selector");
+            return;
+        }
+        String current = option.value() != null && option.value().isJsonPrimitive() ? option.value().getAsString() : "";
+        int selected = -1;
+        for (ConfigOption.Choice choice : option.choices()) {
+            modelSelector.add(choice.label());
+            if (choice.value().equals(current)) selected = modelSelector.getItemCount() - 1;
+        }
+        if (selected >= 0) modelSelector.select(selected);
+        else if (modelSelector.getItemCount() > 0) modelSelector.select(0);
+        modelSelector.setEnabled(activeSession != null && activeSession.client != null && !activeSession.agentMessageOpen);
+        modelSelector.setToolTipText(option.description().isBlank() ? "Model for the active ACP session" : option.description());
+    }
+
+    private void refreshCollaborationModeSelector() {
+        refreshConfigSelector(collaborationModeSelector, collaborationModeOption(activeSession), "Collaboration mode for the active ACP session");
+    }
+
+    private void refreshThoughtLevelSelector() {
+        refreshConfigSelector(thoughtLevelSelector, thoughtLevelOption(activeSession), "Reasoning level for the active ACP session");
+    }
+
+    private void refreshConfigSelector(Combo selector, ConfigOption option, String defaultTooltip) {
+        if (selector == null || selector.isDisposed()) return;
+        selector.removeAll();
+        if (option == null) { selector.setEnabled(false); return; }
+        String current = option.value() != null && option.value().isJsonPrimitive() ? option.value().getAsString() : "";
+        for (ConfigOption.Choice choice : option.choices()) {
+            selector.add(choice.label());
+            if (choice.value().equals(current)) selector.select(selector.getItemCount() - 1);
+        }
+        selector.setEnabled(activeSession != null && activeSession.client != null && !activeSession.agentMessageOpen);
+        selector.setToolTipText(option.description().isBlank() ? defaultTooltip : option.description());
+    }
+
+    private void changeModel() {
+        ChatSession session = activeSession;
+        ConfigOption option = modelOption(session);
+        int selected = modelSelector == null ? -1 : modelSelector.getSelectionIndex();
+        if (session == null || session.client == null || option == null || selected < 0 || selected >= option.choices().size()) return;
+        ConfigOption.Choice choice = option.choices().get(selected);
+        modelSelector.setEnabled(false);
+        session.client.setConfigOption(option.id(), new com.google.gson.JsonPrimitive(choice.value())).whenComplete((ignored, error) -> ui(() -> {
+            if (session.client == null || session != activeSession) return;
+            if (error != null) {
+                refreshModelSelector();
+                onError(session, "Could not change model", unwrap(error));
+            } else {
+                session.configOptions.put(option.id(), new ConfigOption(option.id(), option.name(), option.description(),
+                        option.category(), new com.google.gson.JsonPrimitive(choice.value()), option.choices()));
+                setStatus(session, "Model changed to " + choice.label());
+                updateControls();
+            }
+        }));
+    }
+
+    private void changeConfigOption(Combo selector, ConfigOption option, String optionName) {
+        ChatSession session = activeSession;
+        int selected = selector == null ? -1 : selector.getSelectionIndex();
+        if (session == null || session.client == null || option == null || selected < 0 || selected >= option.choices().size()) return;
+        ConfigOption.Choice choice = option.choices().get(selected);
+        selector.setEnabled(false);
+        session.client.setConfigOption(option.id(), new com.google.gson.JsonPrimitive(choice.value())).whenComplete((ignored, error) -> ui(() -> {
+            if (session.client == null || session != activeSession) return;
+            if (error != null) {
+                refreshConfigSelector(selector, option, optionName + " for the active ACP session");
+                onError(session, "Could not change " + optionName.toLowerCase(), unwrap(error));
+            } else {
+                session.configOptions.put(option.id(), new ConfigOption(option.id(), option.name(), option.description(),
+                        option.category(), new com.google.gson.JsonPrimitive(choice.value()), option.choices()));
+                setStatus(session, optionName + " changed to " + choice.label());
+                updateControls();
+            }
+        }));
+    }
+
+    private static String sessionUsageText(JsonObject payload) {
         List<String> entries = new ArrayList<>();
         for (String key : List.of("inputTokens", "outputTokens", "totalTokens", "cost")) {
             if (payload.has(key) && payload.get(key).isJsonPrimitive()) entries.add(key + "=" + payload.get(key).getAsString());
@@ -629,20 +792,19 @@ public final class AcpChatView extends ViewPart implements AcpListener {
     private void editConfigOption() {
         ChatSession session = activeSession;
         if (session == null || session.configOptions.isEmpty() || session.client == null) return;
-        ListDialog picker = new ListDialog(getSite().getShell()); picker.setTitle("ACP options"); picker.setMessage("Choose an option to edit:");
-        picker.setContentProvider(ArrayContentProvider.getInstance()); picker.setLabelProvider(new LabelProvider() { @Override public String getText(Object value) {
-            ConfigOption option = (ConfigOption) value; return option.name() + (option.description().isBlank() ? "" : " — " + option.description());
-        }}); picker.setInput(session.configOptions.values());
-        if (picker.open() != org.eclipse.jface.window.Window.OK || picker.getResult() == null || picker.getResult().length == 0) return;
-        ConfigOption option = (ConfigOption) picker.getResult()[0];
-        String current = option.value() == null ? "" : option.value().toString();
-        InputDialog input = new InputDialog(getSite().getShell(), option.name(), option.description(), current, null);
-        if (input.open() != org.eclipse.jface.window.Window.OK) return;
-        JsonElement value;
-        try { value = JsonParser.parseString(input.getValue()); } catch (RuntimeException error) { value = new com.google.gson.JsonPrimitive(input.getValue()); }
-        session.client.setConfigOption(option.id(), value).whenComplete((ignored, error) -> ui(() -> {
-            if (error != null) onError(session, "Could not update " + option.name(), unwrap(error));
-        }));
+        ConfigOptionsDialog dialog = new ConfigOptionsDialog(getSite().getShell(), new ArrayList<>(session.configOptions.values()));
+        if (dialog.open() != org.eclipse.jface.window.Window.OK) return;
+        dialog.changedValues().forEach((option, value) -> session.client.setConfigOption(option.id(), value).whenComplete((ignored, error) -> ui(() -> {
+            if (session.client == null) return;
+            if (error != null) {
+                onError(session, "Could not update " + option.name(), unwrap(error));
+            } else {
+                session.configOptions.put(option.id(), new ConfigOption(option.id(), option.name(), option.description(),
+                        option.category(), value.deepCopy(), option.choices()));
+                setStatus(session, "Updated " + option.name());
+                updateControls();
+            }
+        })));
     }
 
     private void attachFile() {
@@ -993,8 +1155,15 @@ public final class AcpChatView extends ViewPart implements AcpListener {
         commandsButton.setEnabled(connected && !activeSession.commands.isEmpty());
         settingsButton.setEnabled(connected && !activeSession.configOptions.isEmpty());
         attachButton.setEnabled(connected);
+        refreshModelSelector();
+        refreshThoughtLevelSelector();
+        refreshCollaborationModeSelector();
         showControl(commandsButton, commandsButton.getEnabled());
         showControl(settingsButton, settingsButton.getEnabled());
+        // Keep selectors visible while a turn is in progress; refresh disables them until idle.
+        showControl(modelSelector, modelSelector.getItemCount() > 0);
+        showControl(thoughtLevelSelector, thoughtLevelSelector.getItemCount() > 0);
+        showControl(collaborationBar, collaborationModeSelector.getItemCount() > 0);
         showControl(reviewBar, hasDiffs || undoButton.getEnabled());
         showControl(applyButton, hasDiffs);
         showControl(rejectButton, hasDiffs);
