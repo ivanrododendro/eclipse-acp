@@ -127,10 +127,11 @@ public final class AcpChatView extends ViewPart implements AcpListener {
 
         Composite header = new Composite(parent, SWT.NONE);
         header.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
-        GridLayout headerLayout = new GridLayout(4, false);
+        GridLayout headerLayout = new GridLayout(3, false);
         headerLayout.marginWidth = 0;
         headerLayout.marginHeight = 0;
         header.setLayout(headerLayout);
+
         Label projectLabel = new Label(header, SWT.NONE);
         projectLabel.setText("Project:");
         projectSelector = new Combo(header, SWT.DROP_DOWN | SWT.READ_ONLY);
@@ -143,9 +144,8 @@ public final class AcpChatView extends ViewPart implements AcpListener {
             chatFontSizePoints = Math.max(8, fontData[0].getHeight() - 1);
         }
 
-        Composite sessionActions = new Composite(header, SWT.NONE);
-        sessionActions.setLayout(new org.eclipse.swt.layout.RowLayout());
         Composite sessionMore = new Composite(header, SWT.NONE);
+        sessionMore.setLayoutData(new GridData(SWT.END, SWT.CENTER, false, false));
         sessionMore.setLayout(new org.eclipse.swt.layout.RowLayout());
 
         transcript = new Browser(parent, SWT.NONE);
@@ -198,6 +198,12 @@ public final class AcpChatView extends ViewPart implements AcpListener {
         collaborationModeSelector.setEnabled(false);
         collaborationModeSelector.addListener(SWT.Selection, ignored -> changeConfigOption(collaborationModeSelector,
                 collaborationModeOption(activeSession), "Collaboration mode"));
+
+        historyButton = new Button(collaborationBar, SWT.PUSH);
+        historyButton.setText("History");
+        historyButton.setToolTipText("Open chat history for this project");
+        historyButton.setEnabled(false);
+        historyButton.addListener(SWT.Selection, ignored -> chooseAgentSession());
 
         prompt = new Text(composer, SWT.MULTI | SWT.WRAP | SWT.V_SCROLL);
         GridData promptData = new GridData(SWT.FILL, SWT.FILL, true, false);
@@ -253,21 +259,10 @@ public final class AcpChatView extends ViewPart implements AcpListener {
         stopButton.setEnabled(false);
         stopButton.addListener(SWT.Selection, ignored -> cancel());
 
-        newSessionButton = new Button(sessionActions, SWT.PUSH);
-        newSessionButton.setToolTipText("New chat in this project");
-        newSessionButton.setEnabled(false);
-        newSessionButton.addListener(SWT.Selection, ignored -> openNewSessionForActiveProject());
-
         closeButton = new Button(sessionMore, SWT.PUSH);
         closeButton.setToolTipText("Close this chat");
         closeButton.setEnabled(false);
         closeButton.addListener(SWT.Selection, ignored -> closeActiveSession());
-
-        historyButton = new Button(sessionActions, SWT.PUSH);
-        historyButton.setText("History");
-        historyButton.setToolTipText("Open chat history for this project");
-        historyButton.setEnabled(false);
-        historyButton.addListener(SWT.Selection, ignored -> chooseAgentSession());
 
         applyButton = new Button(reviewBar, SWT.PUSH);
         applyButton.setText("Apply changes");
@@ -287,11 +282,10 @@ public final class AcpChatView extends ViewPart implements AcpListener {
         undoButton.setEnabled(false);
         undoButton.addListener(SWT.Selection, ignored -> undoApply());
 
-        contextButton = new Button(actions, SWT.PUSH);
-        contextButton.setText("@ Context");
-        contextButton.setToolTipText("Insert @file, @selection, @java, @problems and @console references");
-        contextButton.setEnabled(false);
-        contextButton.addListener(SWT.Selection, ignored -> addContextReferences());
+        newSessionButton = new Button(actions, SWT.PUSH);
+        newSessionButton.setToolTipText("New chat in this project");
+        newSessionButton.setEnabled(false);
+        newSessionButton.addListener(SWT.Selection, ignored -> openNewSessionForActiveProject());
 
         modelSelector = new Combo(actions, SWT.DROP_DOWN | SWT.READ_ONLY);
         modelSelector.setToolTipText("Model for the active ACP session");
@@ -304,17 +298,24 @@ public final class AcpChatView extends ViewPart implements AcpListener {
         thoughtLevelSelector.addListener(SWT.Selection, ignored -> changeConfigOption(thoughtLevelSelector,
                 thoughtLevelOption(activeSession), "Reasoning level"));
 
-        commandsButton = new Button(actions, SWT.PUSH);
-        commandsButton.setText("Commands");
-        commandsButton.setToolTipText("Agent slash commands");
-        commandsButton.setEnabled(false);
-        commandsButton.addListener(SWT.Selection, ignored -> chooseCommand());
-
         settingsButton = new Button(actions, SWT.PUSH);
         settingsButton.setText("Options…");
         settingsButton.setToolTipText("Configure agent options");
         settingsButton.setEnabled(false);
         settingsButton.addListener(SWT.Selection, ignored -> editConfigOption());
+
+        // Keep these optional actions at the end of the action list, but disable them for now.
+        contextButton = new Button(actions, SWT.PUSH);
+        contextButton.setText("@ Context");
+        contextButton.setToolTipText("Insert @file, @selection, @java, @problems and @console references");
+        contextButton.setEnabled(false);
+        contextButton.addListener(SWT.Selection, ignored -> addContextReferences());
+
+        commandsButton = new Button(actions, SWT.PUSH);
+        commandsButton.setText("Commands");
+        commandsButton.setToolTipText("Agent slash commands");
+        commandsButton.setEnabled(false);
+        commandsButton.addListener(SWT.Selection, ignored -> chooseCommand());
 
         attachButton = new Button(actions, SWT.PUSH);
         attachButton.setText("Attach");
@@ -1151,19 +1152,18 @@ public final class AcpChatView extends ViewPart implements AcpListener {
         applyButton.setEnabled(hasDiffs);
         rejectButton.setEnabled(hasDiffs);
         undoButton.setEnabled(reviewFileChanges && activeSession.diffApplier.canUndo());
-        contextButton.setEnabled(connected);
-        commandsButton.setEnabled(connected && !activeSession.commands.isEmpty());
+        contextButton.setEnabled(false);
+        commandsButton.setEnabled(false);
         settingsButton.setEnabled(connected && !activeSession.configOptions.isEmpty());
-        attachButton.setEnabled(connected);
+        attachButton.setEnabled(false);
         refreshModelSelector();
         refreshThoughtLevelSelector();
         refreshCollaborationModeSelector();
-        showControl(commandsButton, commandsButton.getEnabled());
         showControl(settingsButton, settingsButton.getEnabled());
         // Keep selectors visible while a turn is in progress; refresh disables them until idle.
         showControl(modelSelector, modelSelector.getItemCount() > 0);
         showControl(thoughtLevelSelector, thoughtLevelSelector.getItemCount() > 0);
-        showControl(collaborationBar, collaborationModeSelector.getItemCount() > 0);
+        showControl(collaborationBar, collaborationModeSelector.getItemCount() > 0 || activeSession != null);
         showControl(reviewBar, hasDiffs || undoButton.getEnabled());
         showControl(applyButton, hasDiffs);
         showControl(rejectButton, hasDiffs);
