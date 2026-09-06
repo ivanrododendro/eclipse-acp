@@ -314,9 +314,8 @@ public final class AcpChatView extends ViewPart implements AcpListener {
         activeSession = session;
         projectSelector.select(projectSelector.getItemCount() - 1);
         renderTranscript();
-        renderStatus();
-        append(session, "Connecting to " + agentName + " in " + project.getLocation() + "…"
-                + (reviewFileChanges ? " Changes will be reviewed before applying." : " Changes apply immediately.") + "\n\n");
+        setStatus(session, "Connecting to " + agentName + " in " + project.getLocation() + "…"
+                + (reviewFileChanges ? " Changes will be reviewed before applying." : " Changes apply immediately."));
         connect(session, provider, null, false, agentName);
     }
 
