@@ -3,6 +3,8 @@ package dev.eclipseacp.client.acp;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 
+import com.google.gson.JsonObject;
+
 import dev.eclipseacp.client.agent.AuthMethod;
 
 public interface AcpListener {
@@ -47,5 +49,10 @@ public interface AcpListener {
     /** Announces authentication methods without assuming that login is required yet. */
     default void onAuthenticationMethods(List<AuthMethod> methods) {
         // Optional for clients that provide an authentication UI.
+    }
+
+    /** Requests structured input required by an agent workflow. An empty object means cancelled. */
+    default CompletableFuture<JsonObject> requestElicitation(JsonObject request) {
+        return CompletableFuture.completedFuture(new JsonObject());
     }
 }

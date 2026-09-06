@@ -5,13 +5,18 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.concurrent.CompletableFuture;
 
 import com.google.gson.JsonObject;
+import com.google.gson.JsonElement;
+import com.google.gson.JsonParser;
 
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.resources.ResourcesPlugin;
 import org.eclipse.jface.dialogs.MessageDialog;
+import org.eclipse.jface.dialogs.InputDialog;
 import org.eclipse.jface.viewers.ArrayContentProvider;
 import org.eclipse.jface.viewers.LabelProvider;
 import org.eclipse.swt.SWT;
@@ -27,6 +32,7 @@ import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Display;
 import org.eclipse.swt.widgets.Label;
 import org.eclipse.swt.widgets.Text;
+import org.eclipse.swt.widgets.FileDialog;
 import org.eclipse.ui.part.ViewPart;
 import org.eclipse.ui.dialogs.ListDialog;
 
@@ -41,6 +47,8 @@ import dev.eclipseacp.client.agent.AgentClient;
 import dev.eclipseacp.client.agent.AgentClientFactory;
 import dev.eclipseacp.client.agent.AgentProvider;
 import dev.eclipseacp.client.agent.SessionInfo;
+import dev.eclipseacp.client.agent.PromptAttachment;
+import dev.eclipseacp.client.agent.ConfigOption;
 import dev.eclipseacp.client.preferences.AgentProviderRegistry;
 import dev.eclipseacp.client.preferences.AcpPreferences;
 import dev.eclipseacp.client.mcp.McpServerRegistry;
@@ -58,6 +66,9 @@ public final class AcpChatView extends ViewPart implements AcpListener {
     private Button rejectButton;
     private Button undoButton;
     private Button contextButton;
+    private Button commandsButton;
+    private Button settingsButton;
+    private Button attachButton;
     private Label status;
     private Combo projectSelector;
     private final List<ChatSession> sessions = new ArrayList<>();
@@ -78,6 +89,9 @@ public final class AcpChatView extends ViewPart implements AcpListener {
         private final Map<String, ToolCall> toolCalls = new LinkedHashMap<>();
         private final Map<String, FileDiff> pendingChanges = new LinkedHashMap<>();
         private final WorkspaceDiffApplier diffApplier = new WorkspaceDiffApplier();
+        private final List<PromptAttachment> attachments = new ArrayList<>();
+        private final Map<String, String> commands = new LinkedHashMap<>();
+        private final Map<String, ConfigOption> configOptions = new LinkedHashMap<>();
 
         private String persistedSessionId;
         private String initialPrompt;
@@ -129,7 +143,7 @@ public final class AcpChatView extends ViewPart implements AcpListener {
 
         Composite actions = new Composite(parent, SWT.NONE);
         actions.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
-        actions.setLayout(new GridLayout(10, false));
+        actions.setLayout(new GridLayout(13, false));
 
         sendButton = new Button(actions, SWT.PUSH);
         sendButton.setText("Send");
@@ -176,6 +190,22 @@ public final class AcpChatView extends ViewPart implements AcpListener {
         contextButton.setToolTipText("Insert @file, @selection, @java, @problems and @console references");
         contextButton.setEnabled(false);
         contextButton.addListener(SWT.Selection, ignored -> addContextReferences());
+
+        commandsButton = new Button(actions, SWT.PUSH);
+        commandsButton.setText("Commands…");
+        commandsButton.setEnabled(false);
+        commandsButton.addListener(SWT.Selection, ignored -> chooseCommand());
+
+        settingsButton = new Button(actions, SWT.PUSH);
+        settingsButton.setText("Options…");
+        settingsButton.setEnabled(false);
+        settingsButton.addListener(SWT.Selection, ignored -> editConfigOption());
+
+        attachButton = new Button(actions, SWT.PUSH);
+        attachButton.setText("Attach…");
+        attachButton.setToolTipText("Attach an image or audio file to the next prompt");
+        attachButton.setEnabled(false);
+        attachButton.addListener(SWT.Selection, ignored -> attachFile());
 
         status = new Label(actions, SWT.NONE);
         status.setText("Not connected");
@@ -302,11 +332,18 @@ public final class AcpChatView extends ViewPart implements AcpListener {
         updateControls();
 
         AgentClient activeClient = session.client;
-        activeClient.prompt(expanded).whenComplete((ignored, error) -> ui(() -> {
+        List<PromptAttachment> attachments = List.copyOf(session.attachments);
+        session.attachments.clear();
+        if (!attachments.isEmpty()) {
+            append(session, "> Attached: " + attachments.stream().map(item -> "`" + item.path().getFileName() + "`")
+                    .collect(java.util.stream.Collectors.joining(", ")) + "\n\n");
+        }
+        activeClient.prompt(expanded, attachments).whenComplete((ignored, error) -> ui(() -> {
             if (session.client != activeClient) {
                 return; // The response belongs to an earlier connection.
             }
             if (error != null) {
+                session.attachments.addAll(attachments);
                 onError(session, "Prompt failed", unwrap(error));
             } else if (session.agentMessageOpen) {
                 append(session, "\n\n");
@@ -432,6 +469,12 @@ public final class AcpChatView extends ViewPart implements AcpListener {
                 return requestPermissionFor(session, request);
             }
             @Override public void onToolCall(ToolCall toolCall) { ui(() -> updateToolCall(session, toolCall)); }
+            @Override public void onSessionUpdate(dev.eclipseacp.client.acp.AcpSessionUpdate update) {
+                ui(() -> renderExperienceUpdate(session, update));
+            }
+            @Override public CompletableFuture<JsonObject> requestElicitation(JsonObject request) {
+                return requestElicitationFor(session, request);
+            }
             @Override public CompletableFuture<String> readTextFile(FileReadRequest request) {
                 return CompletableFuture.supplyAsync(() -> {
                     try { return session.diffApplier.read(session.project, request.path(), request.line(), request.limit()); }
@@ -457,6 +500,119 @@ public final class AcpChatView extends ViewPart implements AcpListener {
             }
         };
     }
+
+    private void renderExperienceUpdate(ChatSession session, dev.eclipseacp.client.acp.AcpSessionUpdate update) {
+        JsonObject payload = update.payload();
+        switch (update.kind()) {
+        case "available_commands_update" -> {
+            session.commands.clear();
+            JsonElement commands = payload.has("availableCommands") ? payload.get("availableCommands") : payload.get("commands");
+            if (commands != null && commands.isJsonArray()) for (JsonElement element : commands.getAsJsonArray()) {
+                if (!element.isJsonObject()) continue;
+                JsonObject command = element.getAsJsonObject();
+                String name = jsonString(command, "name");
+                if (name.isBlank()) name = jsonString(command, "command");
+                if (!name.isBlank()) session.commands.put(name, jsonString(command, "description"));
+            }
+            setStatus(session, session.commands.isEmpty() ? "No slash commands" : session.commands.size() + " slash command(s) available");
+        }
+        case "config_option_update" -> {
+            JsonElement options = payload.has("configOptions") ? payload.get("configOptions") : payload;
+            if (options.isJsonArray()) for (JsonElement element : options.getAsJsonArray()) {
+                if (element.isJsonObject()) storeConfigOption(session, element.getAsJsonObject());
+            } else if (options.isJsonObject()) storeConfigOption(session, options.getAsJsonObject());
+        }
+        case "usage_update" -> append(session, "> **Usage:** " + usageText(payload) + "\n\n");
+        case "terminal_output", "terminal_output_update" -> appendTerminalOutput(session, payload);
+        default -> { }
+        }
+        updateControls();
+    }
+
+    private static void storeConfigOption(ChatSession session, JsonObject option) {
+        String id = jsonString(option, "configId");
+        if (id.isBlank()) id = jsonString(option, "id");
+        if (!id.isBlank()) session.configOptions.put(id, new ConfigOption(id, nonBlank(jsonString(option, "name"), id),
+                jsonString(option, "description"), option.has("value") ? option.get("value").deepCopy() : null));
+    }
+
+    private static String usageText(JsonObject payload) {
+        List<String> entries = new ArrayList<>();
+        for (String key : List.of("inputTokens", "outputTokens", "totalTokens", "cost")) {
+            if (payload.has(key) && payload.get(key).isJsonPrimitive()) entries.add(key + "=" + payload.get(key).getAsString());
+        }
+        return entries.isEmpty() ? "updated" : String.join(", ", entries);
+    }
+
+    private void appendTerminalOutput(ChatSession session, JsonObject payload) {
+        String output = jsonString(payload, "output");
+        if (output.isBlank()) output = jsonString(payload, "text");
+        if (!output.isBlank()) append(session, "> **Terminal output**\n\n```text\n" + output + "\n```\n\n");
+    }
+
+    private void chooseCommand() {
+        ChatSession session = activeSession;
+        if (session == null || session.commands.isEmpty()) return;
+        ListDialog dialog = new ListDialog(getSite().getShell());
+        dialog.setTitle("ACP commands"); dialog.setMessage("Insert a slash command:");
+        dialog.setContentProvider(ArrayContentProvider.getInstance());
+        dialog.setLabelProvider(new LabelProvider() { @Override public String getText(Object value) {
+            String name = (String) value; String description = session.commands.get(name);
+            return "/" + name + (description.isBlank() ? "" : " — " + description);
+        }});
+        dialog.setInput(session.commands.keySet());
+        if (dialog.open() == org.eclipse.jface.window.Window.OK && dialog.getResult() != null && dialog.getResult().length > 0) {
+            prompt.insert("/" + dialog.getResult()[0] + " "); prompt.setFocus();
+        }
+    }
+
+    private void editConfigOption() {
+        ChatSession session = activeSession;
+        if (session == null || session.configOptions.isEmpty() || session.client == null) return;
+        ListDialog picker = new ListDialog(getSite().getShell()); picker.setTitle("ACP options"); picker.setMessage("Choose an option to edit:");
+        picker.setContentProvider(ArrayContentProvider.getInstance()); picker.setLabelProvider(new LabelProvider() { @Override public String getText(Object value) {
+            ConfigOption option = (ConfigOption) value; return option.name() + (option.description().isBlank() ? "" : " — " + option.description());
+        }}); picker.setInput(session.configOptions.values());
+        if (picker.open() != org.eclipse.jface.window.Window.OK || picker.getResult() == null || picker.getResult().length == 0) return;
+        ConfigOption option = (ConfigOption) picker.getResult()[0];
+        String current = option.value() == null ? "" : option.value().toString();
+        InputDialog input = new InputDialog(getSite().getShell(), option.name(), option.description(), current, null);
+        if (input.open() != org.eclipse.jface.window.Window.OK) return;
+        JsonElement value;
+        try { value = JsonParser.parseString(input.getValue()); } catch (RuntimeException error) { value = new com.google.gson.JsonPrimitive(input.getValue()); }
+        session.client.setConfigOption(option.id(), value).whenComplete((ignored, error) -> ui(() -> {
+            if (error != null) onError(session, "Could not update " + option.name(), unwrap(error));
+        }));
+    }
+
+    private void attachFile() {
+        ChatSession session = activeSession; if (session == null) return;
+        FileDialog dialog = new FileDialog(getSite().getShell(), SWT.OPEN); dialog.setText("Attach image or audio");
+        dialog.setFilterExtensions(new String[] { "*.png;*.jpg;*.jpeg;*.gif;*.webp;*.mp3;*.wav;*.ogg", "*.*" });
+        String selected = dialog.open(); if (selected == null) return;
+        Path path = Path.of(selected);
+        try {
+            if (Files.size(path) > 10 * 1024 * 1024) { MessageDialog.openWarning(getSite().getShell(), "Attachment too large", "Attachments are limited to 10 MiB."); return; }
+            String mime = Files.probeContentType(path); if (mime == null || !(mime.startsWith("image/") || mime.startsWith("audio/"))) {
+                MessageDialog.openWarning(getSite().getShell(), "Unsupported attachment", "Choose an image or audio file."); return;
+            }
+            session.attachments.add(new PromptAttachment(path, mime)); setStatus(session, "Attachment ready: " + path.getFileName());
+        } catch (IOException error) { onError(session, "Could not attach file", error); }
+    }
+
+    private CompletableFuture<JsonObject> requestElicitationFor(ChatSession session, JsonObject request) {
+        CompletableFuture<JsonObject> result = new CompletableFuture<>();
+        ui(() -> {
+            String title = nonBlank(jsonString(request, "message"), nonBlank(jsonString(request, "title"), "Agent input required"));
+            InputDialog dialog = new InputDialog(getSite().getShell(), "ACP input", title, "", null);
+            if (dialog.open() != org.eclipse.jface.window.Window.OK) { result.complete(new JsonObject()); return; }
+            JsonObject answer = new JsonObject(); answer.addProperty("value", dialog.getValue()); result.complete(answer);
+        });
+        return result;
+    }
+
+    private static String jsonString(JsonObject value, String key) { return value.has(key) && value.get(key).isJsonPrimitive() ? value.get(key).getAsString() : ""; }
+    private static String nonBlank(String first, String fallback) { return first == null || first.isBlank() ? fallback : first; }
 
     @Override
     public void onAgentText(String text) {
@@ -561,6 +717,9 @@ public final class AcpChatView extends ViewPart implements AcpListener {
         append(session, "\n> **Tool " + toolCall.kind() + ":** " + toolCall.title() + " — " + toolCall.status()
                 + (toolCall.hasDiffs() ? " (" + toolCall.diffs().size() + " file change(s) ready for review)" : "")
                 + toolDiffPreview(toolCall.diffs()) + "\n\n");
+        if (toolCall.kind().toLowerCase(java.util.Locale.ROOT).contains("terminal") && toolCall.rawOutput() instanceof JsonObject output) {
+            appendTerminalOutput(session, output);
+        }
         updateControls();
         if (!session.reviewFileChanges && toolCall.hasDiffs()) applyImmediately(session, toolCall.diffs());
     }
@@ -716,6 +875,9 @@ public final class AcpChatView extends ViewPart implements AcpListener {
         rejectButton.setEnabled(hasDiffs);
         undoButton.setEnabled(reviewFileChanges && activeSession.diffApplier.canUndo());
         contextButton.setEnabled(connected);
+        commandsButton.setEnabled(connected && !activeSession.commands.isEmpty());
+        settingsButton.setEnabled(connected && !activeSession.configOptions.isEmpty());
+        attachButton.setEnabled(connected);
         projectSelector.setEnabled(true);
     }
 

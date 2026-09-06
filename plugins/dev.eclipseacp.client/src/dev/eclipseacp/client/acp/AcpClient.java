@@ -5,6 +5,7 @@ import java.io.InputStreamReader;
 import java.io.OutputStreamWriter;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
+import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -23,6 +24,7 @@ import dev.eclipseacp.client.agent.AgentClient;
 import dev.eclipseacp.client.agent.AuthMethod;
 import dev.eclipseacp.client.agent.SessionInfo;
 import dev.eclipseacp.client.agent.SessionPage;
+import dev.eclipseacp.client.agent.PromptAttachment;
 import dev.eclipseacp.client.mcp.McpServerConfig;
 
 /** ACP v1 adapter. The rest of the plug-in talks to AgentClient only. */
@@ -158,10 +160,16 @@ public final class AcpClient implements AgentClient, JsonRpcHandler {
             return CompletableFuture.failedFuture(new IllegalStateException("ACP session is not connected"));
         }
 
-        return sendPrompt(text, true);
+        return sendPrompt(text, List.of(), true);
     }
 
-    private CompletableFuture<Void> sendPrompt(String text, boolean announce) {
+    @Override
+    public CompletableFuture<Void> prompt(String text, List<PromptAttachment> attachments) {
+        if (sessionId == null) return CompletableFuture.failedFuture(new IllegalStateException("ACP session is not connected"));
+        return sendPrompt(text, attachments == null ? List.of() : attachments, true);
+    }
+
+    private CompletableFuture<Void> sendPrompt(String text, List<PromptAttachment> attachments, boolean announce) {
         if (sessionId == null) {
             return CompletableFuture.failedFuture(new IllegalStateException("ACP session is not connected"));
         }
@@ -170,6 +178,22 @@ public final class AcpClient implements AgentClient, JsonRpcHandler {
         content.addProperty("text", text);
         JsonArray prompt = new JsonArray();
         prompt.add(content);
+        try {
+            for (PromptAttachment attachment : attachments) {
+                if (attachment == null || attachment.path() == null) continue;
+                byte[] data = Files.readAllBytes(attachment.path());
+                if (data.length > 10 * 1024 * 1024) {
+                    return CompletableFuture.failedFuture(new IllegalArgumentException("Attachments must be at most 10 MiB"));
+                }
+                JsonObject binary = new JsonObject();
+                binary.addProperty("type", attachment.mimeType().startsWith("audio/") ? "audio" : "image");
+                binary.addProperty("mimeType", attachment.mimeType());
+                binary.addProperty("data", java.util.Base64.getEncoder().encodeToString(data));
+                prompt.add(binary);
+            }
+        } catch (IOException exception) {
+            return CompletableFuture.failedFuture(exception);
+        }
 
         JsonObject params = new JsonObject();
         params.addProperty("sessionId", sessionId);
@@ -190,6 +214,17 @@ public final class AcpClient implements AgentClient, JsonRpcHandler {
                                 unwrap(error));
                     }
                 });
+    }
+
+    @Override
+    public CompletableFuture<Void> setConfigOption(String configId, JsonElement value) {
+        if (sessionId == null) return CompletableFuture.failedFuture(new IllegalStateException("ACP session is not connected"));
+        if (configId == null || configId.isBlank()) return CompletableFuture.failedFuture(new IllegalArgumentException("Configuration option ID is empty"));
+        JsonObject params = new JsonObject();
+        params.addProperty("sessionId", sessionId);
+        params.addProperty("configId", configId);
+        params.add("value", value == null ? com.google.gson.JsonNull.INSTANCE : value);
+        return request("session/set_config_option", params).thenAccept(ignored -> listener.onStatus("Configuration updated"));
     }
 
     public void cancel() throws IOException {
@@ -390,6 +425,14 @@ public final class AcpClient implements AgentClient, JsonRpcHandler {
         AcpLog.info("ACP server request received: method='" + method + "'");
         if ("fs/read_text_file".equals(method)) return readTextFile(params);
         if ("fs/write_text_file".equals(method)) return stageFileWrite(params);
+        if ("elicitation/create".equals(method)) {
+            return listener.requestElicitation(params.deepCopy()).thenApply(answer -> {
+                JsonObject result = new JsonObject();
+                if (answer == null || answer.isEmpty()) result.addProperty("action", "cancel");
+                else { result.addProperty("action", "accept"); result.add("content", answer); }
+                return result;
+            });
+        }
         if (!"session/request_permission".equals(method)) {
             return CompletableFuture.failedFuture(new UnsupportedOperationException("Unsupported ACP method: " + method));
         }
