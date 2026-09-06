@@ -3,11 +3,17 @@ package dev.eclipseacp.client.ui;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.Function;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import org.commonmark.Extension;
 import org.commonmark.ext.gfm.tables.TablesExtension;
 import org.commonmark.node.FencedCodeBlock;
+import org.commonmark.node.Code;
+import org.commonmark.node.Link;
 import org.commonmark.node.Node;
+import org.commonmark.node.Text;
 import org.commonmark.parser.Parser;
 import org.commonmark.renderer.NodeRenderer;
 import org.commonmark.renderer.html.HtmlNodeRendererContext;
@@ -18,8 +24,7 @@ import org.commonmark.renderer.html.HtmlWriter;
 final class GfmRenderer {
     private static final List<Extension> EXTENSIONS = List.of(TablesExtension.create());
     private static final Parser PARSER = Parser.builder().extensions(EXTENSIONS).build();
-    private static final HtmlRenderer RENDERER = HtmlRenderer.builder().extensions(EXTENSIONS).escapeHtml(true)
-            .nodeRendererFactory(DiffCodeBlockRenderer::new).build();
+    private static final HtmlRenderer RENDERER = renderer(null);
 
     private GfmRenderer() { }
 
@@ -28,6 +33,14 @@ final class GfmRenderer {
     }
 
     static String document(String markdown, String fontFamily, int fontSizePoints) {
+        return document(markdown, fontFamily, fontSizePoints, null);
+    }
+
+    /**
+     * Renders project file references as internal links. The resolver must return {@code null}
+     * for a reference that is not an unambiguous file in the active project.
+     */
+    static String document(String markdown, String fontFamily, int fontSizePoints, Function<String, String> fileLinkResolver) {
         String cssFontFamily = fontFamily == null ? "sans-serif" : fontFamily.replace("\\", "\\\\").replace("'", "\\'");
         String content = markdown.isBlank()
                 ? "<section class='welcome'><div class='mark'>✦</div><h1>Build something great</h1>"
@@ -35,7 +48,7 @@ final class GfmRenderer {
                     + "<div class='hint'>To start, right-click a project and open an ACP session.</div>"
                     + "<div class='examples'><span>@file · Current file</span><span>@selection · Selected code</span>"
                     + "<span>@problems · Workspace diagnostics</span></div></section>"
-                : RENDERER.render(PARSER.parse(markdown));
+                : (fileLinkResolver == null ? RENDERER : renderer(fileLinkResolver)).render(PARSER.parse(markdown));
         return "<!doctype html><html><head><meta charset=\"utf-8\"><meta name='viewport' content='width=device-width,initial-scale=1'><style>"
                 + ":root{color-scheme:light dark;--bg:#ffffff;--fg:#24292f;--muted:#626b78;--surface:#f5f6f8;--line:#dce1e8;--accent:#6254c7;}"
                 + "@media(prefers-color-scheme:dark){:root{--bg:#1e1f22;--fg:#e1e4ea;--muted:#a4adba;--surface:#292b30;--line:#414550;--accent:#b1a5ff;}}"
@@ -55,6 +68,88 @@ final class GfmRenderer {
                 + ".examples span{font-size:.85em;background:var(--surface);border:1px solid var(--line);padding:6px 10px;border-radius:8px}"
                 + "@media(max-width:360px){body{padding:12px}}"
                 + "</style></head><body><main>" + content + "</main></body></html>";
+    }
+
+    private static HtmlRenderer renderer(Function<String, String> fileLinkResolver) {
+        HtmlRenderer.Builder builder = HtmlRenderer.builder().extensions(EXTENSIONS).escapeHtml(true)
+                .nodeRendererFactory(DiffCodeBlockRenderer::new);
+        if (fileLinkResolver != null) builder.nodeRendererFactory(context -> new FileReferenceRenderer(context, fileLinkResolver));
+        return builder.build();
+    }
+
+    /** Links only plain text and inline code; fenced code remains literal source text. */
+    private static final class FileReferenceRenderer implements NodeRenderer {
+        // The resolver performs the authoritative workspace validation. Keeping this lexical
+        // match permissive also accommodates paths with Unicode or generated-file characters.
+        private static final Pattern FILE_REFERENCE = Pattern.compile(
+                "(?<!\\S)([^\\s]+?\\.[A-Za-z0-9]{1,12}(?::[1-9][0-9]*)?)");
+        private final HtmlNodeRendererContext context;
+        private final HtmlWriter writer;
+        private final Function<String, String> resolver;
+
+        private FileReferenceRenderer(HtmlNodeRendererContext context, Function<String, String> resolver) {
+            this.context = context;
+            this.writer = context.getWriter();
+            this.resolver = resolver;
+        }
+
+        @Override public Set<Class<? extends Node>> getNodeTypes() { return Set.of(Link.class, Text.class, Code.class); }
+
+        @Override public void render(Node node) {
+            if (node instanceof Link link) {
+                // Agents commonly provide source locations as Markdown links, e.g.
+                // [McpServerRegistry.java:14](src/.../McpServerRegistry.java:14).
+                // Without this conversion SWT resolves the relative href against the local
+                // document and attempts to load file:///.../McpServerRegistry.java:14.
+                String href = resolver.apply(link.getDestination());
+                String destination = context.encodeUrl(href == null ? link.getDestination() : href);
+                writer.tag("a", href == null ? Map.of("href", destination)
+                        : Map.of("href", destination, "class", "workspace-file"));
+                renderChildren(link);
+                writer.tag("/a");
+                return;
+            }
+            if (node.getParent() instanceof Link) { renderLiteral(node); return; }
+            if (node instanceof Code code) {
+                String literal = code.getLiteral();
+                String href = resolver.apply(literal);
+                if (href == null) { renderLiteral(node); return; }
+                writer.tag("a", Map.of("href", href, "class", "workspace-file"));
+                writer.tag("code");
+                writer.text(literal);
+                writer.tag("/code");
+                writer.tag("/a");
+                return;
+            }
+            String literal = ((Text) node).getLiteral();
+            Matcher matcher = FILE_REFERENCE.matcher(literal);
+            int end = 0;
+            while (matcher.find()) {
+                String reference = matcher.group();
+                String href = resolver.apply(reference);
+                if (href == null) continue;
+                writer.text(literal.substring(end, matcher.start()));
+                writer.tag("a", Map.of("href", href, "class", "workspace-file"));
+                writer.text(reference);
+                writer.tag("/a");
+                end = matcher.end();
+            }
+            if (end == 0) writer.text(literal); else writer.text(literal.substring(end));
+        }
+
+        private void renderLiteral(Node node) {
+            if (node instanceof Code code) {
+                writer.tag("code");
+                writer.text(code.getLiteral());
+                writer.tag("/code");
+            } else {
+                writer.text(((Text) node).getLiteral());
+            }
+        }
+
+        private void renderChildren(Node parent) {
+            for (Node child = parent.getFirstChild(); child != null; child = child.getNext()) context.render(child);
+        }
     }
 
     /** Renders unified-diff lines individually, while keeping all source text HTML-escaped. */

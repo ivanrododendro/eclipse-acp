@@ -20,6 +20,8 @@ import org.eclipse.jface.viewers.ArrayContentProvider;
 import org.eclipse.jface.viewers.LabelProvider;
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.browser.Browser;
+import org.eclipse.swt.browser.LocationAdapter;
+import org.eclipse.swt.browser.LocationEvent;
 import org.eclipse.swt.browser.ProgressAdapter;
 import org.eclipse.swt.events.KeyAdapter;
 import org.eclipse.swt.events.KeyEvent;
@@ -91,6 +93,8 @@ public final class AcpChatView extends ViewPart implements AcpListener {
         private boolean acceptingRestoredTranscript;
         private boolean restoredAgentMessageOpen;
         private final Map<String, ToolCall> toolCalls = new LinkedHashMap<>();
+        private final Map<String, List<FileDiff>> renderedToolDiffs = new LinkedHashMap<>();
+        private final WorkspaceFileLinks fileLinks;
         private final Map<String, FileDiff> pendingChanges = new LinkedHashMap<>();
         private final WorkspaceDiffApplier diffApplier = new WorkspaceDiffApplier();
         private final List<PromptAttachment> attachments = new ArrayList<>();
@@ -106,6 +110,7 @@ public final class AcpChatView extends ViewPart implements AcpListener {
             this.label = label;
             this.providerId = providerId;
             this.reviewFileChanges = reviewFileChanges;
+            this.fileLinks = new WorkspaceFileLinks(project);
         }
     }
 
@@ -142,6 +147,14 @@ public final class AcpChatView extends ViewPart implements AcpListener {
 
         transcript = new Browser(parent, SWT.NONE);
         transcript.setLayoutData(new GridData(SWT.FILL, SWT.FILL, true, true));
+        transcript.addLocationListener(new LocationAdapter() {
+            @Override public void changing(LocationEvent event) {
+                ChatSession session = activeSession;
+                if (session != null && WorkspaceFileOpener.open(getSite().getPage(), session.project, event.location)) {
+                    event.doit = false;
+                }
+            }
+        });
         transcript.addProgressListener(new ProgressAdapter() {
             @Override
             public void completed(org.eclipse.swt.browser.ProgressEvent event) {
@@ -561,8 +574,16 @@ public final class AcpChatView extends ViewPart implements AcpListener {
                 if (element.isJsonObject()) storeConfigOption(session, element.getAsJsonObject());
             } else if (options.isJsonObject()) storeConfigOption(session, options.getAsJsonObject());
         }
-        case "usage_update" -> append(session, "> **Usage:** " + usageText(payload) + "\n\n");
-        case "terminal_output", "terminal_output_update" -> appendTerminalOutput(session, payload);
+        case "usage_update" -> {
+            if (!AcpPreferences.store().getBoolean(AcpPreferences.HIDE_AGENT_COMMANDS_IN_CHAT)) {
+                append(session, "> **Usage:** " + usageText(payload) + "\n\n");
+            }
+        }
+        case "terminal_output", "terminal_output_update" -> {
+            if (!AcpPreferences.store().getBoolean(AcpPreferences.HIDE_AGENT_COMMANDS_IN_CHAT)) {
+                appendTerminalOutput(session, payload);
+            }
+        }
         default -> { }
         }
         updateControls();
@@ -759,16 +780,24 @@ public final class AcpChatView extends ViewPart implements AcpListener {
     private void updateToolCall(ChatSession session, ToolCall toolCall) {
         session.toolCalls.put(toolCall.id(), toolCall);
         if (session.reviewFileChanges) toolCall.diffs().forEach(diff -> session.pendingChanges.put(diff.path(), diff));
+        appendNewToolDiffs(session, toolCall);
         if (!AcpPreferences.store().getBoolean(AcpPreferences.HIDE_AGENT_COMMANDS_IN_CHAT)) {
             append(session, "\n> **Tool " + toolCall.kind() + ":** " + toolCall.title() + " — " + toolCall.status()
                     + (toolCall.hasDiffs() ? " (" + toolCall.diffs().size() + " file change(s) ready for review)" : "")
-                    + toolDiffPreview(toolCall.diffs()) + "\n\n");
+                    + "\n\n");
             if (toolCall.kind().toLowerCase(java.util.Locale.ROOT).contains("terminal") && toolCall.rawOutput() instanceof JsonObject output) {
                 appendTerminalOutput(session, output);
             }
         }
         updateControls();
         if (!session.reviewFileChanges && toolCall.hasDiffs()) applyImmediately(session, toolCall.diffs());
+    }
+
+    private void appendNewToolDiffs(ChatSession session, ToolCall toolCall) {
+        if (toolCall.diffs().isEmpty() || toolCall.diffs().equals(session.renderedToolDiffs.get(toolCall.id()))) return;
+        session.renderedToolDiffs.put(toolCall.id(), List.copyOf(toolCall.diffs()));
+        append(session, "\n> **File changes:** " + toolCall.diffs().size() + " file change(s)\n"
+                + toolDiffPreview(toolCall.diffs()) + "\n\n");
     }
 
     private void applyImmediately(ChatSession session, List<FileDiff> diffs) {
@@ -910,7 +939,8 @@ public final class AcpChatView extends ViewPart implements AcpListener {
     }
 
     private String chatDocument(String markdown) {
-        return GfmRenderer.document(markdown, chatFontFamily, chatFontSizePoints);
+        return GfmRenderer.document(markdown, chatFontFamily, chatFontSizePoints,
+                activeSession == null ? null : activeSession.fileLinks::hrefFor);
     }
 
     private void applyButtonImages() {
