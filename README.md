@@ -67,7 +67,7 @@ reconciling unrelated update sites.
 3. Launch an **Eclipse Application** containing `dev.eclipseacp.client`.
 4. Configure providers under **Window → Preferences → ACP**. The original Vibe settings are migrated automatically as the `vibe` provider.
 5. In Project Explorer, right-click a project or any child resource and choose **ACP → Open ACP Chat for Project**. The session always uses the owning project directory.
-6. Each invocation creates a separate ACP session and adds it to the selector at the top-right of the chat. Session ID, provider, project and transcript are saved locally; when the chat view is recreated, compatible saved sessions are resumed (or loaded when resume is unavailable) and their history is shown again. Opening a new chat remains an explicit project-context action.
+6. The selector at the top-right contains projects opened during the current view lifetime; it is empty after restarting Eclipse. Opening chat for a project already in the selector selects that project's active session. The **+** button closes and persists the current ACP session, then starts a fresh one for the same project. **History** lists and restores ACP sessions whose working directory is that project.
 
 ## Architecture
 

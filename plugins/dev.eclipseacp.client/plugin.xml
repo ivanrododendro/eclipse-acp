@@ -9,8 +9,9 @@
           allowMultiple="false"
           category="dev.eclipseacp.client.views.category"
           class="dev.eclipseacp.client.ui.AcpChatView"
+          icon="icons/acp-chat.png"
           id="dev.eclipseacp.client.views.chat"
-          name="ACP Chat"
+          name="Chat"
           restorable="true"/>
   </extension>
 
