@@ -759,11 +759,13 @@ public final class AcpChatView extends ViewPart implements AcpListener {
     private void updateToolCall(ChatSession session, ToolCall toolCall) {
         session.toolCalls.put(toolCall.id(), toolCall);
         if (session.reviewFileChanges) toolCall.diffs().forEach(diff -> session.pendingChanges.put(diff.path(), diff));
-        append(session, "\n> **Tool " + toolCall.kind() + ":** " + toolCall.title() + " — " + toolCall.status()
-                + (toolCall.hasDiffs() ? " (" + toolCall.diffs().size() + " file change(s) ready for review)" : "")
-                + toolDiffPreview(toolCall.diffs()) + "\n\n");
-        if (toolCall.kind().toLowerCase(java.util.Locale.ROOT).contains("terminal") && toolCall.rawOutput() instanceof JsonObject output) {
-            appendTerminalOutput(session, output);
+        if (!AcpPreferences.store().getBoolean(AcpPreferences.HIDE_AGENT_COMMANDS_IN_CHAT)) {
+            append(session, "\n> **Tool " + toolCall.kind() + ":** " + toolCall.title() + " — " + toolCall.status()
+                    + (toolCall.hasDiffs() ? " (" + toolCall.diffs().size() + " file change(s) ready for review)" : "")
+                    + toolDiffPreview(toolCall.diffs()) + "\n\n");
+            if (toolCall.kind().toLowerCase(java.util.Locale.ROOT).contains("terminal") && toolCall.rawOutput() instanceof JsonObject output) {
+                appendTerminalOutput(session, output);
+            }
         }
         updateControls();
         if (!session.reviewFileChanges && toolCall.hasDiffs()) applyImmediately(session, toolCall.diffs());

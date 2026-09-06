@@ -1,17 +1,25 @@
 package dev.eclipseacp.client.ui;
 
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 import org.commonmark.Extension;
 import org.commonmark.ext.gfm.tables.TablesExtension;
+import org.commonmark.node.FencedCodeBlock;
+import org.commonmark.node.Node;
 import org.commonmark.parser.Parser;
+import org.commonmark.renderer.NodeRenderer;
+import org.commonmark.renderer.html.HtmlNodeRendererContext;
 import org.commonmark.renderer.html.HtmlRenderer;
+import org.commonmark.renderer.html.HtmlWriter;
 
 /** Safe HTML rendering for the CommonMark core and GFM table extension. */
 final class GfmRenderer {
     private static final List<Extension> EXTENSIONS = List.of(TablesExtension.create());
     private static final Parser PARSER = Parser.builder().extensions(EXTENSIONS).build();
-    private static final HtmlRenderer RENDERER = HtmlRenderer.builder().extensions(EXTENSIONS).escapeHtml(true).build();
+    private static final HtmlRenderer RENDERER = HtmlRenderer.builder().extensions(EXTENSIONS).escapeHtml(true)
+            .nodeRendererFactory(DiffCodeBlockRenderer::new).build();
 
     private GfmRenderer() { }
 
@@ -37,6 +45,8 @@ final class GfmRenderer {
                 + "h2{font-size:.85em;letter-spacing:.04em;color:var(--accent);border-top:1px solid var(--line);padding-top:20px;margin-top:28px}"
                 + "p{margin:10px 0}pre{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:14px;overflow:auto;overflow-wrap:normal;}"
                 + "code{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:.92em;background:var(--surface);padding:2px 5px;border-radius:4px}pre code{padding:0}"
+                + "pre.diff{padding:8px 0}.diff code{display:block}.diff-line{display:block;padding:0 14px;min-height:1.65em}.diff-remove{background:#fde2e1;color:#852d2b}.diff-add{background:#dff3e4;color:#1f6b3b}"
+                + "@media(prefers-color-scheme:dark){.diff-remove{background:#552c31;color:#ffbbb6}.diff-add{background:#1f4a32;color:#b9f3c7}}"
                 + "table{display:block;max-width:100%;overflow:auto;border-collapse:collapse;}th,td{border:1px solid var(--line);padding:8px 12px;}th{background:var(--surface)}"
                 + "blockquote{border-left:3px solid var(--accent);border-radius:0 8px 8px 0;margin:14px 0;padding:6px 12px;color:var(--muted);background:var(--surface);}"
                 + "a{color:var(--accent)}a:focus-visible{outline:2px solid var(--accent);outline-offset:3px}"
@@ -45,5 +55,52 @@ final class GfmRenderer {
                 + ".examples span{font-size:.85em;background:var(--surface);border:1px solid var(--line);padding:6px 10px;border-radius:8px}"
                 + "@media(max-width:360px){body{padding:12px}}"
                 + "</style></head><body><main>" + content + "</main></body></html>";
+    }
+
+    /** Renders unified-diff lines individually, while keeping all source text HTML-escaped. */
+    private static final class DiffCodeBlockRenderer implements NodeRenderer {
+        private final HtmlWriter writer;
+
+        private DiffCodeBlockRenderer(HtmlNodeRendererContext context) {
+            writer = context.getWriter();
+        }
+
+        @Override public Set<Class<? extends Node>> getNodeTypes() {
+            return Set.of(FencedCodeBlock.class);
+        }
+
+        @Override public void render(Node node) {
+            FencedCodeBlock block = (FencedCodeBlock) node;
+            boolean diff = "diff".equalsIgnoreCase(language(block.getInfo()));
+            writer.line();
+            writer.tag("pre", diff ? Map.of("class", "diff") : Map.of());
+            writer.tag("code", languageClass(block.getInfo()));
+            if (diff) renderDiff(block.getLiteral()); else writer.text(block.getLiteral());
+            writer.tag("/code");
+            writer.tag("/pre");
+            writer.line();
+        }
+
+        private void renderDiff(String literal) {
+            for (String line : literal.split("\\R", -1)) {
+                String style = line.startsWith("-") && !line.startsWith("---") ? "diff-line diff-remove"
+                        : line.startsWith("+") && !line.startsWith("+++") ? "diff-line diff-add" : "diff-line";
+                writer.tag("span", Map.of("class", style));
+                writer.text(line);
+                writer.tag("/span");
+                writer.line();
+            }
+        }
+
+        private static String language(String info) {
+            if (info == null || info.isBlank()) return "";
+            int separator = info.indexOf(' ');
+            return separator < 0 ? info : info.substring(0, separator);
+        }
+
+        private static Map<String, String> languageClass(String info) {
+            String language = language(info);
+            return language.isEmpty() ? Map.of() : Map.of("class", "language-" + language);
+        }
     }
 }
