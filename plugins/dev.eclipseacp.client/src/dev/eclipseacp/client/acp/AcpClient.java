@@ -122,8 +122,11 @@ public final class AcpClient implements AgentClient, JsonRpcHandler {
     }
 
     private CompletableFuture<Void> restoreAfterInitialize(String restoredSessionId, Path workingDirectory) {
-        if (capabilities.sessionResume()) return resumeSession(restoredSessionId, workingDirectory);
+        // session/load replays the conversation through user/agent message updates.
+        // Prefer it for History so the newly selected chat is rendered, even when
+        // the agent also offers session/resume (which restores context only).
         if (capabilities.loadSession()) return loadSession(restoredSessionId, workingDirectory);
+        if (capabilities.sessionResume()) return resumeSession(restoredSessionId, workingDirectory);
         return CompletableFuture.failedFuture(new UnsupportedOperationException(
                 "The ACP agent does not support session/resume or session/load"));
     }
