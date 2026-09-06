@@ -99,6 +99,7 @@ public final class AcpChatView extends ViewPart implements AcpListener {
 
         private String persistedSessionId;
         private String initialPrompt;
+        private String statusText = "Not connected";
 
         private ChatSession(IProject project, String label, String providerId, boolean reviewFileChanges) {
             this.project = project;
@@ -209,43 +210,47 @@ public final class AcpChatView extends ViewPart implements AcpListener {
 
         sendButton = new Button(submit, SWT.PUSH);
         sendButton.setText("Send");
+        sendButton.setToolTipText("Send message (Cmd/Ctrl+Enter)");
         sendButton.setEnabled(false);
         sendButton.addListener(SWT.Selection, ignored -> sendPrompt());
 
         stopButton = new Button(submit, SWT.PUSH);
         stopButton.setText("Stop");
+        stopButton.setToolTipText("Stop generating the response");
         stopButton.setEnabled(false);
         stopButton.addListener(SWT.Selection, ignored -> cancel());
 
         newSessionButton = new Button(sessionActions, SWT.PUSH);
-        newSessionButton.setText("+");
         newSessionButton.setToolTipText("New chat in this project");
         newSessionButton.setEnabled(false);
         newSessionButton.addListener(SWT.Selection, ignored -> openNewSessionForActiveProject());
 
         closeButton = new Button(sessionMore, SWT.PUSH);
-        closeButton.setText("×");
         closeButton.setToolTipText("Close this chat");
         closeButton.setEnabled(false);
         closeButton.addListener(SWT.Selection, ignored -> closeActiveSession());
 
         historyButton = new Button(sessionActions, SWT.PUSH);
         historyButton.setText("History");
+        historyButton.setToolTipText("Open chat history for this project");
         historyButton.setEnabled(false);
         historyButton.addListener(SWT.Selection, ignored -> chooseAgentSession());
 
         applyButton = new Button(reviewBar, SWT.PUSH);
         applyButton.setText("Apply changes");
+        applyButton.setToolTipText("Apply the reviewed file changes");
         applyButton.setEnabled(false);
         applyButton.addListener(SWT.Selection, ignored -> applyChanges());
 
         rejectButton = new Button(reviewBar, SWT.PUSH);
         rejectButton.setText("Reject changes");
+        rejectButton.setToolTipText("Reject the reviewed file changes");
         rejectButton.setEnabled(false);
         rejectButton.addListener(SWT.Selection, ignored -> rejectChanges());
 
         undoButton = new Button(reviewBar, SWT.PUSH);
         undoButton.setText("Undo apply");
+        undoButton.setToolTipText("Undo the last applied file changes");
         undoButton.setEnabled(false);
         undoButton.addListener(SWT.Selection, ignored -> undoApply());
 
@@ -256,13 +261,14 @@ public final class AcpChatView extends ViewPart implements AcpListener {
         contextButton.addListener(SWT.Selection, ignored -> addContextReferences());
 
         commandsButton = new Button(actions, SWT.PUSH);
-        commandsButton.setText("/");
+        commandsButton.setText("Commands");
         commandsButton.setToolTipText("Agent slash commands");
         commandsButton.setEnabled(false);
         commandsButton.addListener(SWT.Selection, ignored -> chooseCommand());
 
         settingsButton = new Button(actions, SWT.PUSH);
         settingsButton.setText("Options…");
+        settingsButton.setToolTipText("Configure agent options");
         settingsButton.setEnabled(false);
         settingsButton.addListener(SWT.Selection, ignored -> editConfigOption());
 
@@ -273,8 +279,6 @@ public final class AcpChatView extends ViewPart implements AcpListener {
         attachButton.addListener(SWT.Selection, ignored -> attachFile());
 
         applyButtonImages();
-        sendButton.setToolTipText("Send message (Cmd/Ctrl+Enter)");
-
         status = new Label(parent, SWT.NONE);
         status.setText("Not connected");
         status.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
@@ -310,6 +314,7 @@ public final class AcpChatView extends ViewPart implements AcpListener {
         activeSession = session;
         projectSelector.select(projectSelector.getItemCount() - 1);
         renderTranscript();
+        renderStatus();
         append(session, "Connecting to " + agentName + " in " + project.getLocation() + "…"
                 + (reviewFileChanges ? " Changes will be reviewed before applying." : " Changes apply immediately.") + "\n\n");
         connect(session, provider, null, false, agentName);
@@ -361,6 +366,7 @@ public final class AcpChatView extends ViewPart implements AcpListener {
         int index = sessions.indexOf(session);
         if (index >= 0 && projectSelector != null && !projectSelector.isDisposed()) projectSelector.select(index);
         renderTranscript();
+        renderStatus();
         updateControls();
     }
 
@@ -670,11 +676,17 @@ public final class AcpChatView extends ViewPart implements AcpListener {
 
     private void setStatus(ChatSession session, String value) {
         ui(() -> {
-            if (session == activeSession && status != null && !status.isDisposed()) {
-                status.setText(value);
-                status.getParent().layout();
-            }
+            if (session == null) return;
+            session.statusText = value == null || value.isBlank() ? "Not connected" : value;
+            if (session == activeSession) renderStatus();
         });
+    }
+
+    /** The status bar follows the selected project's session, just like the transcript. */
+    private void renderStatus() {
+        if (status == null || status.isDisposed()) return;
+        status.setText(activeSession == null ? "Not connected" : activeSession.statusText);
+        status.getParent().layout();
     }
 
     private void onError(ChatSession session, String message, Throwable error) {
@@ -867,12 +879,11 @@ public final class AcpChatView extends ViewPart implements AcpListener {
         session.transcriptMarkdown.append(text);
         if (session != activeSession || transcript == null || transcript.isDisposed()) return;
         String document = new com.google.gson.Gson().toJson(chatDocument(session.transcriptMarkdown.toString()));
-        // Keep the document alive during streaming, and leave readers in place when they scroll up.
+        // Keep the document alive during streaming and follow each agent chunk.
         boolean updated = transcript.execute("if(document.querySelector('main')){"
-                + "var follow=window.innerHeight+window.scrollY>=document.documentElement.scrollHeight-80;"
                 + "var next=new DOMParser().parseFromString(" + document + ", 'text/html');"
                 + "document.querySelector('main').innerHTML=next.querySelector('main').innerHTML;"
-                + "if(follow)window.scrollTo(0,document.documentElement.scrollHeight);}");
+                + "window.scrollTo(0,Math.max(document.body.scrollHeight,document.documentElement.scrollHeight));}");
         if (!updated) transcript.setText(chatDocument(session.transcriptMarkdown.toString()));
     }
 
@@ -989,6 +1000,7 @@ public final class AcpChatView extends ViewPart implements AcpListener {
             activeSession = sessions.isEmpty() ? null : sessions.get(Math.min(index, sessions.size() - 1));
             if (activeSession != null) projectSelector.select(sessions.indexOf(activeSession));
             renderTranscript();
+            renderStatus();
         }
         updateControls();
     }
@@ -1008,6 +1020,7 @@ public final class AcpChatView extends ViewPart implements AcpListener {
         activeSession = replacement;
         projectSelector.select(index);
         renderTranscript();
+        renderStatus();
         updateControls();
     }
 
@@ -1026,6 +1039,7 @@ public final class AcpChatView extends ViewPart implements AcpListener {
         }
         sessions.clear();
         activeSession = null;
+        renderStatus();
         // Deliberately retain history: closing Eclipse must not discard resumable ACP sessions.
         if (sendButton != null && !sendButton.isDisposed()) {
             sendButton.setEnabled(false);
