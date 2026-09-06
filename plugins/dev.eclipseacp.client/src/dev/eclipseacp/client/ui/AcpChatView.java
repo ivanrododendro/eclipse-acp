@@ -43,6 +43,7 @@ import dev.eclipseacp.client.agent.AgentProvider;
 import dev.eclipseacp.client.agent.SessionInfo;
 import dev.eclipseacp.client.preferences.AgentProviderRegistry;
 import dev.eclipseacp.client.preferences.AcpPreferences;
+import dev.eclipseacp.client.mcp.McpServerRegistry;
 
 public final class AcpChatView extends ViewPart implements AcpListener {
     public static final String ID = "dev.eclipseacp.client.views.chat";
@@ -212,7 +213,8 @@ public final class AcpChatView extends ViewPart implements AcpListener {
 
     private void connect(ChatSession session, AgentProvider provider, String restoredSessionId,
             boolean restored, String agentName) {
-        AgentClient newClient = AgentClientFactory.create(provider, listenerFor(session), session.reviewFileChanges);
+        AgentClient newClient = AgentClientFactory.create(provider, listenerFor(session), session.reviewFileChanges,
+                new McpServerRegistry(AcpPreferences.store()).forSession(provider.id(), session.project.getName()));
         session.client = newClient;
         CompletableFuture<Void> connection = restoredSessionId == null
                 ? newClient.connect(session.project.getLocation().toFile().toPath())

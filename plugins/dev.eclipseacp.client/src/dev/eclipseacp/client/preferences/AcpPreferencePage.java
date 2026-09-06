@@ -12,9 +12,11 @@ import org.eclipse.swt.widgets.Text;
 import org.eclipse.ui.IWorkbench;
 import org.eclipse.ui.IWorkbenchPreferencePage;
 import dev.eclipseacp.client.agent.AgentProvider;
+import com.google.gson.GsonBuilder;
+import com.google.gson.JsonParser;
 
 public final class AcpPreferencePage extends PreferencePage implements IWorkbenchPreferencePage {
-    private List providerList; private Text name; private Text command; private Text arguments; private Button reviewFileChanges; private AgentProviderRegistry registry;
+    private List providerList; private Text name; private Text command; private Text arguments; private Text mcpServers; private Button reviewFileChanges; private AgentProviderRegistry registry;
     @Override protected Composite createContents(Composite parent) {
         registry = new AgentProviderRegistry(AcpPreferences.store());
         Composite root = new Composite(parent, SWT.NONE); root.setLayout(new GridLayout(2, false));
@@ -31,12 +33,24 @@ public final class AcpPreferencePage extends PreferencePage implements IWorkbenc
         GridData reviewData = new GridData(SWT.FILL, SWT.CENTER, true, false);
         reviewData.horizontalSpan = 2;
         reviewFileChanges.setLayoutData(reviewData);
+        Label mcpLabel = new Label(root, SWT.NONE);
+        mcpLabel.setText("MCP servers (JSON; optional providerId/projectName scopes; use ${env:NAME} for secrets):");
+        GridData mcpLabelData = new GridData(SWT.FILL, SWT.CENTER, true, false); mcpLabelData.horizontalSpan = 2; mcpLabel.setLayoutData(mcpLabelData);
+        mcpServers = new Text(root, SWT.BORDER | SWT.MULTI | SWT.V_SCROLL | SWT.H_SCROLL);
+        GridData mcpData = new GridData(SWT.FILL, SWT.FILL, true, false); mcpData.horizontalSpan = 2; mcpData.heightHint = 120; mcpServers.setLayoutData(mcpData);
+        mcpServers.setText(AcpPreferences.store().getString(AcpPreferences.MCP_SERVERS_JSON));
+        mcpServers.setMessage("[{\"name\":\"my-tools\",\"transport\":\"stdio\",\"command\":\"/absolute/path/server\",\"args\":[],\"environment\":{},\"providerId\":\"\",\"projectName\":\"\",\"enabled\":true}]");
         providerList.addListener(SWT.Selection, e -> loadSelected()); refresh(); return root;
     }
     private Text field(Composite parent) { Text t = new Text(parent, SWT.BORDER); t.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false)); return t; }
     private void refresh() { providerList.removeAll(); for (AgentProvider p : registry.list()) providerList.add(p.name() + (p.id().equals(registry.active().id()) ? " (active)" : "")); if (providerList.getItemCount() > 0) providerList.select(0); loadSelected(); }
     private void loadSelected() { int i = providerList.getSelectionIndex(); if (i >= 0) { AgentProvider p = registry.list().get(i); name.setText(p.name()); command.setText(p.command()); arguments.setText(p.arguments()); } }
     private void saveProvider() { int i = providerList.getSelectionIndex(); String id = i >= 0 ? registry.list().get(i).id() : name.getText().trim().toLowerCase().replaceAll("[^a-z0-9]+", "-"); AgentProvider p = new AgentProvider(id, name.getText(), command.getText(), arguments.getText()); if (i >= 0) registry.update(p); else registry.add(p); refresh(); }
-    @Override public boolean performOk() { AcpPreferences.store().setValue(AcpPreferences.REVIEW_FILE_CHANGES, reviewFileChanges.getSelection()); return true; }
+    @Override public boolean performOk() {
+        try { JsonParser.parseString(mcpServers.getText().isBlank() ? "[]" : mcpServers.getText()).getAsJsonArray();
+        } catch (RuntimeException error) { setErrorMessage("MCP servers must be a JSON array: " + error.getMessage()); return false; }
+        AcpPreferences.store().setValue(AcpPreferences.MCP_SERVERS_JSON, new GsonBuilder().setPrettyPrinting().create().toJson(JsonParser.parseString(mcpServers.getText().isBlank() ? "[]" : mcpServers.getText())));
+        AcpPreferences.store().setValue(AcpPreferences.REVIEW_FILE_CHANGES, reviewFileChanges.getSelection()); return true;
+    }
     @Override public void init(IWorkbench workbench) { }
 }

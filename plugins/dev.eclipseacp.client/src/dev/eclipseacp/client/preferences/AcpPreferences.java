@@ -16,6 +16,8 @@ public final class AcpPreferences {
     public static final String REVIEW_FILE_CHANGES = "reviewFileChanges";
     /** JSON history of locally known ACP sessions, used to restore the chat after restart. */
     public static final String SESSION_HISTORY_JSON = "sessionHistoryJson";
+    /** JSON array of MCP server declarations; secrets should use environment-variable expansion, not literals. */
+    public static final String MCP_SERVERS_JSON = "mcpServersJson";
 
     private static final IPreferenceStore STORE =
             new ScopedPreferenceStore(InstanceScope.INSTANCE, PluginIds.PLUGIN_ID);

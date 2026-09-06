@@ -23,6 +23,7 @@ import dev.eclipseacp.client.agent.AgentClient;
 import dev.eclipseacp.client.agent.AuthMethod;
 import dev.eclipseacp.client.agent.SessionInfo;
 import dev.eclipseacp.client.agent.SessionPage;
+import dev.eclipseacp.client.mcp.McpServerConfig;
 
 /** ACP v1 adapter. The rest of the plug-in talks to AgentClient only. */
 public final class AcpClient implements AgentClient, JsonRpcHandler {
@@ -31,6 +32,7 @@ public final class AcpClient implements AgentClient, JsonRpcHandler {
     private final String command;
     private final String arguments;
     private final boolean reviewFileChanges;
+    private final List<McpServerConfig> mcpServers;
     private Process process;
     private JsonRpcConnection connection;
     private String sessionId;
@@ -43,10 +45,14 @@ public final class AcpClient implements AgentClient, JsonRpcHandler {
     }
 
     public AcpClient(String command, String arguments, AcpListener listener, boolean reviewFileChanges) {
+        this(command, arguments, listener, reviewFileChanges, List.of());
+    }
+    public AcpClient(String command, String arguments, AcpListener listener, boolean reviewFileChanges, List<McpServerConfig> mcpServers) {
         this.command = Objects.requireNonNull(command).trim();
         this.arguments = arguments == null ? "" : arguments;
         this.listener = Objects.requireNonNull(listener);
         this.reviewFileChanges = reviewFileChanges;
+        this.mcpServers = List.copyOf(mcpServers);
     }
 
     public CompletableFuture<Void> connect(Path workingDirectory) {
@@ -278,7 +284,7 @@ public final class AcpClient implements AgentClient, JsonRpcHandler {
     private CompletableFuture<JsonObject> newSession(Path workingDirectory) {
         JsonObject params = new JsonObject();
         params.addProperty("cwd", workingDirectory.toAbsolutePath().normalize().toString());
-        params.add("mcpServers", new JsonArray());
+        params.add("mcpServers", configuredMcpServers());
 
         AcpLog.info("Sending ACP request: method='session/new', cwd='" + params.get("cwd").getAsString() + "'");
         return connection.request("session/new", params).thenApply(result -> {
@@ -511,8 +517,13 @@ public final class AcpClient implements AgentClient, JsonRpcHandler {
         if (workingDirectory == null) throw new IllegalArgumentException("The ACP working directory is required");
         JsonObject params = new JsonObject();
         params.addProperty("cwd", workingDirectory.toAbsolutePath().normalize().toString());
-        params.add("mcpServers", new JsonArray());
+        params.add("mcpServers", configuredMcpServers());
         return params;
+    }
+    private JsonArray configuredMcpServers() {
+        JsonArray result = new JsonArray();
+        for (McpServerConfig server : mcpServers) result.add(server.toAcp(capabilities.mcpHttp(), capabilities.mcpSse()));
+        return result;
     }
 
     static SessionPage sessionPage(JsonObject result) {
