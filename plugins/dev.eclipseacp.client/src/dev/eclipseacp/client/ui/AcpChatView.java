@@ -76,12 +76,10 @@ public final class AcpChatView extends ViewPart implements AcpListener {
     private Button attachButton;
     private Combo modelSelector;
     private Combo thoughtLevelSelector;
-    private Combo collaborationModeSelector;
     private Label status;
     private Composite reviewBar;
     private Label reviewSummary;
     private Composite composer;
-    private Composite collaborationBar;
     private Combo projectSelector;
     private String chatFontFamily = "sans-serif";
     private int chatFontSizePoints = 10;
@@ -188,27 +186,6 @@ public final class AcpChatView extends ViewPart implements AcpListener {
         composerLayout.marginHeight = 8;
         composer.setLayout(composerLayout);
 
-        collaborationBar = new Composite(composer, SWT.NONE);
-        collaborationBar.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
-        org.eclipse.swt.layout.RowLayout collaborationLayout = new org.eclipse.swt.layout.RowLayout();
-        collaborationLayout.marginLeft = collaborationLayout.marginRight = collaborationLayout.marginTop
-                = collaborationLayout.marginBottom = 0;
-        collaborationLayout.center = true;
-        collaborationBar.setLayout(collaborationLayout);
-        Label collaborationLabel = new Label(collaborationBar, SWT.NONE);
-        collaborationLabel.setText("Collaboration:");
-        collaborationModeSelector = new Combo(collaborationBar, SWT.DROP_DOWN | SWT.READ_ONLY);
-        collaborationModeSelector.setToolTipText("Collaboration mode for the active ACP session");
-        collaborationModeSelector.setEnabled(false);
-        collaborationModeSelector.addListener(SWT.Selection, ignored -> changeConfigOption(collaborationModeSelector,
-                collaborationModeOption(activeSession), "Collaboration mode"));
-
-        historyButton = new Button(collaborationBar, SWT.PUSH);
-        historyButton.setText("");
-        historyButton.setToolTipText("Open chat history for this project");
-        historyButton.setEnabled(false);
-        historyButton.addListener(SWT.Selection, ignored -> chooseAgentSession());
-
         prompt = new Text(composer, SWT.MULTI | SWT.WRAP | SWT.V_SCROLL);
         GridData promptData = new GridData(SWT.FILL, SWT.FILL, true, false);
         promptData.heightHint = 64;
@@ -290,6 +267,12 @@ public final class AcpChatView extends ViewPart implements AcpListener {
         newSessionButton.setToolTipText("New chat in this project");
         newSessionButton.setEnabled(false);
         newSessionButton.addListener(SWT.Selection, ignored -> openNewSessionForActiveProject());
+
+        historyButton = new Button(actions, SWT.PUSH);
+        historyButton.setText("");
+        historyButton.setToolTipText("Open chat history for this project");
+        historyButton.setEnabled(false);
+        historyButton.addListener(SWT.Selection, ignored -> chooseAgentSession());
 
         modelSelector = new Combo(actions, SWT.DROP_DOWN | SWT.READ_ONLY);
         modelSelector.setToolTipText("Model for the active ACP session");
@@ -668,10 +651,6 @@ public final class AcpChatView extends ViewPart implements AcpListener {
                 .findFirst().orElse(null);
     }
 
-    private static ConfigOption collaborationModeOption(ChatSession session) {
-        return optionByCategoryOrId(session, "collaboration_mode", "collaboration mode");
-    }
-
     private static ConfigOption thoughtLevelOption(ChatSession session) {
         return optionByCategoryOrId(session, "thought_level", "Reasoning level");
     }
@@ -703,10 +682,6 @@ public final class AcpChatView extends ViewPart implements AcpListener {
         else if (modelSelector.getItemCount() > 0) modelSelector.select(0);
         modelSelector.setEnabled(activeSession != null && activeSession.client != null && !activeSession.agentMessageOpen);
         modelSelector.setToolTipText(option.description().isBlank() ? "Model for the active ACP session" : option.description());
-    }
-
-    private void refreshCollaborationModeSelector() {
-        refreshConfigSelector(collaborationModeSelector, collaborationModeOption(activeSession), "Collaboration mode for the active ACP session");
     }
 
     private void refreshThoughtLevelSelector() {
@@ -1195,12 +1170,10 @@ public final class AcpChatView extends ViewPart implements AcpListener {
         attachButton.setEnabled(false);
         refreshModelSelector();
         refreshThoughtLevelSelector();
-        refreshCollaborationModeSelector();
         showControl(settingsButton, settingsButton.getEnabled());
         // Keep selectors visible while a turn is in progress; refresh disables them until idle.
         showControl(modelSelector, modelSelector.getItemCount() > 0);
         showControl(thoughtLevelSelector, thoughtLevelSelector.getItemCount() > 0);
-        showControl(collaborationBar, collaborationModeSelector.getItemCount() > 0 || activeSession != null);
         showControl(reviewBar, hasDiffs || undoButton.getEnabled());
         showControl(applyButton, hasDiffs);
         showControl(rejectButton, hasDiffs);
