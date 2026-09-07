@@ -14,6 +14,8 @@ import com.google.gson.JsonElement;
 
 import org.eclipse.core.resources.IProject;
 import org.eclipse.jface.dialogs.MessageDialog;
+import org.eclipse.jface.resource.ImageDescriptor;
+import org.eclipse.jface.resource.ImageRegistry;
 import org.eclipse.jface.dialogs.InputDialog;
 import org.eclipse.jface.viewers.ArrayContentProvider;
 import org.eclipse.jface.viewers.LabelProvider;
@@ -85,6 +87,7 @@ public final class AcpChatView extends ViewPart implements AcpListener {
     private int chatFontSizePoints = 10;
     private final List<ChatSession> sessions = new ArrayList<>();
     private ChatSession activeSession;
+    private final ImageRegistry iconRegistry = new ImageRegistry();
 
     private static final class ChatSession {
         private final IProject project;
@@ -201,7 +204,7 @@ public final class AcpChatView extends ViewPart implements AcpListener {
                 collaborationModeOption(activeSession), "Collaboration mode"));
 
         historyButton = new Button(collaborationBar, SWT.PUSH);
-        historyButton.setText("History");
+        historyButton.setText("");
         historyButton.setToolTipText("Open chat history for this project");
         historyButton.setEnabled(false);
         historyButton.addListener(SWT.Selection, ignored -> chooseAgentSession());
@@ -1133,22 +1136,29 @@ public final class AcpChatView extends ViewPart implements AcpListener {
                 activeSession == null ? null : activeSession.fileLinks::hrefFor);
     }
 
+    private org.eclipse.swt.graphics.Image lucideIcon(String name) {
+        String key = "lucide-" + name;
+        if (iconRegistry.getDescriptor(key) == null) {
+            iconRegistry.put(key, ImageDescriptor.createFromFile(AcpChatView.class, "/icons/" + key + ".png"));
+        }
+        return iconRegistry.get(key);
+    }
+
     private void applyButtonImages() {
         ISharedImages images = PlatformUI.getWorkbench().getSharedImages();
-        sendButton.setImage(images.getImage(ISharedImages.IMG_TOOL_FORWARD));
+        sendButton.setImage(lucideIcon("send-horizontal"));
         stopButton.setImage(images.getImage(ISharedImages.IMG_ELCL_STOP));
-        newSessionButton.setImage(images.getImage(ISharedImages.IMG_OBJ_ADD));
+        newSessionButton.setImage(lucideIcon("message-square-plus"));
         closeButton.setImage(images.getImage(ISharedImages.IMG_ELCL_REMOVE));
-        historyButton.setImage(images.getImage(ISharedImages.IMG_OBJ_FOLDER));
+        historyButton.setImage(lucideIcon("list-clock"));
         applyButton.setImage(images.getImage(ISharedImages.IMG_ETOOL_SAVE_EDIT));
         rejectButton.setImage(images.getImage(ISharedImages.IMG_ETOOL_DELETE));
         undoButton.setImage(images.getImage(ISharedImages.IMG_TOOL_UNDO));
         contextButton.setImage(images.getImage(ISharedImages.IMG_OBJ_ADD));
         commandsButton.setImage(images.getImage(ISharedImages.IMG_OBJS_INFO_TSK));
-        settingsButton.setImage(images.getImage(ISharedImages.IMG_OBJ_ELEMENT));
+        settingsButton.setImage(lucideIcon("circle-ellipsis"));
         attachButton.setImage(images.getImage(ISharedImages.IMG_OBJ_FILE));
     }
-
     private static void showControl(org.eclipse.swt.widgets.Control control, boolean visible) {
         control.setVisible(visible);
         if (control.getParent().getLayout() instanceof GridLayout) {
@@ -1313,6 +1323,7 @@ public final class AcpChatView extends ViewPart implements AcpListener {
     @Override
     public void dispose() {
         disconnect();
+        iconRegistry.dispose();
         super.dispose();
     }
 }
