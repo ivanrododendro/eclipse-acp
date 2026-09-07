@@ -45,6 +45,11 @@ final class JsonRpcConnection implements Closeable {
     }
 
     CompletableFuture<JsonObject> request(String method, JsonObject params) {
+        return request(method, params, ignored -> { });
+    }
+
+    /** Sends a request and exposes its JSON-RPC identifier for protocol-level cancellation. */
+    CompletableFuture<JsonObject> request(String method, JsonObject params, Consumer<Long> requestIdConsumer) {
         long id = nextId.getAndIncrement();
         AcpLog.info("JSON-RPC request sent: id=" + id + ", method='" + method + "'");
         JsonObject message = envelope(method, params);
@@ -52,6 +57,7 @@ final class JsonRpcConnection implements Closeable {
 
         CompletableFuture<JsonObject> future = new CompletableFuture<>();
         pending.put(Long.toString(id), future);
+        requestIdConsumer.accept(id);
         try {
             send(message);
         } catch (IOException exception) {
