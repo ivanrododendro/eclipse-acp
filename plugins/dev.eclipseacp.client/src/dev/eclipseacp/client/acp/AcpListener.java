@@ -51,6 +51,11 @@ public interface AcpListener {
         // Optional for clients that provide an authentication UI.
     }
 
+    /** Chooses an authentication method after the agent rejects a session as unauthenticated. */
+    default CompletableFuture<String> requestAuthentication(List<AuthMethod> methods) {
+        return CompletableFuture.completedFuture(null);
+    }
+
     /** Requests structured input required by an agent workflow. An empty object means cancelled. */
     default CompletableFuture<JsonObject> requestElicitation(JsonObject request) {
         return CompletableFuture.completedFuture(new JsonObject());
