@@ -46,6 +46,7 @@ import dev.eclipseacp.client.acp.PermissionRequest;
 import dev.eclipseacp.client.acp.PermissionOption;
 import dev.eclipseacp.client.acp.ToolCall;
 import dev.eclipseacp.client.agent.AgentClient;
+import dev.eclipseacp.client.agent.AuthMethod;
 import dev.eclipseacp.client.agent.AgentClientFactory;
 import dev.eclipseacp.client.agent.AgentProvider;
 import dev.eclipseacp.client.agent.SessionInfo;
@@ -556,6 +557,9 @@ public final class AcpChatView extends ViewPart implements AcpListener {
             @Override public void onSessionUpdate(dev.eclipseacp.client.acp.AcpSessionUpdate update) {
                 ui(() -> renderExperienceUpdate(session, update));
             }
+            @Override public CompletableFuture<String> requestAuthentication(List<AuthMethod> methods) {
+                return requestAuthenticationFor(session, methods);
+            }
             @Override public CompletableFuture<JsonObject> requestElicitation(JsonObject request) {
                 return requestElicitationFor(session, request);
             }
@@ -884,6 +888,29 @@ public final class AcpChatView extends ViewPart implements AcpListener {
     @Override
     public CompletableFuture<String> requestPermission(String title, List<PermissionOption> options) {
         return requestPermissionFor(activeSession, title, options);
+    }
+
+    private CompletableFuture<String> requestAuthenticationFor(ChatSession session, List<AuthMethod> methods) {
+        CompletableFuture<String> result = new CompletableFuture<>();
+        ui(() -> {
+            List<AuthMethod> available = methods.stream().filter(method -> !method.isTerminal()).toList();
+            if (available.isEmpty() || getSite().getShell().isDisposed()) {
+                result.complete(null);
+                return;
+            }
+            String[] labels = available.stream().map(AuthMethod::name).toArray(String[]::new);
+            MessageDialog dialog = new MessageDialog(
+                    getSite().getShell(),
+                    "ACP sign in",
+                    null,
+                    "This agent requires authentication before it can open a session. Choose a sign-in method.",
+                    MessageDialog.QUESTION,
+                    labels,
+                    0);
+            int selected = dialog.open();
+            result.complete(selected >= 0 && selected < available.size() ? available.get(selected).id() : null);
+        });
+        return result;
     }
 
     private CompletableFuture<String> requestPermissionFor(ChatSession session, String title, List<PermissionOption> options) {
