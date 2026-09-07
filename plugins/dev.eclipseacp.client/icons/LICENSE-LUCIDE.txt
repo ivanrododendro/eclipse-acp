@@ -1,0 +1,5 @@
+Lucide icons
+
+Copyright (c) 2020, Lucide Contributors
+
+Licensed under the ISC License. See https://github.com/lucide-icons/lucide/blob/main/LICENSE
