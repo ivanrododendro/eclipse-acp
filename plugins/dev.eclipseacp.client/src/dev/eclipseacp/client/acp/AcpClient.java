@@ -13,6 +13,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Supplier;
 
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
@@ -107,9 +108,9 @@ public final class AcpClient implements AgentClient, JsonRpcHandler {
         AcpLog.info("ACP JSON-RPC reader started; sending initialize");
         listener.onStatus("Initializing " + command + "…");
         CompletableFuture<Void> connectionFuture = initialize()
-                .thenCompose(ignored -> restoredSessionId == null
+                .thenCompose(ignored -> establishSession(() -> restoredSessionId == null
                         ? newSession(workingDirectory).thenAccept(result -> { })
-                        : restoreAfterInitialize(restoredSessionId, workingDirectory))
+                        : restoreAfterInitialize(restoredSessionId, workingDirectory)))
                 .thenAccept(ignored -> listener.onStatus("Connected"));
         connectionFuture.whenComplete((ignored, error) -> {
             if (error == null) {
@@ -119,6 +120,37 @@ public final class AcpClient implements AgentClient, JsonRpcHandler {
             }
         });
         return connectionFuture;
+    }
+
+    /**
+     * Some agents advertise login methods but require authentication only when a session is
+     * actually opened. Retry that failed operation after the user selects a method, keeping
+     * the existing ACP process and JSON-RPC connection alive.
+     */
+    private CompletableFuture<Void> establishSession(Supplier<CompletableFuture<Void>> operation) {
+        return operation.get().exceptionallyCompose(error -> {
+            if (!authenticationRequired(error)) return CompletableFuture.failedFuture(error);
+            if (authenticationMethods.isEmpty()) {
+                return CompletableFuture.failedFuture(new IllegalStateException(
+                        "The ACP agent requires authentication but did not advertise any authentication methods", error));
+            }
+            listener.onStatus("Authentication required");
+            return listener.requestAuthentication(authenticationMethods).thenCompose(methodId -> {
+                if (methodId == null || methodId.isBlank()) {
+                    return CompletableFuture.failedFuture(new IOException("Authentication was cancelled"));
+                }
+                AcpLog.info("Authenticating ACP agent with method='" + methodId + "'");
+                return authenticate(methodId).thenCompose(ignored -> operation.get());
+            });
+        });
+    }
+
+    private static boolean authenticationRequired(Throwable error) {
+        for (Throwable current = error; current != null; current = current.getCause()) {
+            String message = current.getMessage();
+            if (message != null && message.contains("Authentication required")) return true;
+        }
+        return false;
     }
 
     private CompletableFuture<Void> restoreAfterInitialize(String restoredSessionId, Path workingDirectory) {
