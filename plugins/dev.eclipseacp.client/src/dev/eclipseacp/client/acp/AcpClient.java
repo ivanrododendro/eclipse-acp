@@ -39,6 +39,8 @@ public final class AcpClient implements AgentClient, JsonRpcHandler {
     private Process process;
     private JsonRpcConnection connection;
     private String sessionId;
+    /** JSON-RPC id of the in-flight session/prompt request, if any. */
+    private volatile Long activePromptRequestId;
     private volatile AgentCapabilities capabilities = AgentCapabilities.NONE;
     private volatile List<AuthMethod> authenticationMethods = List.of();
     private final ToolCallTracker toolCalls = new ToolCallTracker();
@@ -237,13 +239,14 @@ public final class AcpClient implements AgentClient, JsonRpcHandler {
         if (announce) listener.onStatus("Agent working…");
         AcpLog.info("Sending ACP request: method='session/prompt', sessionId='" + sessionId
                 + "', textLength=" + text.length());
-        return connection.request("session/prompt", params)
+        return connection.request("session/prompt", params, requestId -> activePromptRequestId = requestId)
                 .thenAccept(result -> {
                     AcpLog.info("ACP request completed: method='session/prompt', sessionId='" + sessionId
                             + "', stopReason='" + stopReason(result) + "'");
                     if (announce) listener.onStatus(stopReason(result));
                 })
                 .whenComplete((ignored, error) -> {
+                    activePromptRequestId = null;
                     if (error != null) {
                         AcpLog.error("ACP request failed: method='session/prompt', sessionId='" + sessionId + "'",
                                 unwrap(error));
@@ -280,6 +283,18 @@ public final class AcpClient implements AgentClient, JsonRpcHandler {
         params.addProperty("sessionId", sessionId);
         connection.notification("session/cancel", params);
         AcpLog.info("ACP notification sent: method='session/cancel', sessionId='" + sessionId + "'");
+
+        // session/cancel is the ACP v1 mechanism. Also use the standardized JSON-RPC
+        // cancellation notification when a prompt request is in flight: some agents,
+        // including affected Kilo CLI versions, honor this route even if their
+        // session/cancel handler fails internally.
+        Long promptRequestId = activePromptRequestId;
+        if (promptRequestId != null) {
+            JsonObject requestCancellation = new JsonObject();
+            requestCancellation.addProperty("requestId", promptRequestId);
+            connection.notification("$/cancel_request", requestCancellation);
+            AcpLog.info("JSON-RPC cancellation notification sent: requestId=" + promptRequestId);
+        }
         listener.onStatus("Cancellation requested");
     }
 
