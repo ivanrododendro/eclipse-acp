@@ -1149,13 +1149,13 @@ public final class AcpChatView extends ViewPart implements AcpListener {
         sendButton.setImage(lucideIcon("send-horizontal"));
         stopButton.setImage(images.getImage(ISharedImages.IMG_ELCL_STOP));
         newSessionButton.setImage(lucideIcon("message-square-plus"));
-        closeButton.setImage(images.getImage(ISharedImages.IMG_ELCL_REMOVE));
+        closeButton.setImage(lucideIcon("x"));
         historyButton.setImage(lucideIcon("list-clock"));
         applyButton.setImage(images.getImage(ISharedImages.IMG_ETOOL_SAVE_EDIT));
         rejectButton.setImage(images.getImage(ISharedImages.IMG_ETOOL_DELETE));
         undoButton.setImage(images.getImage(ISharedImages.IMG_TOOL_UNDO));
-        contextButton.setImage(images.getImage(ISharedImages.IMG_OBJ_ADD));
-        commandsButton.setImage(images.getImage(ISharedImages.IMG_OBJS_INFO_TSK));
+        contextButton.setImage(lucideIcon("circle-fading-plus"));
+        commandsButton.setImage(lucideIcon("square-slash"));
         settingsButton.setImage(lucideIcon("circle-ellipsis"));
         attachButton.setImage(images.getImage(ISharedImages.IMG_OBJ_FILE));
     }
