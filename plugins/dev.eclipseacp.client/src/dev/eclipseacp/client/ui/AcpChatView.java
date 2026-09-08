@@ -293,21 +293,21 @@ public final class AcpChatView extends ViewPart implements AcpListener {
 
         // Keep these optional actions at the end of the action list, but disable them for now.
         contextButton = new Button(actions, SWT.PUSH);
-        contextButton.setText("@ Context");
+        contextButton.setText("Context (Experimental)");
         contextButton.setToolTipText("Insert @file, @selection, @java, @problems and @console references");
-        contextButton.setEnabled(false);
+        contextButton.setEnabled(AcpPreferences.store().getBoolean(AcpPreferences.ENABLE_EXPERIMENTAL_CONTEXT_BUTTON));
         contextButton.addListener(SWT.Selection, ignored -> addContextReferences());
 
         commandsButton = new Button(actions, SWT.PUSH);
-        commandsButton.setText("Commands");
+        commandsButton.setText("Commands (Experimental)");
         commandsButton.setToolTipText("Agent slash commands");
-        commandsButton.setEnabled(false);
+        commandsButton.setEnabled(AcpPreferences.store().getBoolean(AcpPreferences.ENABLE_EXPERIMENTAL_COMMANDS_BUTTON));
         commandsButton.addListener(SWT.Selection, ignored -> chooseCommand());
 
         attachButton = new Button(actions, SWT.PUSH);
-        attachButton.setText("Attach");
+        attachButton.setText("Attachment (Experimental)");
         attachButton.setToolTipText("Attach an image or audio file to the next prompt");
-        attachButton.setEnabled(false);
+        attachButton.setEnabled(AcpPreferences.store().getBoolean(AcpPreferences.ENABLE_EXPERIMENTAL_ATTACH_BUTTON));
         attachButton.addListener(SWT.Selection, ignored -> attachFile());
 
         applyButtonImages();
@@ -1132,7 +1132,7 @@ public final class AcpChatView extends ViewPart implements AcpListener {
         contextButton.setImage(lucideIcon("circle-fading-plus"));
         commandsButton.setImage(lucideIcon("square-slash"));
         settingsButton.setImage(lucideIcon("circle-ellipsis"));
-        attachButton.setImage(images.getImage(ISharedImages.IMG_OBJ_FILE));
+        attachButton.setImage(lucideIcon("paperclip"));
     }
     private static void showControl(org.eclipse.swt.widgets.Control control, boolean visible) {
         control.setVisible(visible);
@@ -1180,7 +1180,7 @@ public final class AcpChatView extends ViewPart implements AcpListener {
         showControl(undoButton, undoButton.getEnabled());
         reviewSummary.setText(hasDiffs ? pendingDiffs(activeSession).size() + " changed files" : "Changes applied");
         attachButton.setText(connected && !activeSession.attachments.isEmpty()
-                ? "Attach (" + activeSession.attachments.size() + ")" : "Attach");
+                ? "Attachment (Experimental) (" + activeSession.attachments.size() + ")" : "Attachment (Experimental)");
         prompt.setEnabled(connected);
         projectSelector.setEnabled(connected || !sessions.isEmpty());
         composer.getParent().layout(true, true);
