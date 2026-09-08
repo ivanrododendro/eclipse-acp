@@ -18,6 +18,12 @@ public final class AcpPreferences {
     public static final String HIDE_AGENT_COMMANDS_IN_CHAT = "hideAgentCommandsInChat";
     /** JSON array of MCP server declarations; secrets should use environment-variable expansion, not literals. */
     public static final String MCP_SERVERS_JSON = "mcpServersJson";
+    /** Enables the experimental Context button. Disabled by default. */
+    public static final String ENABLE_EXPERIMENTAL_CONTEXT_BUTTON = "enableExperimentalContextButton";
+    /** Enables the experimental slash commands button. Disabled by default. */
+    public static final String ENABLE_EXPERIMENTAL_COMMANDS_BUTTON = "enableExperimentalCommandsButton";
+    /** Enables the experimental attachment button. Disabled by default. */
+    public static final String ENABLE_EXPERIMENTAL_ATTACH_BUTTON = "enableExperimentalAttachButton";
 
     private static final IPreferenceStore STORE =
             new ScopedPreferenceStore(InstanceScope.INSTANCE, PluginIds.PLUGIN_ID);
