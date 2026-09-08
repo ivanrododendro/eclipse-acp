@@ -1164,10 +1164,10 @@ public final class AcpChatView extends ViewPart implements AcpListener {
         applyButton.setEnabled(hasDiffs);
         rejectButton.setEnabled(hasDiffs);
         undoButton.setEnabled(reviewFileChanges && activeSession.diffApplier.canUndo());
-        contextButton.setEnabled(false);
-        commandsButton.setEnabled(false);
+        contextButton.setEnabled(connected && AcpPreferences.store().getBoolean(AcpPreferences.ENABLE_EXPERIMENTAL_CONTEXT_BUTTON));
+        commandsButton.setEnabled(connected && AcpPreferences.store().getBoolean(AcpPreferences.ENABLE_EXPERIMENTAL_COMMANDS_BUTTON));
         settingsButton.setEnabled(connected && !activeSession.configOptions.isEmpty());
-        attachButton.setEnabled(false);
+        attachButton.setEnabled(connected && AcpPreferences.store().getBoolean(AcpPreferences.ENABLE_EXPERIMENTAL_ATTACH_BUTTON));
         refreshModelSelector();
         refreshThoughtLevelSelector();
         showControl(settingsButton, settingsButton.getEnabled());
