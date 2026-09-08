@@ -15,5 +15,8 @@ public final class AcpPreferenceInitializer extends AbstractPreferenceInitialize
         preferences.put(AcpPreferences.AGENT_ARGUMENTS, "");
         preferences.putBoolean(AcpPreferences.REVIEW_FILE_CHANGES, false);
         preferences.putBoolean(AcpPreferences.HIDE_AGENT_COMMANDS_IN_CHAT, true);
+        preferences.putBoolean(AcpPreferences.ENABLE_EXPERIMENTAL_CONTEXT_BUTTON, false);
+        preferences.putBoolean(AcpPreferences.ENABLE_EXPERIMENTAL_COMMANDS_BUTTON, false);
+        preferences.putBoolean(AcpPreferences.ENABLE_EXPERIMENTAL_ATTACH_BUTTON, false);
     }
 }
