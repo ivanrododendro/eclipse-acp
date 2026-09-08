@@ -16,7 +16,7 @@ import com.google.gson.GsonBuilder;
 import com.google.gson.JsonParser;
 
 public final class AcpPreferencePage extends PreferencePage implements IWorkbenchPreferencePage {
-    private List providerList; private Text name; private Text command; private Text arguments; private Text mcpServers; private Button reviewFileChanges; private Button hideAgentCommandsInChat; private AgentProviderRegistry registry;
+    private List providerList; private Text name; private Text command; private Text arguments; private Text mcpServers; private Button reviewFileChanges; private Button hideAgentCommandsInChat; private Button experimentalContextButton; private Button experimentalCommandsButton; private Button experimentalAttachButton; private AgentProviderRegistry registry;
     @Override protected Composite createContents(Composite parent) {
         registry = new AgentProviderRegistry(AcpPreferences.store());
         Composite root = new Composite(parent, SWT.NONE); root.setLayout(new GridLayout(2, false));
@@ -39,6 +39,9 @@ public final class AcpPreferencePage extends PreferencePage implements IWorkbenc
         GridData commandsData = new GridData(SWT.FILL, SWT.CENTER, true, false);
         commandsData.horizontalSpan = 2;
         hideAgentCommandsInChat.setLayoutData(commandsData);
+        experimentalContextButton = experimentalOption(root, "Enable Context button (Experimental)", AcpPreferences.ENABLE_EXPERIMENTAL_CONTEXT_BUTTON);
+        experimentalCommandsButton = experimentalOption(root, "Enable slash commands button (Experimental)", AcpPreferences.ENABLE_EXPERIMENTAL_COMMANDS_BUTTON);
+        experimentalAttachButton = experimentalOption(root, "Enable Attachment button (Experimental)", AcpPreferences.ENABLE_EXPERIMENTAL_ATTACH_BUTTON);
         Label mcpLabel = new Label(root, SWT.NONE);
         mcpLabel.setText("MCP servers (JSON; optional providerId/projectName scopes; use ${env:NAME} for secrets):");
         GridData mcpLabelData = new GridData(SWT.FILL, SWT.CENTER, true, false); mcpLabelData.horizontalSpan = 2; mcpLabel.setLayoutData(mcpLabelData);
@@ -49,6 +52,15 @@ public final class AcpPreferencePage extends PreferencePage implements IWorkbenc
         providerList.addListener(SWT.Selection, e -> loadSelected()); refresh(); return root;
     }
     private Text field(Composite parent) { Text t = new Text(parent, SWT.BORDER); t.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false)); return t; }
+    private Button experimentalOption(Composite parent, String label, String key) {
+        Button option = new Button(parent, SWT.CHECK);
+        option.setText(label);
+        option.setSelection(AcpPreferences.store().getBoolean(key));
+        GridData data = new GridData(SWT.FILL, SWT.CENTER, true, false);
+        data.horizontalSpan = 2;
+        option.setLayoutData(data);
+        return option;
+    }
     private void refresh() { providerList.removeAll(); for (AgentProvider p : registry.list()) providerList.add(p.name() + (p.id().equals(registry.active().id()) ? " (active)" : "")); if (providerList.getItemCount() > 0) providerList.select(0); loadSelected(); }
     private void loadSelected() { int i = providerList.getSelectionIndex(); if (i >= 0) { AgentProvider p = registry.list().get(i); name.setText(p.name()); command.setText(p.command()); arguments.setText(p.arguments()); } }
     private void saveProvider() { int i = providerList.getSelectionIndex(); String id = i >= 0 ? registry.list().get(i).id() : name.getText().trim().toLowerCase().replaceAll("[^a-z0-9]+", "-"); AgentProvider p = new AgentProvider(id, name.getText(), command.getText(), arguments.getText()); if (i >= 0) registry.update(p); else registry.add(p); refresh(); }
@@ -57,7 +69,10 @@ public final class AcpPreferencePage extends PreferencePage implements IWorkbenc
         } catch (RuntimeException error) { setErrorMessage("MCP servers must be a JSON array: " + error.getMessage()); return false; }
         AcpPreferences.store().setValue(AcpPreferences.MCP_SERVERS_JSON, new GsonBuilder().setPrettyPrinting().create().toJson(JsonParser.parseString(mcpServers.getText().isBlank() ? "[]" : mcpServers.getText())));
         AcpPreferences.store().setValue(AcpPreferences.REVIEW_FILE_CHANGES, reviewFileChanges.getSelection());
-        AcpPreferences.store().setValue(AcpPreferences.HIDE_AGENT_COMMANDS_IN_CHAT, hideAgentCommandsInChat.getSelection()); return true;
+        AcpPreferences.store().setValue(AcpPreferences.HIDE_AGENT_COMMANDS_IN_CHAT, hideAgentCommandsInChat.getSelection());
+        AcpPreferences.store().setValue(AcpPreferences.ENABLE_EXPERIMENTAL_CONTEXT_BUTTON, experimentalContextButton.getSelection());
+        AcpPreferences.store().setValue(AcpPreferences.ENABLE_EXPERIMENTAL_COMMANDS_BUTTON, experimentalCommandsButton.getSelection());
+        AcpPreferences.store().setValue(AcpPreferences.ENABLE_EXPERIMENTAL_ATTACH_BUTTON, experimentalAttachButton.getSelection()); return true;
     }
     @Override public void init(IWorkbench workbench) { }
 }
