@@ -55,7 +55,6 @@ public final class AcpPreferencePage extends PreferencePage implements IWorkbenc
         GridData jdtDescriptionData = new GridData(SWT.FILL, SWT.TOP, true, false);
         jdtDescriptionData.horizontalSpan = 2;
         jdtDescriptionData.widthHint = 700;
-        jdtDescription.horizontalIndent = 20;
         jdtDescription.setLayoutData(jdtDescriptionData);
         Label mcpLabel = new Label(root, SWT.NONE);
         mcpLabel.setText("MCP servers (JSON; optional providerId/projectName scopes; use ${env:NAME} for secrets):");
