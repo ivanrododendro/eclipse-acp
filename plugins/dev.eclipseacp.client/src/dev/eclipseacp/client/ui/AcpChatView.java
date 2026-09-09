@@ -40,26 +40,25 @@ import org.eclipse.ui.PlatformUI;
 import org.eclipse.ui.part.ViewPart;
 import org.eclipse.ui.dialogs.ListDialog;
 
-import dev.eclipseacp.client.acp.AcpListener;
 import dev.eclipseacp.client.AcpLog;
-import dev.eclipseacp.client.acp.FileDiff;
-import dev.eclipseacp.client.acp.FileReadRequest;
-import dev.eclipseacp.client.acp.FileWriteRequest;
-import dev.eclipseacp.client.acp.PermissionRequest;
-import dev.eclipseacp.client.acp.PermissionOption;
-import dev.eclipseacp.client.acp.ToolCall;
 import dev.eclipseacp.client.agent.AgentClient;
+import dev.eclipseacp.client.agent.AgentListener;
 import dev.eclipseacp.client.agent.AuthMethod;
-import dev.eclipseacp.client.agent.AgentClientFactory;
+import dev.eclipseacp.client.agent.ConfigValue;
+import dev.eclipseacp.client.agent.FileDiff;
+import dev.eclipseacp.client.agent.FileReadRequest;
+import dev.eclipseacp.client.agent.FileWriteRequest;
+import dev.eclipseacp.client.agent.PermissionOption;
+import dev.eclipseacp.client.agent.PermissionRequest;
+import dev.eclipseacp.client.agent.SessionUpdate;
+import dev.eclipseacp.client.agent.ToolCall;
 import dev.eclipseacp.client.agent.AgentProvider;
 import dev.eclipseacp.client.agent.SessionInfo;
 import dev.eclipseacp.client.agent.PromptAttachment;
 import dev.eclipseacp.client.agent.ConfigOption;
-import dev.eclipseacp.client.preferences.AgentProviderRegistry;
 import dev.eclipseacp.client.preferences.AcpPreferences;
-import dev.eclipseacp.client.mcp.McpServerRegistry;
 
-public final class AcpChatView extends ViewPart implements AcpListener {
+public final class AcpChatView extends ViewPart implements AgentListener {
     public static final String ID = "dev.eclipseacp.client.views.chat";
     private Browser transcript;
     private Text prompt;
@@ -85,6 +84,7 @@ public final class AcpChatView extends ViewPart implements AcpListener {
     private String chatFontFamily = "sans-serif";
     private int chatFontSizePoints = 10;
     private final List<ChatSession> sessions = new ArrayList<>();
+    private final AcpSessionService sessionService = new AcpSessionService(AcpPreferences.store());
     private ChatSession activeSession;
     private final ImageRegistry iconRegistry = new ImageRegistry();
 
@@ -342,10 +342,11 @@ public final class AcpChatView extends ViewPart implements AcpListener {
             if (initialPrompt != null && !initialPrompt.isBlank()) sendPrompt(existing, initialPrompt);
             return;
         }
-        AgentProvider provider = new AgentProviderRegistry(AcpPreferences.store()).active();
+        AcpSessionService.SessionConfiguration configuration = sessionService.newSessionConfiguration();
+        AgentProvider provider = configuration.provider();
         String agentName = provider.name();
 
-        boolean reviewFileChanges = AcpPreferences.store().getBoolean(AcpPreferences.REVIEW_FILE_CHANGES);
+        boolean reviewFileChanges = configuration.reviewFileChanges();
         ChatSession session = new ChatSession(project, project.getName(), provider.id(), reviewFileChanges);
         session.initialPrompt = initialPrompt;
         sessions.add(session);
@@ -360,12 +361,11 @@ public final class AcpChatView extends ViewPart implements AcpListener {
 
     private void connect(ChatSession session, AgentProvider provider, String restoredSessionId,
             boolean restored, String agentName) {
-        AgentClient newClient = AgentClientFactory.create(provider, listenerFor(session), session.reviewFileChanges,
-                new McpServerRegistry(AcpPreferences.store()).forSession(provider.id(), session.project.getName()));
+        AgentClient newClient = sessionService.createClient(provider, listenerFor(session), session.reviewFileChanges,
+                session.project.getName());
         session.client = newClient;
-        CompletableFuture<Void> connection = restoredSessionId == null
-                ? newClient.connect(session.project.getLocation().toFile().toPath())
-                : newClient.restoreSession(restoredSessionId, session.project.getLocation().toFile().toPath());
+        CompletableFuture<Void> connection = sessionService.connect(newClient,
+                session.project.getLocation().toFile().toPath(), restoredSessionId);
         connection.whenComplete((ignored, error) -> ui(() -> {
             if (session.client != newClient) {
                 return; // A newer connection replaced this one.
@@ -470,7 +470,7 @@ public final class AcpChatView extends ViewPart implements AcpListener {
         ChatSession session = activeSession;
         if (session == null || session.client == null) return;
         AgentClient client = session.client;
-        listAllSessions(client, session.project.getLocation().toFile().toPath(), null, new ArrayList<>())
+        sessionService.listSessions(client, session.project.getLocation().toFile().toPath())
                 .whenComplete((available, error) -> ui(() -> {
                     if (session.client != client) return;
                     if (error != null) {
@@ -489,7 +489,8 @@ public final class AcpChatView extends ViewPart implements AcpListener {
                         }
                     });
                     List<SessionInfo> projectSessions = available.stream()
-                            .filter(info -> belongsToProject(info, session.project.getLocation().toFile().toPath()))
+                            .filter(info -> sessionService.belongsToProject(info,
+                                    session.project.getLocation().toFile().toPath()))
                             .toList();
                     if (projectSessions.isEmpty()) {
                         setStatus(session, "No saved sessions for this project");
@@ -500,25 +501,6 @@ public final class AcpChatView extends ViewPart implements AcpListener {
                             || dialog.getResult() == null || dialog.getResult().length == 0) return;
                     restoreListedSession(session, (SessionInfo) dialog.getResult()[0]);
                 }));
-    }
-
-    private CompletableFuture<List<SessionInfo>> listAllSessions(AgentClient client, java.nio.file.Path cwd,
-            String cursor, List<SessionInfo> collected) {
-        return client.listSessions(cwd, cursor).thenCompose(page -> {
-            collected.addAll(page.sessions());
-            return page.nextCursor() == null || page.nextCursor().isBlank()
-                    ? CompletableFuture.completedFuture(List.copyOf(collected))
-                    : listAllSessions(client, cwd, page.nextCursor(), collected);
-        });
-    }
-
-    private static boolean belongsToProject(SessionInfo info, java.nio.file.Path projectDirectory) {
-        try {
-            return java.nio.file.Path.of(info.cwd()).toAbsolutePath().normalize()
-                    .equals(projectDirectory.toAbsolutePath().normalize());
-        } catch (RuntimeException exception) {
-            return false;
-        }
     }
 
     private void restoreListedSession(ChatSession session, SessionInfo selected) {
@@ -536,36 +518,24 @@ public final class AcpChatView extends ViewPart implements AcpListener {
         session.agentMessageOpen = false;
         setStatus(session, "Closing current session…");
         updateControls();
-        client.closeSession().whenComplete((ignored, closeError) -> ui(() -> {
+        sessionService.switchSession(client, session.project.getLocation().toFile().toPath(), restoredSessionId,
+                replaysTranscript -> uiAndWait(() -> {
+                    resetConversation(session);
+                    session.acceptingRestoredTranscript = replaysTranscript;
+                    renderTranscript();
+                }))
+                .whenComplete((switched, operationError) -> ui(() -> {
             if (session.client != client || !session.switching) return;
-            if (closeError != null) {
-                session.switching = false;
-                onError(session, "Could not close the current session", unwrap(closeError));
-                updateControls();
-                return;
+            session.switching = false;
+            if (operationError != null) {
+                onError(session, "Could not open the selected session", unwrap(operationError));
+            } else {
+                session.persistedSessionId = switched.sessionId();
+                // Keep this true until sendPrompt starts a new turn: session/load updates
+                // can be queued on the UI thread after its JSON-RPC response arrives.
+                setStatus(session, restoredSessionId == null ? "New session ready" : "Session restored");
             }
-            resetConversation(session);
-            renderTranscript();
-            boolean replayTranscript = restoredSessionId != null && client.capabilities().loadSession();
-            session.acceptingRestoredTranscript = replayTranscript;
-            CompletableFuture<Void> operation = restoredSessionId == null
-                    ? client.startNewSession(session.project.getLocation().toFile().toPath())
-                    : replayTranscript
-                            ? client.loadSession(restoredSessionId, session.project.getLocation().toFile().toPath())
-                            : client.resumeSession(restoredSessionId, session.project.getLocation().toFile().toPath());
-            operation.whenComplete((result, operationError) -> ui(() -> {
-                if (session.client != client || !session.switching) return;
-                session.switching = false;
-                if (operationError != null) {
-                    onError(session, "Could not open the selected session", unwrap(operationError));
-                } else {
-                    session.persistedSessionId = client.sessionId();
-                    // Keep this true until sendPrompt starts a new turn: session/load updates
-                    // can be queued on the UI thread after its JSON-RPC response arrives.
-                    setStatus(session, restoredSessionId == null ? "New session ready" : "Session restored");
-                }
-                updateControls();
-            }));
+            updateControls();
         }));
     }
 
@@ -584,8 +554,8 @@ public final class AcpChatView extends ViewPart implements AcpListener {
         session.diffApplier = new WorkspaceDiffApplier();
     }
 
-    private AcpListener listenerFor(ChatSession session) {
-        return new AcpListener() {
+    private AgentListener listenerFor(ChatSession session) {
+        return new AgentListener() {
             @Override public void onAgentText(String text) { queueAgentText(session, text); }
             @Override public void onPromptFirstAgentChunk(long sentAtNanos, long receivedAtNanos) {
                 synchronized (session) {
@@ -610,15 +580,17 @@ public final class AcpChatView extends ViewPart implements AcpListener {
                 return requestPermissionFor(session, request);
             }
             @Override public void onToolCall(ToolCall toolCall) { ui(() -> updateToolCall(session, toolCall)); }
-            @Override public void onSessionUpdate(dev.eclipseacp.client.acp.AcpSessionUpdate update) {
+            @Override public void onSessionUpdate(SessionUpdate update) {
                 if ("agent_message_chunk".equals(update.kind()) || "user_message_chunk".equals(update.kind())) return;
                 ui(() -> renderExperienceUpdate(session, update));
             }
             @Override public CompletableFuture<String> requestAuthentication(List<AuthMethod> methods) {
                 return requestAuthenticationFor(session, methods);
             }
-            @Override public CompletableFuture<JsonObject> requestElicitation(JsonObject request) {
-                return requestElicitationFor(session, request);
+            @Override public CompletableFuture<Map<String, Object>> requestElicitation(Map<String, Object> request) {
+                JsonObject jsonRequest = new com.google.gson.Gson().toJsonTree(request).getAsJsonObject();
+                return requestElicitationFor(session, jsonRequest)
+                        .thenApply(answer -> new com.google.gson.Gson().fromJson(answer, Map.class));
             }
             @Override public CompletableFuture<String> readTextFile(FileReadRequest request) {
                 return CompletableFuture.supplyAsync(() -> {
@@ -646,8 +618,8 @@ public final class AcpChatView extends ViewPart implements AcpListener {
         };
     }
 
-    private void renderExperienceUpdate(ChatSession session, dev.eclipseacp.client.acp.AcpSessionUpdate update) {
-        JsonObject payload = update.payload();
+    private void renderExperienceUpdate(ChatSession session, SessionUpdate update) {
+        JsonObject payload = new com.google.gson.Gson().toJsonTree(update.payload()).getAsJsonObject();
         switch (update.kind()) {
         case "available_commands_update" -> {
             session.commands.clear();
@@ -668,12 +640,12 @@ public final class AcpChatView extends ViewPart implements AcpListener {
             } else if (options.isJsonObject()) storeConfigOption(session, options.getAsJsonObject());
         }
         case "usage_update" -> {
-            if (!AcpPreferences.store().getBoolean(AcpPreferences.HIDE_AGENT_COMMANDS_IN_CHAT)) {
+            if (!sessionService.hideAgentCommands()) {
                 append(session, "> **Usage:** " + sessionUsageText(payload) + "\n\n");
             }
         }
         case "terminal_output", "terminal_output_update" -> {
-            if (!AcpPreferences.store().getBoolean(AcpPreferences.HIDE_AGENT_COMMANDS_IN_CHAT)) {
+            if (!sessionService.hideAgentCommands()) {
                 appendTerminalOutput(session, payload);
             }
         }
@@ -743,7 +715,7 @@ public final class AcpChatView extends ViewPart implements AcpListener {
             modelSelector.setToolTipText("The ACP agent has not advertised a model selector");
             return;
         }
-        String current = option.value() != null && option.value().isJsonPrimitive() ? option.value().getAsString() : "";
+        String current = configText(option.value());
         int selected = -1;
         for (ConfigOption.Choice choice : option.choices()) {
             modelSelector.add(choice.label());
@@ -764,7 +736,7 @@ public final class AcpChatView extends ViewPart implements AcpListener {
         if (selector == null || selector.isDisposed()) return;
         selector.removeAll();
         if (option == null) { selector.setEnabled(false); return; }
-        String current = option.value() != null && option.value().isJsonPrimitive() ? option.value().getAsString() : "";
+        String current = configText(option.value());
         for (ConfigOption.Choice choice : option.choices()) {
             selector.add(choice.label());
             if (choice.value().equals(current)) selector.select(selector.getItemCount() - 1);
@@ -781,7 +753,7 @@ public final class AcpChatView extends ViewPart implements AcpListener {
         if (session == null || session.client == null || option == null || selected < 0 || selected >= option.choices().size()) return;
         ConfigOption.Choice choice = option.choices().get(selected);
         modelSelector.setEnabled(false);
-        session.client.setConfigOption(option.id(), new com.google.gson.JsonPrimitive(choice.value())).whenComplete((ignored, error) -> ui(() -> {
+        session.client.setConfigOption(option.id(), ConfigValue.of(choice.value())).whenComplete((ignored, error) -> ui(() -> {
             if (session.client == null || session != activeSession) return;
             if (error != null) {
                 refreshModelSelector();
@@ -801,7 +773,7 @@ public final class AcpChatView extends ViewPart implements AcpListener {
         if (session == null || session.client == null || option == null || selected < 0 || selected >= option.choices().size()) return;
         ConfigOption.Choice choice = option.choices().get(selected);
         selector.setEnabled(false);
-        session.client.setConfigOption(option.id(), new com.google.gson.JsonPrimitive(choice.value())).whenComplete((ignored, error) -> ui(() -> {
+        session.client.setConfigOption(option.id(), ConfigValue.of(choice.value())).whenComplete((ignored, error) -> ui(() -> {
             if (session.client == null || session != activeSession) return;
             if (error != null) {
                 refreshConfigSelector(selector, option, optionName + " for the active ACP session");
@@ -850,7 +822,7 @@ public final class AcpChatView extends ViewPart implements AcpListener {
         if (session == null || session.configOptions.isEmpty() || session.client == null) return;
         ConfigOptionsDialog dialog = new ConfigOptionsDialog(getSite().getShell(), new ArrayList<>(session.configOptions.values()));
         if (dialog.open() != org.eclipse.jface.window.Window.OK) return;
-        dialog.changedValues().forEach((option, value) -> session.client.setConfigOption(option.id(), value).whenComplete((ignored, error) -> ui(() -> {
+        dialog.changedValues().forEach((option, value) -> session.client.setConfigOption(option.id(), ConfigValue.of(value)).whenComplete((ignored, error) -> ui(() -> {
             if (session.client == null) return;
             if (error != null) {
                 onError(session, "Could not update " + option.name(), unwrap(error));
@@ -891,6 +863,11 @@ public final class AcpChatView extends ViewPart implements AcpListener {
 
     private static String jsonString(JsonObject value, String key) { return value.has(key) && value.get(key).isJsonPrimitive() ? value.get(key).getAsString() : ""; }
     private static String nonBlank(String first, String fallback) { return first == null || first.isBlank() ? fallback : first; }
+
+    private static String configText(Object value) {
+        if (value instanceof JsonElement element && element.isJsonPrimitive()) return element.getAsString();
+        return value == null ? "" : String.valueOf(value);
+    }
 
     @Override
     public void onAgentText(String text) {
@@ -1022,12 +999,14 @@ public final class AcpChatView extends ViewPart implements AcpListener {
         session.toolCalls.put(toolCall.id(), toolCall);
         if (session.reviewFileChanges) toolCall.diffs().forEach(diff -> session.pendingChanges.put(diff.path(), diff));
         appendNewToolDiffs(session, toolCall);
-        if (!AcpPreferences.store().getBoolean(AcpPreferences.HIDE_AGENT_COMMANDS_IN_CHAT)) {
+        if (!sessionService.hideAgentCommands()) {
             append(session, "\n> **Tool " + toolCall.kind() + ":** " + toolCall.title() + " — " + toolCall.status()
                     + (toolCall.hasDiffs() ? " (" + toolCall.diffs().size() + " file change(s) ready for review)" : "")
                     + "\n\n");
-            if (toolCall.kind().toLowerCase(java.util.Locale.ROOT).contains("terminal") && toolCall.rawOutput() instanceof JsonObject output) {
-                appendTerminalOutput(session, output);
+            if (toolCall.kind().toLowerCase(java.util.Locale.ROOT).contains("terminal")
+                    && toolCall.rawOutput() instanceof Map<?, ?> output) {
+                JsonObject jsonOutput = new com.google.gson.Gson().toJsonTree(output).getAsJsonObject();
+                appendTerminalOutput(session, jsonOutput);
             }
         }
         updateControls();
@@ -1322,12 +1301,6 @@ public final class AcpChatView extends ViewPart implements AcpListener {
         updateControls();
     }
 
-    private AgentProvider providerFor(String providerId) {
-        AgentProviderRegistry registry = new AgentProviderRegistry(AcpPreferences.store());
-        return registry.list().stream().filter(provider -> provider.id().equals(providerId)).findFirst()
-                .orElseGet(registry::active);
-    }
-
     /** Replaces the active ACP conversation without changing the project entry in the selector. */
     private void replaceSession(ChatSession previous, ChatSession replacement) {
         int index = sessions.indexOf(previous);
@@ -1389,6 +1362,19 @@ public final class AcpChatView extends ViewPart implements AcpListener {
                 action.run();
             }
         });
+    }
+
+    /** Executes a state transition before the ACP service starts the next session operation. */
+    private void uiAndWait(Runnable action) {
+        Display display = getSite().getShell().getDisplay();
+        if (display.isDisposed()) return;
+        if (Display.getCurrent() == display) {
+            action.run();
+        } else {
+            display.syncExec(() -> {
+                if (transcript != null && !transcript.isDisposed()) action.run();
+            });
+        }
     }
 
     private static long elapsedMillis(long startedAt, long completedAt) {

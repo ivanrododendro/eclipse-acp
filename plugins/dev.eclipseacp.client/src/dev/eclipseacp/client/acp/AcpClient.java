@@ -23,16 +23,24 @@ import com.google.gson.JsonPrimitive;
 import dev.eclipseacp.client.AcpLog;
 import dev.eclipseacp.client.agent.AgentCapabilities;
 import dev.eclipseacp.client.agent.AgentClient;
+import dev.eclipseacp.client.agent.AgentListener;
 import dev.eclipseacp.client.agent.AuthMethod;
+import dev.eclipseacp.client.agent.ConfigValue;
+import dev.eclipseacp.client.agent.FileReadRequest;
+import dev.eclipseacp.client.agent.FileWriteRequest;
+import dev.eclipseacp.client.agent.PermissionOption;
+import dev.eclipseacp.client.agent.PermissionRequest;
 import dev.eclipseacp.client.agent.SessionInfo;
 import dev.eclipseacp.client.agent.SessionPage;
 import dev.eclipseacp.client.agent.PromptAttachment;
+import dev.eclipseacp.client.agent.SessionUpdate;
+import dev.eclipseacp.client.agent.ToolCall;
 import dev.eclipseacp.client.mcp.McpServerConfig;
 
 /** ACP v1 adapter. The rest of the plug-in talks to AgentClient only. */
 public final class AcpClient implements AgentClient, JsonRpcHandler {
     private static final int PROTOCOL_VERSION = 1;
-    private final AcpListener listener;
+    private final AgentListener listener;
     private final String command;
     private final String arguments;
     private final boolean reviewFileChanges;
@@ -46,14 +54,14 @@ public final class AcpClient implements AgentClient, JsonRpcHandler {
     private volatile long promptSentAtNanos;
     private final AtomicBoolean firstAgentChunkReceived = new AtomicBoolean();
 
-    public AcpClient(String command, String arguments, AcpListener listener) {
+    public AcpClient(String command, String arguments, AgentListener listener) {
         this(command, arguments, listener, false);
     }
 
-    public AcpClient(String command, String arguments, AcpListener listener, boolean reviewFileChanges) {
+    public AcpClient(String command, String arguments, AgentListener listener, boolean reviewFileChanges) {
         this(command, arguments, listener, reviewFileChanges, List.of());
     }
-    public AcpClient(String command, String arguments, AcpListener listener, boolean reviewFileChanges, List<McpServerConfig> mcpServers) {
+    public AcpClient(String command, String arguments, AgentListener listener, boolean reviewFileChanges, List<McpServerConfig> mcpServers) {
         this.command = Objects.requireNonNull(command).trim();
         this.arguments = arguments == null ? "" : arguments;
         this.listener = Objects.requireNonNull(listener);
@@ -272,20 +280,17 @@ public final class AcpClient implements AgentClient, JsonRpcHandler {
     }
 
     @Override
-    public CompletableFuture<Void> setConfigOption(String configId, JsonElement value) {
-        return setConfigOption(configId, value != null && value.isJsonPrimitive()
-                && value.getAsJsonPrimitive().isBoolean() ? "boolean" : null, value);
-    }
-
-    @Override
-    public CompletableFuture<Void> setConfigOption(String configId, String valueType, JsonElement value) {
+    public CompletableFuture<Void> setConfigOption(String configId, ConfigValue configValue) {
         if (sessionId == null) return CompletableFuture.failedFuture(new IllegalStateException("ACP session is not connected"));
         if (configId == null || configId.isBlank()) return CompletableFuture.failedFuture(new IllegalArgumentException("Configuration option ID is empty"));
         JsonObject params = new JsonObject();
         params.addProperty("sessionId", sessionId);
         params.addProperty("configId", configId);
-        if (valueType != null && !valueType.isBlank()) params.addProperty("type", valueType);
-        params.add("value", value == null ? com.google.gson.JsonNull.INSTANCE : value);
+        if (configValue != null && configValue.type() != null && !configValue.type().isBlank()) {
+            params.addProperty("type", configValue.type());
+        }
+        params.add("value", configValue == null ? com.google.gson.JsonNull.INSTANCE
+                : new com.google.gson.Gson().toJsonTree(configValue.value()));
         return request("session/set_config_option", params).thenAccept(result -> {
             publishConfigOptions(result);
             listener.onStatus("Configuration updated");
@@ -406,7 +411,7 @@ public final class AcpClient implements AgentClient, JsonRpcHandler {
     /** Delivers option state returned by session/new and session/set_config_option like a normal update. */
     private void publishConfigOptions(JsonObject result) {
         if (result != null && result.has("configOptions") && result.get("configOptions").isJsonArray()) {
-            listener.onSessionUpdate(new AcpSessionUpdate(sessionId, "config_option_update", result.deepCopy()));
+            listener.onSessionUpdate(new SessionUpdate(sessionId, "config_option_update", javaMap(result)));
         }
     }
 
@@ -508,7 +513,7 @@ public final class AcpClient implements AgentClient, JsonRpcHandler {
             return;
         }
         String kind = string(update, "sessionUpdate");
-        listener.onSessionUpdate(new AcpSessionUpdate(updateSessionId, kind, update.deepCopy()));
+        listener.onSessionUpdate(new SessionUpdate(updateSessionId, kind, javaMap(update)));
 
         if ("user_message_chunk".equals(kind)) {
             String text = textFrom(update.get("content"));
@@ -554,10 +559,10 @@ public final class AcpClient implements AgentClient, JsonRpcHandler {
         if ("fs/read_text_file".equals(method)) return readTextFile(params);
         if ("fs/write_text_file".equals(method)) return stageFileWrite(params);
         if ("elicitation/create".equals(method)) {
-            return listener.requestElicitation(params.deepCopy()).thenApply(answer -> {
+            return listener.requestElicitation(javaMap(params)).thenApply(answer -> {
                 JsonObject result = new JsonObject();
                 if (answer == null || answer.isEmpty()) result.addProperty("action", "cancel");
-                else { result.addProperty("action", "accept"); result.add("content", answer); }
+                else { result.addProperty("action", "accept"); result.add("content", new com.google.gson.Gson().toJsonTree(answer)); }
                 return result;
             });
         }
@@ -688,6 +693,12 @@ public final class AcpClient implements AgentClient, JsonRpcHandler {
 
     private static JsonObject object(JsonElement element) {
         return element != null && element.isJsonObject() ? element.getAsJsonObject() : new JsonObject();
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Map<String, Object> javaMap(JsonObject object) {
+        Map<String, Object> result = new com.google.gson.Gson().fromJson(object, Map.class);
+        return result == null ? Map.of() : java.util.Collections.unmodifiableMap(new LinkedHashMap<>(result));
     }
 
     private static String string(JsonObject object, String member) {

@@ -89,7 +89,7 @@ final class ConfigOptionsDialog extends Dialog {
     }
 
     private static Editor createEditor(Composite parent, ConfigOption option) {
-        JsonElement value = option.value();
+        JsonElement value = json(option.value());
         if (!option.choices().isEmpty()) return choiceEditor(parent, option, value);
         if (isBoolean(value)) {
             Button checkbox = new Button(parent, SWT.CHECK);
@@ -147,7 +147,7 @@ final class ConfigOptionsDialog extends Dialog {
         try {
             for (Map.Entry<ConfigOption, Editor> entry : editors.entrySet()) {
                 JsonElement newValue = entry.getValue().value();
-                JsonElement oldValue = entry.getKey().value();
+                JsonElement oldValue = json(entry.getKey().value());
                 if (!sameValue(oldValue, newValue)) changedValues.put(entry.getKey(), newValue);
             }
         } catch (RuntimeException error) {
@@ -163,6 +163,10 @@ final class ConfigOptionsDialog extends Dialog {
 
     private static boolean sameValue(JsonElement first, JsonElement second) {
         return first == null ? second == null || second.isJsonNull() : first.equals(second);
+    }
+
+    private static JsonElement json(Object value) {
+        return value instanceof JsonElement element ? element : new com.google.gson.Gson().toJsonTree(value);
     }
 
     private static boolean isBoolean(JsonElement value) {

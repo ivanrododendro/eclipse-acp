@@ -5,8 +5,6 @@ import java.nio.file.Path;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 
-import com.google.gson.JsonElement;
-
 /** UI-facing agent contract; protocol versions must not leak beyond this package. */
 public interface AgentClient extends AutoCloseable {
     CompletableFuture<Void> connect(Path workingDirectory);
@@ -26,12 +24,8 @@ public interface AgentClient extends AutoCloseable {
         return prompt(text);
     }
     /** Changes an option advertised in a {@code config_option_update}. */
-    default CompletableFuture<Void> setConfigOption(String configId, JsonElement value) {
+    default CompletableFuture<Void> setConfigOption(String configId, ConfigValue value) {
         return CompletableFuture.failedFuture(new UnsupportedOperationException("Configuration options are not supported"));
-    }
-    /** Changes an option while preserving the ACP value discriminator when one is required. */
-    default CompletableFuture<Void> setConfigOption(String configId, String valueType, JsonElement value) {
-        return setConfigOption(configId, value);
     }
     void cancel() throws IOException;
     AgentCapabilities capabilities();

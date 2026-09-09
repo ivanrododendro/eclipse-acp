@@ -20,7 +20,7 @@ import org.eclipse.ui.IEditorPart;
 import org.eclipse.ui.IWorkbenchPage;
 import org.eclipse.ui.PlatformUI;
 
-import dev.eclipseacp.client.acp.FileDiff;
+import dev.eclipseacp.client.agent.FileDiff;
 
 /** Applies reviewed ACP replacement diffs atomically enough for workspace use and records one undo step. */
 final class WorkspaceDiffApplier {

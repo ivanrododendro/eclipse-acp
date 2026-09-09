@@ -1,0 +1,88 @@
+@startuml
+title Eclipse ACP — architecture du plug-in
+
+' Vue d'ensemble : les details de chaque classe restent dans le code.
+top to bottom direction
+skinparam componentStyle rectangle
+skinparam shadowing false
+skinparam linetype ortho
+skinparam packageStyle rectangle
+skinparam defaultTextAlignment center
+skinparam ArrowColor #4A5568
+skinparam RectangleBorderColor #4A5568
+skinparam ComponentBorderColor #4A5568
+skinparam PackageBorderColor #718096
+skinparam PackageBackgroundColor #F7FAFC
+
+actor "Utilisateur" as user
+
+rectangle "Eclipse IDE" as eclipse #EDF2F7 {
+  component "Commandes Eclipse\nplugin.xml + OpenAcpChatHandler" as commands #FFFFFF
+  component "ACP Chat\nAcpChatView" as chat #FFFFFF
+  component "Rendu et integration workspace\nGfmRenderer · WorkspaceFileLinks\nWorkspaceFileOpener" as presentation #FFFFFF
+  component "Gestion des changements\nWorkspaceDiffApplier" as changes #FFFFFF
+  database "Workspace Eclipse\nIProject · IFile" as workspace #FFFFFF
+
+  package "Configuration" #FFF8E6 {
+    component "Page de preferences\nAcpPreferencePage" as prefPage #FFFFFF
+    component "Registres\nAgentProviderRegistry · McpServerRegistry" as registries #FFFFFF
+    database "Preferences Eclipse\nIPreferenceStore" as preferenceStore #FFFFFF
+  }
+
+  package "Client independant du protocole" #E6FFFA {
+    component "Service de session\nAcpSessionService" as sessionService #FFFFFF
+    interface "AgentClient" as agentClient
+    interface "AgentListener" as agentListener
+    component "Modeles agent\nsession, outils, permissions, fichiers" as agentModels #FFFFFF
+  }
+
+  package "Adaptateur ACP v1" #F3E8FF {
+    component "AcpClientFactory" as factory #FFFFFF
+    component "AcpClient" as acpClient #FFFFFF
+    component "Transport JSON-RPC 2.0\nJsonRpcConnection" as transport #FFFFFF
+    component "Suivi des outils\nToolCallTracker" as acpEvents #FFFFFF
+  }
+}
+
+cloud "Processus agent ACP\n(ex. vibe-acp)" as agent #F8FAFC
+cloud "Modele IA / fournisseur" as model #F8FAFC
+cloud "Serveurs MCP" as mcp #F8FAFC
+
+user --> commands : ouvre une session
+commands --> chat : projet et contexte
+user --> chat : prompt / decisions
+
+chat --> presentation : transcript Markdown
+presentation --> workspace : liens et ouverture
+
+chat --> changes : revue des diffs
+changes --> workspace : lire / appliquer / annuler
+
+prefPage --> registries : configure
+registries --> preferenceStore : persiste
+chat --> sessionService : actions de session
+sessionService --> registries : fournisseur actif\nserveurs MCP applicables
+
+sessionService --> factory : compose le client ACP
+factory --> agentClient
+factory --> acpClient : implementation
+acpClient ..|> agentClient
+
+acpClient --> acpEvents : statut, texte, permissions\nlectures/ecritures de fichiers
+acpClient --> agentListener : evenements convertis\nvers les modeles agent
+agentListener --> chat : callbacks UI
+acpClient --> transport : requetes / notifications
+transport <--> agent : stdio, JSON-RPC\nun message par ligne
+acpClient --> mcp : declaration des serveurs\npendant session/new
+agent --> model : requetes IA
+
+note right of agentClient
+  L'interface AgentClient isole la vue
+  des versions et details du protocole ACP.
+end note
+
+note right of changes
+  Les modifications de fichiers sont mediees
+  par Eclipse et soumises a revue utilisateur.
+end note
+@enduml

@@ -8,6 +8,9 @@ import java.util.Map;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
+import dev.eclipseacp.client.agent.FileDiff;
+import dev.eclipseacp.client.agent.ToolCall;
+import dev.eclipseacp.client.agent.ToolLocation;
 
 /** Merges ACP {@code tool_call} and {@code tool_call_update} payloads by toolCallId. */
 final class ToolCallTracker {
@@ -24,9 +27,9 @@ final class ToolCallTracker {
                 ? diffs(update.get("content")) : previous == null ? List.of() : previous.diffs();
         List<ToolLocation> locations = update.has("locations") && !update.get("locations").isJsonNull()
                 ? locations(update.get("locations")) : previous == null ? List.of() : previous.locations();
-        JsonElement rawInput = update.has("rawInput") ? update.get("rawInput").deepCopy()
+        Object rawInput = update.has("rawInput") ? javaValue(update.get("rawInput"))
                 : previous == null ? null : previous.rawInput();
-        JsonElement rawOutput = update.has("rawOutput") ? update.get("rawOutput").deepCopy()
+        Object rawOutput = update.has("rawOutput") ? javaValue(update.get("rawOutput"))
                 : previous == null ? null : previous.rawOutput();
         ToolCall merged = new ToolCall(id, title, kind, status, diffs, locations, rawInput, rawOutput);
         calls.put(id, merged);
@@ -73,5 +76,9 @@ final class ToolCallTracker {
 
     private static String string(JsonObject object, String name) {
         return object.has(name) && object.get(name).isJsonPrimitive() ? object.get(name).getAsString() : "";
+    }
+
+    private static Object javaValue(JsonElement value) {
+        return new com.google.gson.Gson().fromJson(value, Object.class);
     }
 }
