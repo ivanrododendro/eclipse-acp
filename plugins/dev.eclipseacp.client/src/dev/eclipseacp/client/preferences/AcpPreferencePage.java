@@ -41,11 +41,22 @@ public final class AcpPreferencePage extends PreferencePage implements IWorkbenc
         hideAgentCommandsInChat.setLayoutData(commandsData);
         enableJdtCliIntegration = new Button(root, SWT.CHECK);
         enableJdtCliIntegration.setText("Enable JDT CLI integration (Experimental)");
-        enableJdtCliIntegration.setToolTipText("Tell ACP agents that the Eclipse JDT CLI Bridge can be invoked with the jdt shell command.");
+        String jdtHelp = "Benefits: gives the agent access to Eclipse JDT semantic information for Java, including references, "
+                + "type hierarchies, implementations, source lookup and diagnostics; prefer it over grep/text search when semantic accuracy matters.\n"
+                + "Prerequisites: JDT CLI Bridge must be installed in this Eclipse instance, and the agent must provide a shell/terminal tool "
+                + "from which the `jdt` command is accessible.";
+        enableJdtCliIntegration.setToolTipText(jdtHelp);
         enableJdtCliIntegration.setSelection(AcpPreferences.store().getBoolean(AcpPreferences.ENABLE_JDT_CLI_INTEGRATION));
         GridData jdtData = new GridData(SWT.FILL, SWT.CENTER, true, false);
         jdtData.horizontalSpan = 2;
         enableJdtCliIntegration.setLayoutData(jdtData);
+        Label jdtDescription = new Label(root, SWT.WRAP);
+        jdtDescription.setText(jdtHelp);
+        GridData jdtDescriptionData = new GridData(SWT.FILL, SWT.TOP, true, false);
+        jdtDescriptionData.horizontalSpan = 2;
+        jdtDescriptionData.widthHint = 700;
+        jdtDescription.horizontalIndent = 20;
+        jdtDescription.setLayoutData(jdtDescriptionData);
         Label mcpLabel = new Label(root, SWT.NONE);
         mcpLabel.setText("MCP servers (JSON; optional providerId/projectName scopes; use ${env:NAME} for secrets):");
         GridData mcpLabelData = new GridData(SWT.FILL, SWT.CENTER, true, false); mcpLabelData.horizontalSpan = 2; mcpLabel.setLayoutData(mcpLabelData);
