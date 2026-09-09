@@ -16,7 +16,7 @@ import com.google.gson.GsonBuilder;
 import com.google.gson.JsonParser;
 
 public final class AcpPreferencePage extends PreferencePage implements IWorkbenchPreferencePage {
-    private List providerList; private Text name; private Text command; private Text arguments; private Text mcpServers; private Button reviewFileChanges; private Button hideAgentCommandsInChat; private AgentProviderRegistry registry;
+    private List providerList; private Text name; private Text command; private Text arguments; private Text mcpServers; private Button reviewFileChanges; private Button hideAgentCommandsInChat; private Button enableJdtCliIntegration; private AgentProviderRegistry registry;
     @Override protected Composite createContents(Composite parent) {
         registry = new AgentProviderRegistry(AcpPreferences.store());
         Composite root = new Composite(parent, SWT.NONE); root.setLayout(new GridLayout(2, false));
@@ -39,6 +39,13 @@ public final class AcpPreferencePage extends PreferencePage implements IWorkbenc
         GridData commandsData = new GridData(SWT.FILL, SWT.CENTER, true, false);
         commandsData.horizontalSpan = 2;
         hideAgentCommandsInChat.setLayoutData(commandsData);
+        enableJdtCliIntegration = new Button(root, SWT.CHECK);
+        enableJdtCliIntegration.setText("Enable JDT CLI integration (Experimental)");
+        enableJdtCliIntegration.setToolTipText("Tell ACP agents that the Eclipse JDT CLI Bridge can be invoked with the jdt shell command.");
+        enableJdtCliIntegration.setSelection(AcpPreferences.store().getBoolean(AcpPreferences.ENABLE_JDT_CLI_INTEGRATION));
+        GridData jdtData = new GridData(SWT.FILL, SWT.CENTER, true, false);
+        jdtData.horizontalSpan = 2;
+        enableJdtCliIntegration.setLayoutData(jdtData);
         Label mcpLabel = new Label(root, SWT.NONE);
         mcpLabel.setText("MCP servers (JSON; optional providerId/projectName scopes; use ${env:NAME} for secrets):");
         GridData mcpLabelData = new GridData(SWT.FILL, SWT.CENTER, true, false); mcpLabelData.horizontalSpan = 2; mcpLabel.setLayoutData(mcpLabelData);
@@ -57,7 +64,8 @@ public final class AcpPreferencePage extends PreferencePage implements IWorkbenc
         } catch (RuntimeException error) { setErrorMessage("MCP servers must be a JSON array: " + error.getMessage()); return false; }
         AcpPreferences.store().setValue(AcpPreferences.MCP_SERVERS_JSON, new GsonBuilder().setPrettyPrinting().create().toJson(JsonParser.parseString(mcpServers.getText().isBlank() ? "[]" : mcpServers.getText())));
         AcpPreferences.store().setValue(AcpPreferences.REVIEW_FILE_CHANGES, reviewFileChanges.getSelection());
-        AcpPreferences.store().setValue(AcpPreferences.HIDE_AGENT_COMMANDS_IN_CHAT, hideAgentCommandsInChat.getSelection()); return true;
+        AcpPreferences.store().setValue(AcpPreferences.HIDE_AGENT_COMMANDS_IN_CHAT, hideAgentCommandsInChat.getSelection());
+        AcpPreferences.store().setValue(AcpPreferences.ENABLE_JDT_CLI_INTEGRATION, enableJdtCliIntegration.getSelection()); return true;
     }
     @Override public void init(IWorkbench workbench) { }
 }
