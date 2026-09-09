@@ -13,4 +13,9 @@ public final class AgentClientFactory {
     public static AgentClient create(AgentProvider provider, AcpListener listener, boolean reviewFileChanges, List<McpServerConfig> servers) {
         return new AcpClient(provider.command(), provider.arguments(), listener, reviewFileChanges, servers);
     }
+    public static AgentClient create(AgentProvider provider, AcpListener listener, boolean reviewFileChanges,
+            List<McpServerConfig> servers, boolean enableJdtCliIntegration) {
+        AgentClient client = new AcpClient(provider.command(), provider.arguments(), listener, reviewFileChanges, servers);
+        return enableJdtCliIntegration ? new JdtCliAwareAgentClient(client) : client;
+    }
 }
