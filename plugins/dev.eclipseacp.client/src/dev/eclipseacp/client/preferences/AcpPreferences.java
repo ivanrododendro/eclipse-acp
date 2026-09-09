@@ -16,6 +16,8 @@ public final class AcpPreferences {
     public static final String REVIEW_FILE_CHANGES = "reviewFileChanges";
     /** When enabled, agent tool calls are kept out of the chat transcript. Enabled by default. */
     public static final String HIDE_AGENT_COMMANDS_IN_CHAT = "hideAgentCommandsInChat";
+    /** When enabled, the first prompt tells the agent that Eclipse JDT CLI Bridge is available via shell. */
+    public static final String ENABLE_JDT_CLI_INTEGRATION = "enableJdtCliIntegration";
     /** JSON array of MCP server declarations; secrets should use environment-variable expansion, not literals. */
     public static final String MCP_SERVERS_JSON = "mcpServersJson";
 
