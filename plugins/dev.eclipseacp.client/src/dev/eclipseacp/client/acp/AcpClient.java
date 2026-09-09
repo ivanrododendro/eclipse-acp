@@ -13,6 +13,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Supplier;
 
 import com.google.gson.JsonArray;
@@ -42,6 +43,8 @@ public final class AcpClient implements AgentClient, JsonRpcHandler {
     private volatile AgentCapabilities capabilities = AgentCapabilities.NONE;
     private volatile List<AuthMethod> authenticationMethods = List.of();
     private final ToolCallTracker toolCalls = new ToolCallTracker();
+    private volatile long promptSentAtNanos;
+    private final AtomicBoolean firstAgentChunkReceived = new AtomicBoolean();
 
     public AcpClient(String command, String arguments, AcpListener listener) {
         this(command, arguments, listener, false);
@@ -246,12 +249,18 @@ public final class AcpClient implements AgentClient, JsonRpcHandler {
         params.add("prompt", prompt);
 
         if (announce) listener.onStatus("Agent working…");
+        long sentAt = System.nanoTime();
+        promptSentAtNanos = sentAt;
+        firstAgentChunkReceived.set(false);
         AcpLog.info("Sending ACP request: method='session/prompt', sessionId='" + sessionId
                 + "', textLength=" + text.length());
         return connection.request("session/prompt", params)
                 .thenAccept(result -> {
+                    long completedAt = System.nanoTime();
                     AcpLog.info("ACP request completed: method='session/prompt', sessionId='" + sessionId
-                            + "', stopReason='" + stopReason(result) + "'");
+                            + "', stopReason='" + stopReason(result) + "', totalMs="
+                            + elapsedMillis(sentAt, completedAt));
+                    listener.onPromptCompleted(sentAt, completedAt);
                     if (announce) listener.onStatus(stopReason(result));
                 })
                 .whenComplete((ignored, error) -> {
@@ -488,10 +497,13 @@ public final class AcpClient implements AgentClient, JsonRpcHandler {
         }
         JsonObject update = object(params.get("update"));
         String updateSessionId = string(params, "sessionId");
-        // A live connection is attached to exactly one session in this client.  Once
+        // A live connection is attached to exactly one session in this client. Once
         // session/close completes, sessionId is null, so late updates from the retired
-        // session must not leak into the conversation that is about to be loaded.
-        if (connection != null && !Objects.equals(sessionId, updateSessionId)) {
+        // session must not leak into the conversation that is about to be loaded. Some
+        // agents omit sessionId while replaying session/load, however; those updates belong
+        // to the sole active session and must still reach the transcript.
+        if (connection != null && (sessionId == null
+                || (!updateSessionId.isBlank() && !Objects.equals(sessionId, updateSessionId)))) {
             AcpLog.info("Ignoring ACP update for inactive sessionId='" + updateSessionId + "'");
             return;
         }
@@ -504,6 +516,13 @@ public final class AcpClient implements AgentClient, JsonRpcHandler {
         } else if ("agent_message_chunk".equals(kind)) {
             String text = textFrom(update.get("content"));
             if (!text.isEmpty()) {
+                long receivedAt = System.nanoTime();
+                long sentAt = promptSentAtNanos;
+                if (sentAt != 0 && firstAgentChunkReceived.compareAndSet(false, true)) {
+                    AcpLog.info("ACP first agent_message_chunk received: sessionId='" + updateSessionId
+                            + "', afterSendMs=" + elapsedMillis(sentAt, receivedAt));
+                    listener.onPromptFirstAgentChunk(sentAt, receivedAt);
+                }
                 listener.onAgentText(text);
             }
         } else if ("agent_thought_chunk".equals(kind)) {
@@ -639,6 +658,10 @@ public final class AcpClient implements AgentClient, JsonRpcHandler {
     private static String stopReason(JsonObject result) {
         String reason = string(result, "stopReason");
         return reason.isBlank() ? "Ready" : "Ready (" + reason + ")";
+    }
+
+    private static long elapsedMillis(long startedAt, long completedAt) {
+        return TimeUnit.NANOSECONDS.toMillis(completedAt - startedAt);
     }
 
     private static String textFrom(JsonElement element) {

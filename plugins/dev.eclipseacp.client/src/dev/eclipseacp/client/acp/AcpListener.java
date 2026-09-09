@@ -10,6 +10,16 @@ import dev.eclipseacp.client.agent.AuthMethod;
 public interface AcpListener {
     void onAgentText(String text);
 
+    /** Timing marker emitted when the first streamed agent text reaches the ACP client. */
+    default void onPromptFirstAgentChunk(long sentAtNanos, long receivedAtNanos) {
+        // Optional for clients that do not display prompt timing.
+    }
+
+    /** Timing marker emitted when the ACP session/prompt request has completed. */
+    default void onPromptCompleted(long sentAtNanos, long completedAtNanos) {
+        // Optional for clients that do not display prompt timing.
+    }
+
     /** Text from a user-message update, normally emitted while an existing session is replayed. */
     default void onUserText(String text) {
         // Optional: ordinary prompts are already rendered by the client UI.

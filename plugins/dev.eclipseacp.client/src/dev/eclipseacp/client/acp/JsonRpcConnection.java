@@ -45,6 +45,7 @@ final class JsonRpcConnection implements Closeable {
     }
 
     CompletableFuture<JsonObject> request(String method, JsonObject params) {
+        long startedAt = System.nanoTime();
         long id = nextId.getAndIncrement();
         AcpLog.info("JSON-RPC request sent: id=" + id + ", method='" + method + "'");
         JsonObject message = envelope(method, params);
@@ -54,6 +55,8 @@ final class JsonRpcConnection implements Closeable {
         pending.put(Long.toString(id), future);
         try {
             send(message);
+            AcpLog.info("JSON-RPC request flushed: id=" + id + ", method='" + method
+                    + "', writeMs=" + elapsedMillis(startedAt, System.nanoTime()));
         } catch (IOException exception) {
             AcpLog.error("JSON-RPC request could not be written: id=" + id + ", method='" + method + "'", exception);
             pending.remove(Long.toString(id));
@@ -196,6 +199,10 @@ final class JsonRpcConnection implements Closeable {
         String method = message.has("method") ? message.get("method").getAsString() : "<response>";
         String id = message.has("id") ? ", id=" + key(message.get("id")) : "";
         return "method='" + method + "'" + id;
+    }
+
+    private static long elapsedMillis(long startedAt, long completedAt) {
+        return java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(completedAt - startedAt);
     }
 
     private void failPending(Throwable error) {

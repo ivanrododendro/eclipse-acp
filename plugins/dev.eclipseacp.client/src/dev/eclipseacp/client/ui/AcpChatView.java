@@ -41,6 +41,7 @@ import org.eclipse.ui.part.ViewPart;
 import org.eclipse.ui.dialogs.ListDialog;
 
 import dev.eclipseacp.client.acp.AcpListener;
+import dev.eclipseacp.client.AcpLog;
 import dev.eclipseacp.client.acp.FileDiff;
 import dev.eclipseacp.client.acp.FileReadRequest;
 import dev.eclipseacp.client.acp.FileWriteRequest;
@@ -93,6 +94,10 @@ public final class AcpChatView extends ViewPart implements AcpListener {
         private final String providerId;
         private final boolean reviewFileChanges;
         private final StringBuilder transcriptMarkdown = new StringBuilder();
+        private final StringBuilder pendingAgentText = new StringBuilder();
+        private boolean agentRenderScheduled;
+        private long firstAgentChunkSentAtNanos;
+        private long firstAgentChunkReceivedAtNanos;
         private AgentClient client;
         private boolean agentMessageOpen;
         private boolean acceptingRestoredTranscript;
@@ -372,7 +377,8 @@ public final class AcpChatView extends ViewPart implements AcpListener {
             }
             session.persistedSessionId = newClient.sessionId();
             if (restored) {
-                session.acceptingRestoredTranscript = false;
+                // session/load may finish before SWT processes its replayed message updates.
+                // Keep accepting them until the user starts the next prompt.
                 setStatus(session, "Session restored");
             }
             updateControls();
@@ -554,7 +560,8 @@ public final class AcpChatView extends ViewPart implements AcpListener {
                     onError(session, "Could not open the selected session", unwrap(operationError));
                 } else {
                     session.persistedSessionId = client.sessionId();
-                    session.acceptingRestoredTranscript = false;
+                    // Keep this true until sendPrompt starts a new turn: session/load updates
+                    // can be queued on the UI thread after its JSON-RPC response arrives.
                     setStatus(session, restoredSessionId == null ? "New session ready" : "Session restored");
                 }
                 updateControls();
@@ -579,7 +586,20 @@ public final class AcpChatView extends ViewPart implements AcpListener {
 
     private AcpListener listenerFor(ChatSession session) {
         return new AcpListener() {
-            @Override public void onAgentText(String text) { ui(() -> appendAgentText(session, text)); }
+            @Override public void onAgentText(String text) { queueAgentText(session, text); }
+            @Override public void onPromptFirstAgentChunk(long sentAtNanos, long receivedAtNanos) {
+                synchronized (session) {
+                    session.firstAgentChunkSentAtNanos = sentAtNanos;
+                    session.firstAgentChunkReceivedAtNanos = receivedAtNanos;
+                }
+            }
+            @Override public void onPromptCompleted(long sentAtNanos, long completedAtNanos) {
+                ui(() -> {
+                    flushQueuedAgentText(session);
+                    append(session, "\n> **Timing:** session/prompt completed in "
+                            + elapsedMillis(sentAtNanos, completedAtNanos) + " ms\n\n");
+                });
+            }
             @Override public void onUserText(String text) { ui(() -> appendRestoredUserText(session, text)); }
             @Override public void onStatus(String value) { setStatus(session, value); }
             @Override public void onError(String message, Throwable error) { AcpChatView.this.onError(session, message, error); }
@@ -591,6 +611,7 @@ public final class AcpChatView extends ViewPart implements AcpListener {
             }
             @Override public void onToolCall(ToolCall toolCall) { ui(() -> updateToolCall(session, toolCall)); }
             @Override public void onSessionUpdate(dev.eclipseacp.client.acp.AcpSessionUpdate update) {
+                if ("agent_message_chunk".equals(update.kind()) || "user_message_chunk".equals(update.kind())) return;
                 ui(() -> renderExperienceUpdate(session, update));
             }
             @Override public CompletableFuture<String> requestAuthentication(List<AuthMethod> methods) {
@@ -1152,6 +1173,40 @@ public final class AcpChatView extends ViewPart implements AcpListener {
         append(session, text);
     }
 
+    /** Coalesces high-frequency ACP chunks so the SWT/WebView queue cannot grow unbounded. */
+    private void queueAgentText(ChatSession session, String text) {
+        if (session == null || text == null || text.isEmpty()) return;
+        synchronized (session) {
+            session.pendingAgentText.append(text);
+            if (session.agentRenderScheduled) return;
+            session.agentRenderScheduled = true;
+        }
+        ui(() -> getSite().getShell().getDisplay().timerExec(40, () -> flushQueuedAgentText(session)));
+    }
+
+    /** Runs on the SWT thread, either after the batching interval or at prompt completion. */
+    private void flushQueuedAgentText(ChatSession session) {
+        String text;
+        long sentAt;
+        long receivedAt;
+        synchronized (session) {
+            text = session.pendingAgentText.toString();
+            session.pendingAgentText.setLength(0);
+            session.agentRenderScheduled = false;
+            sentAt = session.firstAgentChunkSentAtNanos;
+            receivedAt = session.firstAgentChunkReceivedAtNanos;
+            session.firstAgentChunkSentAtNanos = 0;
+            session.firstAgentChunkReceivedAtNanos = 0;
+        }
+        if (!text.isEmpty()) appendAgentText(session, text);
+        if (receivedAt != 0) {
+            long uiAt = System.nanoTime();
+            AcpLog.info("ACP first agent chunk rendered on SWT UI thread: session='" + session.label
+                    + "', receiveToUiMs=" + elapsedMillis(receivedAt, uiAt)
+                    + ", sendToUiMs=" + elapsedMillis(sentAt, uiAt));
+        }
+    }
+
     private void renderTranscript() {
         if (transcript == null || transcript.isDisposed()) return;
         transcript.setText(chatDocument(activeSession == null ? "" : activeSession.transcriptMarkdown.toString()));
@@ -1334,6 +1389,10 @@ public final class AcpChatView extends ViewPart implements AcpListener {
                 action.run();
             }
         });
+    }
+
+    private static long elapsedMillis(long startedAt, long completedAt) {
+        return java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(completedAt - startedAt);
     }
 
     private static Throwable unwrap(Throwable error) {
