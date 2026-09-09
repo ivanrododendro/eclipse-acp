@@ -101,10 +101,12 @@ public final class AcpChatView extends ViewPart implements AcpListener {
         private final Map<String, List<FileDiff>> renderedToolDiffs = new LinkedHashMap<>();
         private final WorkspaceFileLinks fileLinks;
         private final Map<String, FileDiff> pendingChanges = new LinkedHashMap<>();
-        private final WorkspaceDiffApplier diffApplier = new WorkspaceDiffApplier();
+        private WorkspaceDiffApplier diffApplier = new WorkspaceDiffApplier();
         private final List<PromptAttachment> attachments = new ArrayList<>();
         private final Map<String, String> commands = new LinkedHashMap<>();
         private final Map<String, ConfigOption> configOptions = new LinkedHashMap<>();
+        /** A session transition closes the old ACP session before attaching another one. */
+        private boolean switching;
 
         private String persistedSessionId;
         private String initialPrompt;
@@ -404,7 +406,7 @@ public final class AcpChatView extends ViewPart implements AcpListener {
     private void sendPrompt() {
         String text = prompt.getText().trim();
         ChatSession session = activeSession;
-        if (text.isEmpty() || session == null || session.client == null || session.agentMessageOpen) {
+        if (text.isEmpty() || session == null || session.client == null || session.agentMessageOpen || session.switching) {
             return;
         }
         prompt.setText("");
@@ -443,7 +445,7 @@ public final class AcpChatView extends ViewPart implements AcpListener {
     }
 
     private void cancel() {
-        if (activeSession == null || activeSession.client == null) {
+        if (activeSession == null || activeSession.client == null || activeSession.switching) {
             return;
         }
         try {
@@ -454,13 +456,8 @@ public final class AcpChatView extends ViewPart implements AcpListener {
     }
 
     private void openNewSessionForActiveProject() {
-        ChatSession previous = activeSession;
-        if (previous == null) return;
-        AgentProvider provider = providerFor(previous.providerId);
-        ChatSession replacement = new ChatSession(previous.project, previous.project.getName(), provider.id(),
-                AcpPreferences.store().getBoolean(AcpPreferences.REVIEW_FILE_CHANGES));
-        replaceSession(previous, replacement);
-        connect(replacement, provider, null, false, provider.name());
+        if (activeSession == null) return;
+        switchSession(activeSession, null);
     }
 
     private void chooseAgentSession() {
@@ -519,12 +516,65 @@ public final class AcpChatView extends ViewPart implements AcpListener {
     }
 
     private void restoreListedSession(ChatSession session, SessionInfo selected) {
-        AgentProvider provider = providerFor(session.providerId);
-        ChatSession restored = new ChatSession(session.project, session.project.getName(), provider.id(),
-                AcpPreferences.store().getBoolean(AcpPreferences.REVIEW_FILE_CHANGES));
-        restored.acceptingRestoredTranscript = true;
-        replaceSession(session, restored);
-        connect(restored, provider, selected.id(), true, provider.name());
+        switchSession(session, selected.id());
+    }
+
+    /**
+     * Switches conversations on one initialized ACP transport.  session/close is sent before
+     * session/new or session/load, so a prior session cannot remain active accidentally.
+     */
+    private void switchSession(ChatSession session, String restoredSessionId) {
+        if (session == null || session.client == null || session.switching) return;
+        AgentClient client = session.client;
+        session.switching = true;
+        session.agentMessageOpen = false;
+        setStatus(session, "Closing current session…");
+        updateControls();
+        client.closeSession().whenComplete((ignored, closeError) -> ui(() -> {
+            if (session.client != client || !session.switching) return;
+            if (closeError != null) {
+                session.switching = false;
+                onError(session, "Could not close the current session", unwrap(closeError));
+                updateControls();
+                return;
+            }
+            resetConversation(session);
+            renderTranscript();
+            boolean replayTranscript = restoredSessionId != null && client.capabilities().loadSession();
+            session.acceptingRestoredTranscript = replayTranscript;
+            CompletableFuture<Void> operation = restoredSessionId == null
+                    ? client.startNewSession(session.project.getLocation().toFile().toPath())
+                    : replayTranscript
+                            ? client.loadSession(restoredSessionId, session.project.getLocation().toFile().toPath())
+                            : client.resumeSession(restoredSessionId, session.project.getLocation().toFile().toPath());
+            operation.whenComplete((result, operationError) -> ui(() -> {
+                if (session.client != client || !session.switching) return;
+                session.switching = false;
+                if (operationError != null) {
+                    onError(session, "Could not open the selected session", unwrap(operationError));
+                } else {
+                    session.persistedSessionId = client.sessionId();
+                    session.acceptingRestoredTranscript = false;
+                    setStatus(session, restoredSessionId == null ? "New session ready" : "Session restored");
+                }
+                updateControls();
+            }));
+        }));
+    }
+
+    private static void resetConversation(ChatSession session) {
+        session.transcriptMarkdown.setLength(0);
+        session.agentMessageOpen = false;
+        session.acceptingRestoredTranscript = false;
+        session.restoredAgentMessageOpen = false;
+        session.toolCalls.clear();
+        session.renderedToolDiffs.clear();
+        session.pendingChanges.clear();
+        session.attachments.clear();
+        session.commands.clear();
+        session.configOptions.clear();
+        session.persistedSessionId = null;
+        session.diffApplier = new WorkspaceDiffApplier();
     }
 
     private AcpListener listenerFor(ChatSession session) {
@@ -680,7 +730,8 @@ public final class AcpChatView extends ViewPart implements AcpListener {
         }
         if (selected >= 0) modelSelector.select(selected);
         else if (modelSelector.getItemCount() > 0) modelSelector.select(0);
-        modelSelector.setEnabled(activeSession != null && activeSession.client != null && !activeSession.agentMessageOpen);
+        modelSelector.setEnabled(activeSession != null && activeSession.client != null && !activeSession.agentMessageOpen
+                && !activeSession.switching);
         modelSelector.setToolTipText(option.description().isBlank() ? "Model for the active ACP session" : option.description());
     }
 
@@ -697,7 +748,8 @@ public final class AcpChatView extends ViewPart implements AcpListener {
             selector.add(choice.label());
             if (choice.value().equals(current)) selector.select(selector.getItemCount() - 1);
         }
-        selector.setEnabled(activeSession != null && activeSession.client != null && !activeSession.agentMessageOpen);
+        selector.setEnabled(activeSession != null && activeSession.client != null && !activeSession.agentMessageOpen
+                && !activeSession.switching);
         selector.setToolTipText(option.description().isBlank() ? defaultTooltip : option.description());
     }
 
@@ -1149,7 +1201,7 @@ public final class AcpChatView extends ViewPart implements AcpListener {
 
     private void updateControls() {
         if (sendButton == null || sendButton.isDisposed()) return;
-        boolean connected = activeSession != null && activeSession.client != null;
+        boolean connected = activeSession != null && activeSession.client != null && !activeSession.switching;
         sendButton.setEnabled(connected && !activeSession.agentMessageOpen && !prompt.getText().isBlank());
         boolean busy = connected && activeSession.agentMessageOpen;
         showControl(sendButton, !busy);

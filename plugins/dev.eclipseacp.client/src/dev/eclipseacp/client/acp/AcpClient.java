@@ -63,6 +63,17 @@ public final class AcpClient implements AgentClient, JsonRpcHandler {
     }
 
     @Override
+    public CompletableFuture<Void> startNewSession(Path workingDirectory) {
+        if (connection == null) {
+            return CompletableFuture.failedFuture(new IllegalStateException("ACP connection is not connected"));
+        }
+        if (sessionId != null) {
+            return CompletableFuture.failedFuture(new IllegalStateException("Close the active ACP session before opening another one"));
+        }
+        return establishSession(() -> newSession(workingDirectory).thenAccept(result -> { }));
+    }
+
+    @Override
     public CompletableFuture<Void> restoreSession(String restoredSessionId, Path workingDirectory) {
         if (restoredSessionId == null || restoredSessionId.isBlank()) {
             return CompletableFuture.failedFuture(new IllegalArgumentException("The ACP session ID is empty"));
@@ -406,7 +417,10 @@ public final class AcpClient implements AgentClient, JsonRpcHandler {
         if (!capabilities.loadSession()) {
             return CompletableFuture.failedFuture(new UnsupportedOperationException("The ACP agent does not support session/load"));
         }
-        return attachSession("session/load", loadedSessionId, workingDirectory);
+        if (sessionId != null) {
+            return CompletableFuture.failedFuture(new IllegalStateException("Close the active ACP session before loading another one"));
+        }
+        return establishSession(() -> attachSession("session/load", loadedSessionId, workingDirectory));
     }
 
     @Override
@@ -414,7 +428,10 @@ public final class AcpClient implements AgentClient, JsonRpcHandler {
         if (!capabilities.sessionResume()) {
             return CompletableFuture.failedFuture(new UnsupportedOperationException("The ACP agent does not support session/resume"));
         }
-        return attachSession("session/resume", resumedSessionId, workingDirectory);
+        if (sessionId != null) {
+            return CompletableFuture.failedFuture(new IllegalStateException("Close the active ACP session before resuming another one"));
+        }
+        return establishSession(() -> attachSession("session/resume", resumedSessionId, workingDirectory));
     }
 
     private CompletableFuture<Void> attachSession(String method, String restoredSessionId, Path workingDirectory) {
@@ -434,10 +451,23 @@ public final class AcpClient implements AgentClient, JsonRpcHandler {
 
     @Override
     public CompletableFuture<Void> closeSession() {
-        if (sessionId == null || connection == null || !capabilities.sessionClose()) return CompletableFuture.completedFuture(null);
+        if (sessionId == null || connection == null) return CompletableFuture.completedFuture(null);
+        String closingSessionId = sessionId;
+        if (!capabilities.sessionClose()) {
+            AcpLog.info("ACP agent does not advertise session/close; detaching from sessionId='" + closingSessionId + "'");
+            sessionId = null;
+            toolCalls.clear();
+            return CompletableFuture.completedFuture(null);
+        }
         JsonObject params = new JsonObject();
-        params.addProperty("sessionId", sessionId);
-        return connection.request("session/close", params).thenAccept(ignored -> listener.onStatus("Session closed"));
+        params.addProperty("sessionId", closingSessionId);
+        return connection.request("session/close", params).thenAccept(ignored -> {
+            if (Objects.equals(sessionId, closingSessionId)) {
+                sessionId = null;
+                toolCalls.clear();
+            }
+            listener.onStatus("Session closed");
+        });
     }
 
     @Override
@@ -457,8 +487,16 @@ public final class AcpClient implements AgentClient, JsonRpcHandler {
             return;
         }
         JsonObject update = object(params.get("update"));
+        String updateSessionId = string(params, "sessionId");
+        // A live connection is attached to exactly one session in this client.  Once
+        // session/close completes, sessionId is null, so late updates from the retired
+        // session must not leak into the conversation that is about to be loaded.
+        if (connection != null && !Objects.equals(sessionId, updateSessionId)) {
+            AcpLog.info("Ignoring ACP update for inactive sessionId='" + updateSessionId + "'");
+            return;
+        }
         String kind = string(update, "sessionUpdate");
-        listener.onSessionUpdate(new AcpSessionUpdate(string(params, "sessionId"), kind, update.deepCopy()));
+        listener.onSessionUpdate(new AcpSessionUpdate(updateSessionId, kind, update.deepCopy()));
 
         if ("user_message_chunk".equals(kind)) {
             String text = textFrom(update.get("content"));
@@ -484,6 +522,16 @@ public final class AcpClient implements AgentClient, JsonRpcHandler {
     @Override
     public CompletableFuture<JsonElement> onRequest(String method, JsonObject params) {
         AcpLog.info("ACP server request received: method='" + method + "'");
+        if (isForRetiredSession(params)) {
+            AcpLog.info("Rejecting ACP request for inactive sessionId='" + string(params, "sessionId") + "'");
+            if ("session/request_permission".equals(method)) {
+                return CompletableFuture.completedFuture(cancelledPermissionResult());
+            }
+            if ("elicitation/create".equals(method)) {
+                return CompletableFuture.completedFuture(cancelledElicitationResult());
+            }
+            return CompletableFuture.failedFuture(new IllegalStateException("The ACP session is no longer active"));
+        }
         if ("fs/read_text_file".equals(method)) return readTextFile(params);
         if ("fs/write_text_file".equals(method)) return stageFileWrite(params);
         if ("elicitation/create".equals(method)) {
@@ -520,17 +568,35 @@ public final class AcpClient implements AgentClient, JsonRpcHandler {
         }
 
         return listener.requestPermission(new PermissionRequest(title, permissionToolCall, options)).thenApply(optionId -> {
-            JsonObject outcome = new JsonObject();
-            if (optionId == null) {
-                outcome.addProperty("outcome", "cancelled");
-            } else {
-                outcome.addProperty("outcome", "selected");
-                outcome.addProperty("optionId", optionId);
-            }
-            JsonObject result = new JsonObject();
-            result.add("outcome", outcome);
-            return result;
+            return permissionResult(optionId);
         });
+    }
+
+    private boolean isForRetiredSession(JsonObject params) {
+        return connection != null && params.has("sessionId") && !Objects.equals(sessionId, string(params, "sessionId"));
+    }
+
+    private static JsonObject cancelledPermissionResult() {
+        return permissionResult(null);
+    }
+
+    private static JsonObject permissionResult(String optionId) {
+        JsonObject outcome = new JsonObject();
+        if (optionId == null) {
+            outcome.addProperty("outcome", "cancelled");
+        } else {
+            outcome.addProperty("outcome", "selected");
+            outcome.addProperty("optionId", optionId);
+        }
+        JsonObject result = new JsonObject();
+        result.add("outcome", outcome);
+        return result;
+    }
+
+    private static JsonObject cancelledElicitationResult() {
+        JsonObject result = new JsonObject();
+        result.addProperty("action", "cancel");
+        return result;
     }
 
     private CompletableFuture<JsonElement> readTextFile(JsonObject params) {

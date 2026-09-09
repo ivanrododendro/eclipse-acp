@@ -13,7 +13,7 @@ import com.google.gson.JsonObject;
 final class ToolCallTracker {
     private final Map<String, ToolCall> calls = new LinkedHashMap<>();
 
-    ToolCall accept(JsonObject update) {
+    synchronized ToolCall accept(JsonObject update) {
         String id = string(update, "toolCallId");
         if (id.isBlank()) return null;
         ToolCall previous = calls.get(id);
@@ -31,6 +31,10 @@ final class ToolCallTracker {
         ToolCall merged = new ToolCall(id, title, kind, status, diffs, locations, rawInput, rawOutput);
         calls.put(id, merged);
         return merged;
+    }
+
+    synchronized void clear() {
+        calls.clear();
     }
 
     private static List<FileDiff> diffs(JsonElement content) {

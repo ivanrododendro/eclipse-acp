@@ -10,6 +10,10 @@ import com.google.gson.JsonElement;
 /** UI-facing agent contract; protocol versions must not leak beyond this package. */
 public interface AgentClient extends AutoCloseable {
     CompletableFuture<Void> connect(Path workingDirectory);
+    /** Opens another session on this already initialized ACP connection. */
+    default CompletableFuture<Void> startNewSession(Path workingDirectory) {
+        return CompletableFuture.failedFuture(new UnsupportedOperationException("Opening another session is not supported"));
+    }
     /** Connect to an already persisted agent-side session without creating a new one. */
     default CompletableFuture<Void> restoreSession(String sessionId, Path workingDirectory) {
         return CompletableFuture.failedFuture(new UnsupportedOperationException("Session restore is not supported"));
