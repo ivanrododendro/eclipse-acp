@@ -30,8 +30,11 @@ import dev.eclipseacp.client.agent.PermissionRequest;
 import dev.eclipseacp.client.agent.SessionInfo;
 import dev.eclipseacp.client.agent.SessionPage;
 import dev.eclipseacp.client.agent.PromptAttachment;
-import dev.eclipseacp.client.agent.SessionUpdate;
 import dev.eclipseacp.client.agent.ToolCall;
+import dev.eclipseacp.client.agent.AgentCommand;
+import dev.eclipseacp.client.agent.ConfigOption;
+import dev.eclipseacp.client.agent.ElicitationRequest;
+import dev.eclipseacp.client.agent.Usage;
 import dev.eclipseacp.client.mcp.McpServerConfig;
 
 /** ACP v1 adapter. The rest of the plug-in talks to AgentClient only. */
@@ -432,10 +435,10 @@ public final class AcpClient implements AgentClient, JsonRpcHandler {
         });
     }
 
-    /** Delivers option state returned by session/new and session/set_config_option like a normal update. */
+    /** Delivers option state returned by session/new and session/set_config_option. */
     private void publishConfigOptions(JsonObject result) {
         if (result != null && result.has("configOptions") && result.get("configOptions").isJsonArray()) {
-            listener.onSessionUpdate(new SessionUpdate(sessionId, "config_option_update", javaMap(result)));
+            listener.onConfigOptions(configOptions(result.getAsJsonArray("configOptions")));
         }
     }
 
@@ -537,7 +540,18 @@ public final class AcpClient implements AgentClient, JsonRpcHandler {
             return;
         }
         String kind = string(update, "sessionUpdate");
-        listener.onSessionUpdate(new SessionUpdate(updateSessionId, kind, javaMap(update)));
+
+        if ("available_commands_update".equals(kind)) {
+            listener.onAvailableCommands(commands(update));
+        } else if ("config_option_update".equals(kind)) {
+            JsonElement options = update.has("configOptions") ? update.get("configOptions") : update;
+            listener.onConfigOptions(options != null && options.isJsonArray() ? configOptions(options.getAsJsonArray())
+                    : options != null && options.isJsonObject() ? configOptions(options.getAsJsonObject()) : List.of());
+        } else if ("usage_update".equals(kind)) {
+            listener.onUsage(usage(update));
+        } else if ("terminal_output".equals(kind) || "terminal_output_update".equals(kind)) {
+            listener.onTerminalOutput(nonBlank(string(update, "output"), string(update, "text")));
+        }
 
         if ("user_message_chunk".equals(kind)) {
             String text = textFrom(update.get("content"));
@@ -583,10 +597,12 @@ public final class AcpClient implements AgentClient, JsonRpcHandler {
         if ("fs/read_text_file".equals(method)) return readTextFile(params);
         if ("fs/write_text_file".equals(method)) return stageFileWrite(params);
         if ("elicitation/create".equals(method)) {
-            return listener.requestElicitation(javaMap(params)).thenApply(answer -> {
+            ElicitationRequest request = new ElicitationRequest(nonBlank(string(params, "title"), "Agent input required"),
+                    nonBlank(string(params, "message"), string(params, "title")));
+            return listener.requestElicitation(request).thenApply(answer -> {
                 JsonObject result = new JsonObject();
-                if (answer == null || answer.isEmpty()) result.addProperty("action", "cancel");
-                else { result.addProperty("action", "accept"); result.add("content", new com.google.gson.Gson().toJsonTree(answer)); }
+                if (answer == null) result.addProperty("action", "cancel");
+                else { result.addProperty("action", "accept"); result.addProperty("content", answer); }
                 return result;
             });
         }
@@ -698,10 +714,59 @@ public final class AcpClient implements AgentClient, JsonRpcHandler {
         return element != null && element.isJsonObject() ? element.getAsJsonObject() : new JsonObject();
     }
 
-    @SuppressWarnings("unchecked")
-    private static Map<String, Object> javaMap(JsonObject object) {
-        Map<String, Object> result = new com.google.gson.Gson().fromJson(object, Map.class);
-        return result == null ? Map.of() : java.util.Collections.unmodifiableMap(new LinkedHashMap<>(result));
+    private static List<AgentCommand> commands(JsonObject update) {
+        JsonElement entries = update.has("availableCommands") ? update.get("availableCommands") : update.get("commands");
+        if (entries == null || !entries.isJsonArray()) return List.of();
+        List<AgentCommand> commands = new ArrayList<>();
+        for (JsonElement entry : entries.getAsJsonArray()) {
+            JsonObject command = object(entry);
+            String name = nonBlank(string(command, "name"), string(command, "command"));
+            if (!name.isBlank()) commands.add(new AgentCommand(name, string(command, "description")));
+        }
+        return List.copyOf(commands);
+    }
+
+    private static List<ConfigOption> configOptions(JsonArray options) {
+        List<ConfigOption> converted = new ArrayList<>();
+        for (JsonElement option : options) converted.addAll(configOptions(object(option)));
+        return List.copyOf(converted);
+    }
+
+    private static List<ConfigOption> configOptions(JsonObject option) {
+        String id = nonBlank(string(option, "configId"), string(option, "id"));
+        if (id.isBlank()) return List.of();
+        JsonElement value = option.has("currentValue") ? option.get("currentValue") : option.get("value");
+        List<ConfigOption.Choice> choices = new ArrayList<>();
+        if (option.has("options") && option.get("options").isJsonArray()) for (JsonElement raw : option.getAsJsonArray("options")) {
+            if (raw.isJsonPrimitive()) {
+                String choice = raw.getAsString(); choices.add(new ConfigOption.Choice(choice, choice, ""));
+            } else {
+                JsonObject choice = object(raw);
+                String choiceValue = string(choice, "value");
+                if (!choiceValue.isBlank()) choices.add(new ConfigOption.Choice(choiceValue,
+                        nonBlank(string(choice, "label"), nonBlank(string(choice, "name"), choiceValue)), string(choice, "description")));
+            }
+        }
+        return List.of(new ConfigOption(id, nonBlank(string(option, "name"), id), string(option, "description"),
+                string(option, "category"), new ConfigValue(null, javaValue(value)), List.copyOf(choices)));
+    }
+
+    private static Usage usage(JsonObject update) {
+        return new Usage(longValue(update, "inputTokens"), longValue(update, "outputTokens"),
+                longValue(update, "totalTokens"), string(update, "cost"));
+    }
+
+    private static Long longValue(JsonObject object, String name) {
+        return object.has(name) && object.get(name).isJsonPrimitive() && object.get(name).getAsJsonPrimitive().isNumber()
+                ? object.get(name).getAsLong() : null;
+    }
+
+    private static Object javaValue(JsonElement value) {
+        return value == null || value.isJsonNull() ? null : new com.google.gson.Gson().fromJson(value, Object.class);
+    }
+
+    private static String nonBlank(String first, String fallback) {
+        return first == null || first.isBlank() ? fallback : first;
     }
 
     private static String string(JsonObject object, String member) {

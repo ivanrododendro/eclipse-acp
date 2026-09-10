@@ -3,7 +3,7 @@ package dev.eclipseacp.client.agent;
 import java.util.List;
 
 /** Agent-advertised, session-scoped configuration option. */
-public record ConfigOption(String id, String name, String description, String category, Object value,
+public record ConfigOption(String id, String name, String description, String category, ConfigValue value,
         List<Choice> choices) {
     public ConfigOption {
         choices = choices == null ? List.of() : List.copyOf(choices);

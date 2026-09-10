@@ -20,7 +20,7 @@ rectangle "Eclipse IDE" as eclipse #EDF2F7 {
   component "Commandes Eclipse\nplugin.xml + OpenAcpChatHandler" as commands #FFFFFF
   component "ACP Chat\nAcpChatView" as chat #FFFFFF
   component "Rendu et integration workspace\nGfmRenderer · WorkspaceFileLinks\nWorkspaceFileOpener" as presentation #FFFFFF
-  component "Gestion des changements\nWorkspaceDiffApplier" as changes #FFFFFF
+  component "Gestion des changements\nChangeReviewService · WorkspaceDiffApplier" as changes #FFFFFF
   database "Workspace Eclipse\nIProject · IFile" as workspace #FFFFFF
 
   package "Configuration" #FFF8E6 {
@@ -32,14 +32,18 @@ rectangle "Eclipse IDE" as eclipse #EDF2F7 {
   package "Client independant du protocole" #E6FFFA {
     component "Service de session\nAcpSessionService" as sessionService #FFFFFF
     interface "AgentClient" as agentClient
+    component "Pont de session UI\nAcpChatSessionListener" as sessionListener #FFFFFF
     interface "AgentListener" as agentListener
-    component "Modeles agent\nsession, outils, permissions, fichiers" as agentModels #FFFFFF
+    component "Modeles agent\nsession, outils, commandes, permissions,\nelicitation, usage et fichiers" as agentModels #FFFFFF
   }
 
   package "Adaptateur ACP v1" #F3E8FF {
     component "AcpClientFactory" as factory #FFFFFF
     component "AcpClient" as acpClient #FFFFFF
-    component "Transport JSON-RPC 2.0\nJsonRpcConnection" as transport #FFFFFF
+    component "Lanceur de processus\nAgentProcessLauncher" as processLauncher #FFFFFF
+    component "Processus local\nAgentProcess" as process #FFFFFF
+    component "Fabrique de transport\nJsonRpcTransportFactory" as transportFactory #FFFFFF
+    component "Transport JSON-RPC 2.0\nJsonRpcTransport · JsonRpcConnection" as transport #FFFFFF
     component "Suivi des outils\nToolCallTracker" as acpEvents #FFFFFF
   }
 }
@@ -70,7 +74,12 @@ acpClient ..|> agentClient
 
 acpClient --> acpEvents : statut, texte, permissions\nlectures/ecritures de fichiers
 acpClient --> agentListener : evenements convertis\nvers les modeles agent
-agentListener --> chat : callbacks UI
+agentListener <|.. sessionListener
+sessionListener --> chat : callbacks UI
+acpClient --> processLauncher : demarre l'agent
+processLauncher --> process : stdio / diagnostics
+acpClient --> transportFactory : cree le transport
+transportFactory --> transport
 acpClient --> transport : requetes / notifications
 transport <--> agent : stdio, JSON-RPC\nun message par ligne
 acpClient --> mcp : declaration des serveurs\npendant session/new

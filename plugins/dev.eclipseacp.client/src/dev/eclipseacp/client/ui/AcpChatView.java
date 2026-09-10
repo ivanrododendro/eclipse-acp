@@ -9,8 +9,6 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.concurrent.CompletableFuture;
 
-import com.google.gson.JsonObject;
-import com.google.gson.JsonElement;
 
 import org.eclipse.core.resources.IProject;
 import org.eclipse.jface.dialogs.MessageDialog;
@@ -42,7 +40,7 @@ import org.eclipse.ui.dialogs.ListDialog;
 
 import dev.eclipseacp.client.AcpLog;
 import dev.eclipseacp.client.agent.AgentClient;
-import dev.eclipseacp.client.agent.AgentListener;
+import dev.eclipseacp.client.agent.AgentCommand;
 import dev.eclipseacp.client.agent.AuthMethod;
 import dev.eclipseacp.client.agent.ConfigValue;
 import dev.eclipseacp.client.agent.FileDiff;
@@ -50,14 +48,15 @@ import dev.eclipseacp.client.agent.FileReadRequest;
 import dev.eclipseacp.client.agent.FileWriteRequest;
 import dev.eclipseacp.client.agent.PermissionOption;
 import dev.eclipseacp.client.agent.PermissionRequest;
-import dev.eclipseacp.client.agent.SessionUpdate;
+import dev.eclipseacp.client.agent.ElicitationRequest;
+import dev.eclipseacp.client.agent.Usage;
 import dev.eclipseacp.client.agent.ToolCall;
 import dev.eclipseacp.client.agent.AgentProvider;
 import dev.eclipseacp.client.agent.SessionInfo;
 import dev.eclipseacp.client.agent.PromptAttachment;
 import dev.eclipseacp.client.agent.ConfigOption;
 
-public final class AcpChatView extends ViewPart implements AgentListener {
+public final class AcpChatView extends ViewPart {
     public static final String ID = "dev.eclipseacp.client.views.chat";
     private Browser transcript;
     private Text prompt;
@@ -105,8 +104,7 @@ public final class AcpChatView extends ViewPart implements AgentListener {
         private final Map<String, ToolCall> toolCalls = new LinkedHashMap<>();
         private final Map<String, List<FileDiff>> renderedToolDiffs = new LinkedHashMap<>();
         private final WorkspaceFileLinks fileLinks;
-        private final Map<String, FileDiff> pendingChanges = new LinkedHashMap<>();
-        private WorkspaceDiffApplier diffApplier = new WorkspaceDiffApplier();
+        private ChangeReviewService changes;
         private final List<PromptAttachment> attachments = new ArrayList<>();
         private final Map<String, String> commands = new LinkedHashMap<>();
         private final Map<String, ConfigOption> configOptions = new LinkedHashMap<>();
@@ -125,6 +123,7 @@ public final class AcpChatView extends ViewPart implements AgentListener {
             this.reviewFileChanges = reviewFileChanges;
             this.hideAgentCommands = hideAgentCommands;
             this.fileLinks = new WorkspaceFileLinks(project);
+            this.changes = new ChangeReviewService(project);
         }
     }
 
@@ -555,142 +554,91 @@ public final class AcpChatView extends ViewPart implements AgentListener {
         session.restoredAgentMessageOpen = false;
         session.toolCalls.clear();
         session.renderedToolDiffs.clear();
-        session.pendingChanges.clear();
+        session.changes.clear();
         session.attachments.clear();
         session.commands.clear();
         session.configOptions.clear();
         session.persistedSessionId = null;
-        session.diffApplier = new WorkspaceDiffApplier();
+        session.changes = new ChangeReviewService(session.project);
     }
 
-    private AgentListener listenerFor(ChatSession session) {
-        return new AgentListener() {
-            @Override public void onAgentText(String text) { queueAgentText(session, text); }
-            @Override public void onPromptFirstAgentChunk(long sentAtNanos, long receivedAtNanos) {
+    private AcpChatSessionListener listenerFor(ChatSession session) {
+        return new AcpChatSessionListener(new AcpChatSessionListener.Callbacks() {
+            @Override public void agentText(String text) { queueAgentText(session, text); }
+            @Override public void firstChunk(long sentAtNanos, long receivedAtNanos) {
                 synchronized (session) {
                     session.firstAgentChunkSentAtNanos = sentAtNanos;
                     session.firstAgentChunkReceivedAtNanos = receivedAtNanos;
                 }
             }
-            @Override public void onPromptCompleted(long sentAtNanos, long completedAtNanos) {
+            @Override public void promptCompleted(long sentAtNanos, long completedAtNanos) {
                 ui(() -> {
                     flushQueuedAgentText(session);
                     append(session, "\n> **Timing:** session/prompt completed in "
                             + elapsedMillis(sentAtNanos, completedAtNanos) + " ms\n\n");
                 });
             }
-            @Override public void onUserText(String text) { ui(() -> appendRestoredUserText(session, text)); }
-            @Override public void onStatus(String value) { setStatus(session, value); }
-            @Override public void onError(String message, Throwable error) { AcpChatView.this.onError(session, message, error); }
-            @Override public CompletableFuture<String> requestPermission(String title, List<PermissionOption> options) {
+            @Override public void userText(String text) { ui(() -> appendRestoredUserText(session, text)); }
+            @Override public void status(String value) { setStatus(session, value); }
+            @Override public void error(String message, Throwable error) { AcpChatView.this.onError(session, message, error); }
+            @Override public CompletableFuture<String> permission(String title, List<PermissionOption> options) {
                 return requestPermissionFor(session, title, options);
             }
-            @Override public CompletableFuture<String> requestPermission(PermissionRequest request) {
+            @Override public CompletableFuture<String> permission(PermissionRequest request) {
                 return requestPermissionFor(session, request);
             }
-            @Override public void onToolCall(ToolCall toolCall) { ui(() -> updateToolCall(session, toolCall)); }
-            @Override public void onSessionUpdate(SessionUpdate update) {
-                if ("agent_message_chunk".equals(update.kind()) || "user_message_chunk".equals(update.kind())) return;
-                ui(() -> renderExperienceUpdate(session, update));
-            }
-            @Override public CompletableFuture<String> requestAuthentication(List<AuthMethod> methods) {
+            @Override public void toolCall(ToolCall toolCall) { ui(() -> updateToolCall(session, toolCall)); }
+            @Override public void commands(List<AgentCommand> commands) { ui(() -> updateCommands(session, commands)); }
+            @Override public void configOptions(List<ConfigOption> options) { ui(() -> updateConfigOptions(session, options)); }
+            @Override public void usage(Usage usage) { ui(() -> updateUsage(session, usage)); }
+            @Override public void terminalOutput(String output) { ui(() -> appendTerminalOutput(session, output)); }
+            @Override public CompletableFuture<String> authentication(List<AuthMethod> methods) {
                 return requestAuthenticationFor(session, methods);
             }
-            @Override public CompletableFuture<Map<String, Object>> requestElicitation(Map<String, Object> request) {
-                JsonObject jsonRequest = new com.google.gson.Gson().toJsonTree(request).getAsJsonObject();
-                return requestElicitationFor(session, jsonRequest)
-                        .thenApply(answer -> new com.google.gson.Gson().fromJson(answer, Map.class));
+            @Override public CompletableFuture<String> elicitation(ElicitationRequest request) {
+                return requestElicitationFor(session, request);
             }
-            @Override public CompletableFuture<String> readTextFile(FileReadRequest request) {
+            @Override public CompletableFuture<String> readFile(FileReadRequest request) {
                 return CompletableFuture.supplyAsync(() -> {
-                    try { return session.diffApplier.read(session.project, request.path(), request.line(), request.limit()); }
+                    try { return session.changes.read(request); }
                     catch (Exception error) { throw new java.util.concurrent.CompletionException(error); }
                 });
             }
             @Override public CompletableFuture<Void> stageFileWrite(FileWriteRequest request) {
                 return CompletableFuture.runAsync(() -> {
                     try {
-                        FileDiff diff = session.diffApplier.preview(session.project, request.path(), request.content());
+                        FileDiff diff = session.changes.preview(request.path(), request.content());
                         if (!session.reviewFileChanges) {
-                            session.diffApplier.apply(session.project, List.of(diff));
+                            session.changes.apply(List.of(diff));
                             ui(() -> append(session, "> **File write applied:** `" + diff.path() + "`\n\n"));
                             return;
                         }
                         ui(() -> {
-                            session.pendingChanges.put(diff.path(), diff);
+                            session.changes.stage(diff);
                             append(session, "> **File write staged:** `" + diff.path() + "`\n\n");
                             updateControls();
                         });
                     } catch (Exception error) { throw new java.util.concurrent.CompletionException(error); }
                 });
             }
-        };
+        });
     }
 
-    private void renderExperienceUpdate(ChatSession session, SessionUpdate update) {
-        JsonObject payload = new com.google.gson.Gson().toJsonTree(update.payload()).getAsJsonObject();
-        switch (update.kind()) {
-        case "available_commands_update" -> {
-            session.commands.clear();
-            JsonElement commands = payload.has("availableCommands") ? payload.get("availableCommands") : payload.get("commands");
-            if (commands != null && commands.isJsonArray()) for (JsonElement element : commands.getAsJsonArray()) {
-                if (!element.isJsonObject()) continue;
-                JsonObject command = element.getAsJsonObject();
-                String name = jsonString(command, "name");
-                if (name.isBlank()) name = jsonString(command, "command");
-                if (!name.isBlank()) session.commands.put(name, jsonString(command, "description"));
-            }
-            setStatus(session, session.commands.isEmpty() ? "No slash commands" : session.commands.size() + " slash command(s) available");
-        }
-        case "config_option_update" -> {
-            JsonElement options = payload.has("configOptions") ? payload.get("configOptions") : payload;
-            if (options.isJsonArray()) for (JsonElement element : options.getAsJsonArray()) {
-                if (element.isJsonObject()) storeConfigOption(session, element.getAsJsonObject());
-            } else if (options.isJsonObject()) storeConfigOption(session, options.getAsJsonObject());
-        }
-        case "usage_update" -> {
-            if (!session.hideAgentCommands) {
-                append(session, "> **Usage:** " + sessionUsageText(payload) + "\n\n");
-            }
-        }
-        case "terminal_output", "terminal_output_update" -> {
-            if (!session.hideAgentCommands) {
-                appendTerminalOutput(session, payload);
-            }
-        }
-        default -> { }
-        }
+    private void updateCommands(ChatSession session, List<AgentCommand> commands) {
+        session.commands.clear();
+        commands.forEach(command -> session.commands.put(command.name(), command.description()));
+        setStatus(session, session.commands.isEmpty() ? "No slash commands" : session.commands.size() + " slash command(s) available");
         updateControls();
     }
 
-    private static void storeConfigOption(ChatSession session, JsonObject option) {
-        String id = jsonString(option, "configId");
-        if (id.isBlank()) id = jsonString(option, "id");
-        if (!id.isBlank()) session.configOptions.put(id, new ConfigOption(id, nonBlank(jsonString(option, "name"), id),
-                jsonString(option, "description"), jsonString(option, "category"), configValue(option), configChoices(option)));
+    private void updateConfigOptions(ChatSession session, List<ConfigOption> options) {
+        options.forEach(option -> session.configOptions.put(option.id(), option));
+        updateControls();
     }
 
-    private static JsonElement configValue(JsonObject option) {
-        JsonElement value = option.has("currentValue") ? option.get("currentValue") : option.get("value");
-        return value == null ? null : value.deepCopy();
-    }
-
-    private static List<ConfigOption.Choice> configChoices(JsonObject option) {
-        if (!option.has("options") || !option.get("options").isJsonArray()) return List.of();
-        List<ConfigOption.Choice> choices = new ArrayList<>();
-        for (JsonElement raw : option.getAsJsonArray("options")) {
-            if (raw.isJsonPrimitive()) {
-                String value = raw.getAsString();
-                choices.add(new ConfigOption.Choice(value, value, ""));
-            } else if (raw.isJsonObject()) {
-                JsonObject choice = raw.getAsJsonObject();
-                String value = jsonString(choice, "value");
-                if (!value.isBlank()) choices.add(new ConfigOption.Choice(value,
-                        nonBlank(jsonString(choice, "label"), nonBlank(jsonString(choice, "name"), value)),
-                        jsonString(choice, "description")));
-            }
-        }
-        return List.copyOf(choices);
+    private void updateUsage(ChatSession session, Usage usage) {
+        if (!session.hideAgentCommands) append(session, "> **Usage:** " + sessionUsageText(usage) + "\n\n");
+        updateControls();
     }
 
     private static ConfigOption modelOption(ChatSession session) {
@@ -773,7 +721,7 @@ public final class AcpChatView extends ViewPart implements AgentListener {
                 onError(session, "Could not change model", unwrap(error));
             } else {
                 session.configOptions.put(option.id(), new ConfigOption(option.id(), option.name(), option.description(),
-                        option.category(), new com.google.gson.JsonPrimitive(choice.value()), option.choices()));
+                        option.category(), ConfigValue.of(choice.value()), option.choices()));
                 setStatus(session, "Model changed to " + choice.label());
                 updateControls();
             }
@@ -793,25 +741,24 @@ public final class AcpChatView extends ViewPart implements AgentListener {
                 onError(session, "Could not change " + optionName.toLowerCase(), unwrap(error));
             } else {
                 session.configOptions.put(option.id(), new ConfigOption(option.id(), option.name(), option.description(),
-                        option.category(), new com.google.gson.JsonPrimitive(choice.value()), option.choices()));
+                        option.category(), ConfigValue.of(choice.value()), option.choices()));
                 setStatus(session, optionName + " changed to " + choice.label());
                 updateControls();
             }
         }));
     }
 
-    private static String sessionUsageText(JsonObject payload) {
+    private static String sessionUsageText(Usage usage) {
         List<String> entries = new ArrayList<>();
-        for (String key : List.of("inputTokens", "outputTokens", "totalTokens", "cost")) {
-            if (payload.has(key) && payload.get(key).isJsonPrimitive()) entries.add(key + "=" + payload.get(key).getAsString());
-        }
+        if (usage.inputTokens() != null) entries.add("inputTokens=" + usage.inputTokens());
+        if (usage.outputTokens() != null) entries.add("outputTokens=" + usage.outputTokens());
+        if (usage.totalTokens() != null) entries.add("totalTokens=" + usage.totalTokens());
+        if (usage.cost() != null && !usage.cost().isBlank()) entries.add("cost=" + usage.cost());
         return entries.isEmpty() ? "updated" : String.join(", ", entries);
     }
 
-    private void appendTerminalOutput(ChatSession session, JsonObject payload) {
-        String output = jsonString(payload, "output");
-        if (output.isBlank()) output = jsonString(payload, "text");
-        if (!output.isBlank()) append(session, "> **Terminal output**\n\n```text\n" + output + "\n```\n\n");
+    private void appendTerminalOutput(ChatSession session, String output) {
+        if (output != null && !output.isBlank()) append(session, "> **Terminal output**\n\n```text\n" + output + "\n```\n\n");
     }
 
     private void chooseCommand() {
@@ -841,7 +788,7 @@ public final class AcpChatView extends ViewPart implements AgentListener {
                 onError(session, "Could not update " + option.name(), unwrap(error));
             } else {
                 session.configOptions.put(option.id(), new ConfigOption(option.id(), option.name(), option.description(),
-                        option.category(), value.deepCopy(), option.choices()));
+                        option.category(), ConfigValue.of(value), option.choices()));
                 setStatus(session, "Updated " + option.name());
                 updateControls();
             }
@@ -863,41 +810,35 @@ public final class AcpChatView extends ViewPart implements AgentListener {
         } catch (IOException error) { onError(session, "Could not attach file", error); }
     }
 
-    private CompletableFuture<JsonObject> requestElicitationFor(ChatSession session, JsonObject request) {
-        CompletableFuture<JsonObject> result = new CompletableFuture<>();
+    private CompletableFuture<String> requestElicitationFor(ChatSession session, ElicitationRequest request) {
+        CompletableFuture<String> result = new CompletableFuture<>();
         ui(() -> {
-            String title = nonBlank(jsonString(request, "message"), nonBlank(jsonString(request, "title"), "Agent input required"));
+            String title = nonBlank(request.message(), nonBlank(request.title(), "Agent input required"));
             InputDialog dialog = new InputDialog(getSite().getShell(), "ACP input", title, "", null);
-            if (dialog.open() != org.eclipse.jface.window.Window.OK) { result.complete(new JsonObject()); return; }
-            JsonObject answer = new JsonObject(); answer.addProperty("value", dialog.getValue()); result.complete(answer);
+            if (dialog.open() != org.eclipse.jface.window.Window.OK) { result.complete(null); return; }
+            result.complete(dialog.getValue());
         });
         return result;
     }
 
-    private static String jsonString(JsonObject value, String key) { return value.has(key) && value.get(key).isJsonPrimitive() ? value.get(key).getAsString() : ""; }
     private static String nonBlank(String first, String fallback) { return first == null || first.isBlank() ? fallback : first; }
 
-    private static String configText(Object value) {
-        if (value instanceof JsonElement element && element.isJsonPrimitive()) return element.getAsString();
-        return value == null ? "" : String.valueOf(value);
+    private static String configText(ConfigValue value) {
+        return value == null || value.value() == null ? "" : String.valueOf(value.value());
     }
 
-    @Override
     public void onAgentText(String text) {
         ui(() -> appendAgentText(activeSession, text));
     }
 
-    @Override
     public void onUserText(String text) {
         ui(() -> appendRestoredUserText(activeSession, text));
     }
 
-    @Override
     public void onStatus(String value) {
         setStatus(activeSession, value);
     }
 
-    @Override
     public void onError(String message, Throwable error) {
         onError(activeSession, message, error);
     }
@@ -932,7 +873,6 @@ public final class AcpChatView extends ViewPart implements AgentListener {
         updateControls();
     }
 
-    @Override
     public CompletableFuture<String> requestPermission(String title, List<PermissionOption> options) {
         return requestPermissionFor(activeSession, title, options);
     }
@@ -1000,33 +940,26 @@ public final class AcpChatView extends ViewPart implements AgentListener {
                     .append(location.line() == null ? "" : ":" + location.line()));
         }
         if (!tool.diffs().isEmpty()) detail.append("\nChanges proposed: ").append(tool.diffs().size());
-        if (tool.rawInput() instanceof JsonObject input) {
-            appendPermissionField(detail, "Command", input, "command");
-            appendPermissionField(detail, "Working directory", input, "cwd");
-            appendPermissionField(detail, "Path", input, "path");
-        }
+        appendPermissionField(detail, "Command", tool.command());
+        appendPermissionField(detail, "Working directory", tool.workingDirectory());
+        appendPermissionField(detail, "Path", tool.path());
         return detail.toString();
     }
 
-    private static void appendPermissionField(StringBuilder detail, String label, JsonObject input, String field) {
-        if (input.has(field) && input.get(field).isJsonPrimitive()) {
-            detail.append('\n').append(label).append(": ").append(input.get(field).getAsString());
-        }
+    private static void appendPermissionField(StringBuilder detail, String label, String value) {
+        if (value != null && !value.isBlank()) detail.append('\n').append(label).append(": ").append(value);
     }
 
     private void updateToolCall(ChatSession session, ToolCall toolCall) {
         session.toolCalls.put(toolCall.id(), toolCall);
-        if (session.reviewFileChanges) toolCall.diffs().forEach(diff -> session.pendingChanges.put(diff.path(), diff));
+        if (session.reviewFileChanges) session.changes.stageAll(toolCall.diffs());
         appendNewToolDiffs(session, toolCall);
         if (!session.hideAgentCommands) {
             append(session, "\n> **Tool " + toolCall.kind() + ":** " + toolCall.title() + " — " + toolCall.status()
                     + (toolCall.hasDiffs() ? " (" + toolCall.diffs().size() + " file change(s) ready for review)" : "")
                     + "\n\n");
-            if (toolCall.kind().toLowerCase(java.util.Locale.ROOT).contains("terminal")
-                    && toolCall.rawOutput() instanceof Map<?, ?> output) {
-                JsonObject jsonOutput = new com.google.gson.Gson().toJsonTree(output).getAsJsonObject();
-                appendTerminalOutput(session, jsonOutput);
-            }
+            if (toolCall.kind().toLowerCase(java.util.Locale.ROOT).contains("terminal"))
+                appendTerminalOutput(session, toolCall.terminalOutput());
         }
         updateControls();
         if (!session.reviewFileChanges && toolCall.hasDiffs()) applyImmediately(session, toolCall.diffs());
@@ -1042,7 +975,7 @@ public final class AcpChatView extends ViewPart implements AgentListener {
     private void applyImmediately(ChatSession session, List<FileDiff> diffs) {
         CompletableFuture.runAsync(() -> {
             try {
-                session.diffApplier.apply(session.project, diffs);
+                session.changes.apply(diffs);
                 ui(() -> setStatus(session, "Changes applied"));
             } catch (Exception error) { onError(session, "Could not apply agent changes", error); }
         });
@@ -1072,7 +1005,7 @@ public final class AcpChatView extends ViewPart implements AgentListener {
 
     private List<FileDiff> pendingDiffs(ChatSession session) {
         if (session == null) return List.of();
-        return List.copyOf(session.pendingChanges.values());
+        return session.changes.pending();
     }
 
     private void applyChanges() {
@@ -1081,9 +1014,9 @@ public final class AcpChatView extends ViewPart implements AgentListener {
         List<FileDiff> diffs = pendingDiffs(session);
         CompletableFuture.runAsync(() -> {
             try {
-                int count = session.diffApplier.apply(session.project, diffs);
+                int count = session.changes.apply(diffs);
                 ui(() -> {
-                    session.pendingChanges.clear();
+                    session.changes.clear();
                     append(session, "> Applied " + count + " reviewed file change(s).\n\n");
                     setStatus(session, "Changes applied");
                     updateControls();
@@ -1098,9 +1031,9 @@ public final class AcpChatView extends ViewPart implements AgentListener {
         List<FileDiff> diffs = pendingDiffs(session);
         CompletableFuture.runAsync(() -> {
             try {
-                int reverted = session.diffApplier.reject(session.project, diffs);
+                int reverted = session.changes.reject(diffs);
                 ui(() -> {
-                    session.pendingChanges.clear();
+                    session.changes.clear();
                     append(session, "> Rejected " + diffs.size() + " reviewed file change(s)"
                             + (reverted == 0 ? "." : " and reverted " + reverted + " direct write(s).") + "\n\n");
                     setStatus(session, "Changes rejected");
@@ -1115,7 +1048,7 @@ public final class AcpChatView extends ViewPart implements AgentListener {
         if (session == null) return;
         CompletableFuture.runAsync(() -> {
             try {
-                int count = session.diffApplier.undo();
+                int count = session.changes.undo();
                 ui(() -> {
                     append(session, "> Undid " + count + " applied file change(s).\n\n");
                     setStatus(session, "Changes undone");
@@ -1268,7 +1201,7 @@ public final class AcpChatView extends ViewPart implements AgentListener {
         boolean hasDiffs = reviewFileChanges && !pendingDiffs(activeSession).isEmpty();
         applyButton.setEnabled(hasDiffs);
         rejectButton.setEnabled(hasDiffs);
-        undoButton.setEnabled(reviewFileChanges && activeSession.diffApplier.canUndo());
+        undoButton.setEnabled(reviewFileChanges && activeSession.changes.canUndo());
         contextButton.setEnabled(false);
         commandsButton.setEnabled(false);
         settingsButton.setEnabled(connected && !activeSession.configOptions.isEmpty());

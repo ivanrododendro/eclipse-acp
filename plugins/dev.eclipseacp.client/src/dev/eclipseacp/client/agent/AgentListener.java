@@ -1,7 +1,6 @@
 package dev.eclipseacp.client.agent;
 
 import java.util.List;
-import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 
 /** UI-facing callback port; protocol-specific messages are converted before reaching it. */
@@ -23,12 +22,15 @@ public interface AgentListener {
     default CompletableFuture<Void> stageFileWrite(FileWriteRequest request) {
         return CompletableFuture.failedFuture(new UnsupportedOperationException("Client file writing is not supported"));
     }
-    default void onSessionUpdate(SessionUpdate update) { }
+    default void onAvailableCommands(List<AgentCommand> commands) { }
+    default void onConfigOptions(List<ConfigOption> options) { }
+    default void onUsage(Usage usage) { }
+    default void onTerminalOutput(String output) { }
     default void onAuthenticationMethods(List<AuthMethod> methods) { }
     default CompletableFuture<String> requestAuthentication(List<AuthMethod> methods) {
         return CompletableFuture.completedFuture(null);
     }
-    default CompletableFuture<Map<String, Object>> requestElicitation(Map<String, Object> request) {
-        return CompletableFuture.completedFuture(Map.of());
+    default CompletableFuture<String> requestElicitation(ElicitationRequest request) {
+        return CompletableFuture.completedFuture(null);
     }
 }

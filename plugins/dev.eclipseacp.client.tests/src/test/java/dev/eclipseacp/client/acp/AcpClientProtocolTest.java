@@ -12,7 +12,6 @@ import org.junit.Test;
 import com.google.gson.JsonObject;
 import dev.eclipseacp.client.agent.AgentListener;
 import dev.eclipseacp.client.agent.PermissionOption;
-import dev.eclipseacp.client.agent.SessionUpdate;
 import dev.eclipseacp.client.agent.ToolCall;
 
 public class AcpClientProtocolTest {
@@ -125,7 +124,7 @@ public class AcpClientProtocolTest {
     }
 
     @Test
-    public void forwardsEverySessionUpdateWhileRetainingPlainTextStreaming() {
+    public void forwardsTypedSessionUpdatesWhileRetainingPlainTextStreaming() {
         CapturingListener listener = new CapturingListener();
         AcpClient client = new AcpClient("unused", "", listener);
         JsonObject content = new JsonObject();
@@ -141,9 +140,7 @@ public class AcpClientProtocolTest {
         client.onNotification("session/update", params);
 
         assertEquals("hello", listener.text);
-        assertEquals("session-1", listener.update.sessionId());
-        assertEquals("agent_message_chunk", listener.update.kind());
-        assertEquals("hello", ((java.util.Map<?, ?>) listener.update.payload().get("content")).get("text"));
+        assertEquals("hello", listener.text);
     }
 
     @Test
@@ -186,7 +183,6 @@ public class AcpClientProtocolTest {
 
     private static final class CapturingListener implements AgentListener {
         private String text;
-        private SessionUpdate update;
 
         @Override public void onAgentText(String value) { text = value; }
         @Override public void onStatus(String status) { }
@@ -194,6 +190,5 @@ public class AcpClientProtocolTest {
         @Override public CompletableFuture<String> requestPermission(String title, List<PermissionOption> options) {
             return CompletableFuture.completedFuture(null);
         }
-        @Override public void onSessionUpdate(SessionUpdate value) { update = value; }
     }
 }

@@ -27,11 +27,13 @@ final class ToolCallTracker {
                 ? diffs(update.get("content")) : previous == null ? List.of() : previous.diffs();
         List<ToolLocation> locations = update.has("locations") && !update.get("locations").isJsonNull()
                 ? locations(update.get("locations")) : previous == null ? List.of() : previous.locations();
-        Object rawInput = update.has("rawInput") ? javaValue(update.get("rawInput"))
-                : previous == null ? null : previous.rawInput();
-        Object rawOutput = update.has("rawOutput") ? javaValue(update.get("rawOutput"))
-                : previous == null ? null : previous.rawOutput();
-        ToolCall merged = new ToolCall(id, title, kind, status, diffs, locations, rawInput, rawOutput);
+        JsonObject rawInput = update.has("rawInput") ? object(update.get("rawInput")) : null;
+        JsonObject rawOutput = update.has("rawOutput") ? object(update.get("rawOutput")) : null;
+        ToolCall merged = new ToolCall(id, title, kind, status, diffs, locations,
+                updatedRawString(rawInput, "command", previous == null ? "" : previous.command()),
+                updatedRawString(rawInput, "cwd", previous == null ? "" : previous.workingDirectory()),
+                updatedRawString(rawInput, "path", previous == null ? "" : previous.path()),
+                updatedRawString(rawOutput, "output", previous == null ? "" : previous.terminalOutput()));
         calls.put(id, merged);
         return merged;
     }
@@ -78,7 +80,11 @@ final class ToolCallTracker {
         return object.has(name) && object.get(name).isJsonPrimitive() ? object.get(name).getAsString() : "";
     }
 
-    private static Object javaValue(JsonElement value) {
-        return new com.google.gson.Gson().fromJson(value, Object.class);
+    private static JsonObject object(JsonElement value) {
+        return value != null && value.isJsonObject() ? value.getAsJsonObject() : new JsonObject();
+    }
+
+    private static String updatedRawString(JsonObject object, String name, String fallback) {
+        return object != null && object.has(name) ? string(object, name) : fallback;
     }
 }

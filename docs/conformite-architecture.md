@@ -21,10 +21,13 @@ plusieurs frontières de responsabilité ne sont pas respectées dans le code.
    configuration du fournisseur, création du client, connexion/restauration,
    pagination de l'historique et changement de session.
 
-   La vue conserve intentionnellement les contrôles SWT, le rendu, les dialogues et
-   la présentation des changements. Les callbacks ACP et la coordination détaillée
-   des diffs restent toutefois dans `AcpChatView` et constituent le prochain
-   périmètre d'extraction possible.
+   La vue conserve intentionnellement les contrôles SWT, le rendu et les dialogues.
+   Les callbacks sont désormais portés par `AcpChatSessionListener`, qui est le seul
+   adaptateur UI à implémenter `AgentListener`. La médiation de lecture, staging,
+   application, rejet et annulation des changements est extraite dans
+   `ChangeReviewService`, un service créé par session autour de
+   `WorkspaceDiffApplier`. L'orchestration globale des sessions reste dans la vue
+   et constitue le prochain périmètre d'extraction vers un contrôleur dédié.
 
 2. **L'abstraction `AgentClient` dépend de l'adaptateur ACP. — Traité**
 
@@ -45,9 +48,12 @@ plusieurs frontières de responsabilité ne sont pas respectées dans le code.
    listener exposait `JsonObject` et `AcpSessionUpdate`.
 
    `AgentClient` reçoit désormais `ConfigValue`. Les callbacks sont portés par
-   `AgentListener`, avec `SessionUpdate` (une `Map` immuable) et des modèles neutres
-   pour les outils, permissions, fichiers et diffs. `AcpClient` convertit les objets
-   Gson et messages ACP avant de franchir cette frontière.
+   `AgentListener`, avec des événements typés pour les commandes, options de
+   configuration, usage, sortie terminale et elicitation, ainsi que des modèles
+   neutres pour les outils, permissions, fichiers et diffs. `ToolCall` expose les
+   seuls champs utiles à la présentation (commande, répertoire, chemin et sortie)
+   au lieu des payloads bruts. `AcpClient` convertit les objets Gson et messages ACP
+   avant de franchir cette frontière; le package UI ne consomme plus de JSON ACP.
 
 4. **`AcpClient` mélange adaptation ACP, gestion du processus et transport. — Traité**
 
