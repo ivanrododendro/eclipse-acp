@@ -2,9 +2,7 @@ package dev.eclipseacp.client.ui;
 
 import java.io.IOException;
 import java.util.ArrayList;
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.concurrent.CompletableFuture;
@@ -14,7 +12,6 @@ import org.eclipse.core.resources.IProject;
 import org.eclipse.jface.dialogs.MessageDialog;
 import org.eclipse.jface.resource.ImageDescriptor;
 import org.eclipse.jface.resource.ImageRegistry;
-import org.eclipse.jface.dialogs.InputDialog;
 import org.eclipse.jface.viewers.ArrayContentProvider;
 import org.eclipse.jface.viewers.LabelProvider;
 import org.eclipse.swt.SWT;
@@ -81,51 +78,11 @@ public final class AcpChatView extends ViewPart {
     private Combo projectSelector;
     private String chatFontFamily = "sans-serif";
     private int chatFontSizePoints = 10;
-    private final List<ChatSession> sessions = new ArrayList<>();
+    private final List<ChatSessionModel> sessions = new ArrayList<>();
     private final AcpSessionService sessionService = new AcpSessionService();
-    private ChatSession activeSession;
+    private final AcpChatDialogs dialogs = new AcpChatDialogs(() -> getSite().getShell(), this::ui);
+    private ChatSessionModel activeSession;
     private final ImageRegistry iconRegistry = new ImageRegistry();
-
-    private static final class ChatSession {
-        private final IProject project;
-        private final String label;
-        private final String providerId;
-        private final boolean reviewFileChanges;
-        private final boolean hideAgentCommands;
-        private final StringBuilder transcriptMarkdown = new StringBuilder();
-        private final StringBuilder pendingAgentText = new StringBuilder();
-        private boolean agentRenderScheduled;
-        private long firstAgentChunkSentAtNanos;
-        private long firstAgentChunkReceivedAtNanos;
-        private AgentClient client;
-        private boolean agentMessageOpen;
-        private boolean acceptingRestoredTranscript;
-        private boolean restoredAgentMessageOpen;
-        private final Map<String, ToolCall> toolCalls = new LinkedHashMap<>();
-        private final Map<String, List<FileDiff>> renderedToolDiffs = new LinkedHashMap<>();
-        private final WorkspaceFileLinks fileLinks;
-        private ChangeReviewService changes;
-        private final List<PromptAttachment> attachments = new ArrayList<>();
-        private final Map<String, String> commands = new LinkedHashMap<>();
-        private final Map<String, ConfigOption> configOptions = new LinkedHashMap<>();
-        /** A session transition closes the old ACP session before attaching another one. */
-        private boolean switching;
-
-        private String persistedSessionId;
-        private String initialPrompt;
-        private String statusText = "Not connected";
-
-        private ChatSession(IProject project, String label, String providerId, boolean reviewFileChanges,
-                boolean hideAgentCommands) {
-            this.project = project;
-            this.label = label;
-            this.providerId = providerId;
-            this.reviewFileChanges = reviewFileChanges;
-            this.hideAgentCommands = hideAgentCommands;
-            this.fileLinks = new WorkspaceFileLinks(project);
-            this.changes = new ChangeReviewService(project);
-        }
-    }
 
     @Override
     public void createPartControl(Composite parent) {
@@ -162,7 +119,7 @@ public final class AcpChatView extends ViewPart {
         transcript.setLayoutData(new GridData(SWT.FILL, SWT.FILL, true, true));
         transcript.addLocationListener(new LocationAdapter() {
             @Override public void changing(LocationEvent event) {
-                ChatSession session = activeSession;
+                ChatSessionModel session = activeSession;
                 if (session != null && WorkspaceFileOpener.open(getSite().getPage(), session.project, event.location)) {
                     event.doit = false;
                 }
@@ -291,7 +248,7 @@ public final class AcpChatView extends ViewPart {
         thoughtLevelSelector.setToolTipText("Reasoning level for the active ACP session");
         thoughtLevelSelector.setEnabled(false);
         thoughtLevelSelector.addListener(SWT.Selection, ignored -> changeConfigOption(thoughtLevelSelector,
-                thoughtLevelOption(activeSession), "Reasoning level"));
+                AgentConfigOptions.thoughtLevel(activeSession), "Reasoning level"));
 
         settingsButton = new Button(actions, SWT.PUSH);
         settingsButton.setText("Options…");
@@ -337,7 +294,7 @@ public final class AcpChatView extends ViewPart {
             onError("Cannot open ACP session", new IllegalArgumentException("The selected project is not open"));
             return;
         }
-        ChatSession existing = sessionFor(project);
+        ChatSessionModel existing = sessionFor(project);
         if (existing != null) {
             // A failed connection remains visible so its diagnostic can be read.  Opening the
             // project again is an explicit retry and must replace that disconnected session.
@@ -354,7 +311,7 @@ public final class AcpChatView extends ViewPart {
         String agentName = provider.name();
 
         boolean reviewFileChanges = configuration.reviewFileChanges();
-        ChatSession session = new ChatSession(project, project.getName(), provider.id(), reviewFileChanges,
+        ChatSessionModel session = new ChatSessionModel(project, project.getName(), reviewFileChanges,
                 configuration.hideAgentCommands());
         session.initialPrompt = initialPrompt;
         sessions.add(session);
@@ -367,7 +324,7 @@ public final class AcpChatView extends ViewPart {
         connect(session, provider, null, false, agentName);
     }
 
-    private void connect(ChatSession session, AgentProvider provider, String restoredSessionId,
+    private void connect(ChatSessionModel session, AgentProvider provider, String restoredSessionId,
             boolean restored, String agentName) {
         AgentClient newClient = sessionService.createClient(provider, listenerFor(session), session.reviewFileChanges,
                 session.project.getName());
@@ -383,7 +340,6 @@ public final class AcpChatView extends ViewPart {
                 if (!restored) retire(session);
                 return;
             }
-            session.persistedSessionId = newClient.sessionId();
             if (restored) {
                 // session/load may finish before SWT processes its replayed message updates.
                 // Keep accepting them until the user starts the next prompt.
@@ -404,11 +360,11 @@ public final class AcpChatView extends ViewPart {
         selectSession(sessions.get(index));
     }
 
-    private ChatSession sessionFor(IProject project) {
+    private ChatSessionModel sessionFor(IProject project) {
         return sessions.stream().filter(session -> session.project.equals(project)).findFirst().orElse(null);
     }
 
-    private void selectSession(ChatSession session) {
+    private void selectSession(ChatSessionModel session) {
         activeSession = session;
         int index = sessions.indexOf(session);
         if (index >= 0 && projectSelector != null && !projectSelector.isDisposed()) projectSelector.select(index);
@@ -419,7 +375,7 @@ public final class AcpChatView extends ViewPart {
 
     private void sendPrompt() {
         String text = prompt.getText().trim();
-        ChatSession session = activeSession;
+        ChatSessionModel session = activeSession;
         if (text.isEmpty() || session == null || session.client == null || session.agentMessageOpen || session.switching) {
             return;
         }
@@ -427,7 +383,7 @@ public final class AcpChatView extends ViewPart {
         sendPrompt(session, text);
     }
 
-    private void sendPrompt(ChatSession session, String text) {
+    private void sendPrompt(ChatSessionModel session, String text) {
         if (session == null || session.client == null || text == null || text.isBlank()) return;
         String expanded = EclipseContext.expand(text, session.project, getSite().getPage());
         session.agentMessageOpen = false;
@@ -475,7 +431,7 @@ public final class AcpChatView extends ViewPart {
     }
 
     private void chooseAgentSession() {
-        ChatSession session = activeSession;
+        ChatSessionModel session = activeSession;
         if (session == null || session.client == null) return;
         AgentClient client = session.client;
         sessionService.listSessions(client, session.project.getLocation().toFile().toPath())
@@ -511,7 +467,7 @@ public final class AcpChatView extends ViewPart {
                 }));
     }
 
-    private void restoreListedSession(ChatSession session, SessionInfo selected) {
+    private void restoreListedSession(ChatSessionModel session, SessionInfo selected) {
         switchSession(session, selected.id());
     }
 
@@ -519,7 +475,7 @@ public final class AcpChatView extends ViewPart {
      * Switches conversations on one initialized ACP transport.  session/close is sent before
      * session/new or session/load, so a prior session cannot remain active accidentally.
      */
-    private void switchSession(ChatSession session, String restoredSessionId) {
+    private void switchSession(ChatSessionModel session, String restoredSessionId) {
         if (session == null || session.client == null || session.switching) return;
         AgentClient client = session.client;
         session.switching = true;
@@ -528,7 +484,7 @@ public final class AcpChatView extends ViewPart {
         updateControls();
         sessionService.switchSession(client, session.project.getLocation().toFile().toPath(), restoredSessionId,
                 replaysTranscript -> uiAndWait(() -> {
-                    resetConversation(session);
+                    session.resetConversation();
                     session.acceptingRestoredTranscript = replaysTranscript;
                     renderTranscript();
                 }))
@@ -538,7 +494,6 @@ public final class AcpChatView extends ViewPart {
             if (operationError != null) {
                 onError(session, "Could not open the selected session", unwrap(operationError));
             } else {
-                session.persistedSessionId = switched.sessionId();
                 // Keep this true until sendPrompt starts a new turn: session/load updates
                 // can be queued on the UI thread after its JSON-RPC response arrives.
                 setStatus(session, restoredSessionId == null ? "New session ready" : "Session restored");
@@ -547,22 +502,7 @@ public final class AcpChatView extends ViewPart {
         }));
     }
 
-    private static void resetConversation(ChatSession session) {
-        session.transcriptMarkdown.setLength(0);
-        session.agentMessageOpen = false;
-        session.acceptingRestoredTranscript = false;
-        session.restoredAgentMessageOpen = false;
-        session.toolCalls.clear();
-        session.renderedToolDiffs.clear();
-        session.changes.clear();
-        session.attachments.clear();
-        session.commands.clear();
-        session.configOptions.clear();
-        session.persistedSessionId = null;
-        session.changes = new ChangeReviewService(session.project);
-    }
-
-    private AcpChatSessionListener listenerFor(ChatSession session) {
+    private AcpChatSessionListener listenerFor(ChatSessionModel session) {
         return new AcpChatSessionListener(new AcpChatSessionListener.Callbacks() {
             @Override public void agentText(String text) { queueAgentText(session, text); }
             @Override public void firstChunk(long sentAtNanos, long receivedAtNanos) {
@@ -624,59 +564,33 @@ public final class AcpChatView extends ViewPart {
         });
     }
 
-    private void updateCommands(ChatSession session, List<AgentCommand> commands) {
+    private void updateCommands(ChatSessionModel session, List<AgentCommand> commands) {
         session.commands.clear();
         commands.forEach(command -> session.commands.put(command.name(), command.description()));
         setStatus(session, session.commands.isEmpty() ? "No slash commands" : session.commands.size() + " slash command(s) available");
         updateControls();
     }
 
-    private void updateConfigOptions(ChatSession session, List<ConfigOption> options) {
+    private void updateConfigOptions(ChatSessionModel session, List<ConfigOption> options) {
         options.forEach(option -> session.configOptions.put(option.id(), option));
         updateControls();
     }
 
-    private void updateUsage(ChatSession session, Usage usage) {
-        if (!session.hideAgentCommands) append(session, "> **Usage:** " + sessionUsageText(usage) + "\n\n");
+    private void updateUsage(ChatSessionModel session, Usage usage) {
+        if (!session.hideAgentCommands) append(session, "> **Usage:** " + ChatMessageFormatter.usage(usage) + "\n\n");
         updateControls();
-    }
-
-    private static ConfigOption modelOption(ChatSession session) {
-        if (session == null) return null;
-        return session.configOptions.values().stream()
-                .filter(option -> !option.choices().isEmpty())
-                .filter(option -> "model".equalsIgnoreCase(option.category())
-                        || "model".equalsIgnoreCase(option.id())
-                        || "model".equalsIgnoreCase(option.name()))
-                .findFirst().orElse(null);
-    }
-
-    private static ConfigOption collaborationModeOption(ChatSession session) {
-        return optionByCategoryOrId(session, "collaboration_mode", "collaboration mode");
-    }
-
-    private static ConfigOption thoughtLevelOption(ChatSession session) {
-        return optionByCategoryOrId(session, "thought_level", "thought level", "reasoning level");
-    }
-
-    private static ConfigOption optionByCategoryOrId(ChatSession session, String key, String... displayNames) {
-        if (session == null) return null;
-        return session.configOptions.values().stream().filter(option -> !option.choices().isEmpty())
-                .filter(option -> key.equalsIgnoreCase(option.category()) || key.equalsIgnoreCase(option.id())
-                        || java.util.Arrays.stream(displayNames).anyMatch(name -> name.equalsIgnoreCase(option.name())))
-                .findFirst().orElse(null);
     }
 
     private void refreshModelSelector() {
         if (modelSelector == null || modelSelector.isDisposed()) return;
-        ConfigOption option = modelOption(activeSession);
+        ConfigOption option = AgentConfigOptions.model(activeSession);
         modelSelector.removeAll();
         if (option == null) {
             modelSelector.setEnabled(false);
             modelSelector.setToolTipText("The ACP agent has not advertised a model selector");
             return;
         }
-        String current = configText(option.value());
+        String current = AgentConfigOptions.text(option.value());
         int selected = -1;
         for (ConfigOption.Choice choice : option.choices()) {
             modelSelector.add(choice.label());
@@ -690,14 +604,14 @@ public final class AcpChatView extends ViewPart {
     }
 
     private void refreshThoughtLevelSelector() {
-        refreshConfigSelector(thoughtLevelSelector, thoughtLevelOption(activeSession), "Reasoning level for the active ACP session");
+        refreshConfigSelector(thoughtLevelSelector, AgentConfigOptions.thoughtLevel(activeSession), "Reasoning level for the active ACP session");
     }
 
     private void refreshConfigSelector(Combo selector, ConfigOption option, String defaultTooltip) {
         if (selector == null || selector.isDisposed()) return;
         selector.removeAll();
         if (option == null) { selector.setEnabled(false); return; }
-        String current = configText(option.value());
+        String current = AgentConfigOptions.text(option.value());
         for (ConfigOption.Choice choice : option.choices()) {
             selector.add(choice.label());
             if (choice.value().equals(current)) selector.select(selector.getItemCount() - 1);
@@ -708,8 +622,8 @@ public final class AcpChatView extends ViewPart {
     }
 
     private void changeModel() {
-        ChatSession session = activeSession;
-        ConfigOption option = modelOption(session);
+        ChatSessionModel session = activeSession;
+        ConfigOption option = AgentConfigOptions.model(session);
         int selected = modelSelector == null ? -1 : modelSelector.getSelectionIndex();
         if (session == null || session.client == null || option == null || selected < 0 || selected >= option.choices().size()) return;
         ConfigOption.Choice choice = option.choices().get(selected);
@@ -729,7 +643,7 @@ public final class AcpChatView extends ViewPart {
     }
 
     private void changeConfigOption(Combo selector, ConfigOption option, String optionName) {
-        ChatSession session = activeSession;
+        ChatSessionModel session = activeSession;
         int selected = selector == null ? -1 : selector.getSelectionIndex();
         if (session == null || session.client == null || option == null || selected < 0 || selected >= option.choices().size()) return;
         ConfigOption.Choice choice = option.choices().get(selected);
@@ -748,21 +662,13 @@ public final class AcpChatView extends ViewPart {
         }));
     }
 
-    private static String sessionUsageText(Usage usage) {
-        List<String> entries = new ArrayList<>();
-        if (usage.inputTokens() != null) entries.add("inputTokens=" + usage.inputTokens());
-        if (usage.outputTokens() != null) entries.add("outputTokens=" + usage.outputTokens());
-        if (usage.totalTokens() != null) entries.add("totalTokens=" + usage.totalTokens());
-        if (usage.cost() != null && !usage.cost().isBlank()) entries.add("cost=" + usage.cost());
-        return entries.isEmpty() ? "updated" : String.join(", ", entries);
-    }
-
-    private void appendTerminalOutput(ChatSession session, String output) {
-        if (output != null && !output.isBlank()) append(session, "> **Terminal output**\n\n```text\n" + output + "\n```\n\n");
+    private void appendTerminalOutput(ChatSessionModel session, String output) {
+        String markdown = ChatMessageFormatter.terminalOutput(output);
+        if (!markdown.isEmpty()) append(session, markdown);
     }
 
     private void chooseCommand() {
-        ChatSession session = activeSession;
+        ChatSessionModel session = activeSession;
         if (session == null || session.commands.isEmpty()) return;
         ListDialog dialog = new ListDialog(getSite().getShell());
         dialog.setTitle("ACP commands"); dialog.setMessage("Insert a slash command:");
@@ -778,7 +684,7 @@ public final class AcpChatView extends ViewPart {
     }
 
     private void editConfigOption() {
-        ChatSession session = activeSession;
+        ChatSessionModel session = activeSession;
         if (session == null || session.configOptions.isEmpty() || session.client == null) return;
         ConfigOptionsDialog dialog = new ConfigOptionsDialog(getSite().getShell(), new ArrayList<>(session.configOptions.values()));
         if (dialog.open() != org.eclipse.jface.window.Window.OK) return;
@@ -796,7 +702,7 @@ public final class AcpChatView extends ViewPart {
     }
 
     private void attachFile() {
-        ChatSession session = activeSession; if (session == null) return;
+        ChatSessionModel session = activeSession; if (session == null) return;
         FileDialog dialog = new FileDialog(getSite().getShell(), SWT.OPEN); dialog.setText("Attach image or audio");
         dialog.setFilterExtensions(new String[] { "*.png;*.jpg;*.jpeg;*.gif;*.webp;*.mp3;*.wav;*.ogg", "*.*" });
         String selected = dialog.open(); if (selected == null) return;
@@ -810,21 +716,8 @@ public final class AcpChatView extends ViewPart {
         } catch (IOException error) { onError(session, "Could not attach file", error); }
     }
 
-    private CompletableFuture<String> requestElicitationFor(ChatSession session, ElicitationRequest request) {
-        CompletableFuture<String> result = new CompletableFuture<>();
-        ui(() -> {
-            String title = nonBlank(request.message(), nonBlank(request.title(), "Agent input required"));
-            InputDialog dialog = new InputDialog(getSite().getShell(), "ACP input", title, "", null);
-            if (dialog.open() != org.eclipse.jface.window.Window.OK) { result.complete(null); return; }
-            result.complete(dialog.getValue());
-        });
-        return result;
-    }
-
-    private static String nonBlank(String first, String fallback) { return first == null || first.isBlank() ? fallback : first; }
-
-    private static String configText(ConfigValue value) {
-        return value == null || value.value() == null ? "" : String.valueOf(value.value());
+    private CompletableFuture<String> requestElicitationFor(ChatSessionModel session, ElicitationRequest request) {
+        return dialogs.requestElicitation(request);
     }
 
     public void onAgentText(String text) {
@@ -843,7 +736,7 @@ public final class AcpChatView extends ViewPart {
         onError(activeSession, message, error);
     }
 
-    private void setStatus(ChatSession session, String value) {
+    private void setStatus(ChatSessionModel session, String value) {
         ui(() -> {
             if (session == null) return;
             session.statusText = value == null || value.isBlank() ? "Not connected" : value;
@@ -858,7 +751,7 @@ public final class AcpChatView extends ViewPart {
         status.getParent().layout();
     }
 
-    private void onError(ChatSession session, String message, Throwable error) {
+    private void onError(ChatSessionModel session, String message, Throwable error) {
         ui(() -> {
             if (session == null) return;
             showConnectionError(session, message, error);
@@ -866,7 +759,7 @@ public final class AcpChatView extends ViewPart {
     }
 
     /** Renders immediately when the caller is already on the SWT UI thread. */
-    private void showConnectionError(ChatSession session, String message, Throwable error) {
+    private void showConnectionError(ChatSessionModel session, String message, Throwable error) {
         String detail = error == null || error.getMessage() == null ? "" : ": " + error.getMessage();
         append(session, "\n> **Error:** " + message + detail + "\n\n");
         setStatus(session, "Error");
@@ -877,80 +770,19 @@ public final class AcpChatView extends ViewPart {
         return requestPermissionFor(activeSession, title, options);
     }
 
-    private CompletableFuture<String> requestAuthenticationFor(ChatSession session, List<AuthMethod> methods) {
-        CompletableFuture<String> result = new CompletableFuture<>();
-        ui(() -> {
-            List<AuthMethod> available = methods.stream().filter(method -> !method.isTerminal()).toList();
-            if (available.isEmpty() || getSite().getShell().isDisposed()) {
-                result.complete(null);
-                return;
-            }
-            String[] labels = available.stream().map(AuthMethod::name).toArray(String[]::new);
-            MessageDialog dialog = new MessageDialog(
-                    getSite().getShell(),
-                    "ACP sign in",
-                    null,
-                    "This agent requires authentication before it can open a session. Choose a sign-in method.",
-                    MessageDialog.QUESTION,
-                    labels,
-                    0);
-            int selected = dialog.open();
-            result.complete(selected >= 0 && selected < available.size() ? available.get(selected).id() : null);
-        });
-        return result;
+    private CompletableFuture<String> requestAuthenticationFor(ChatSessionModel session, List<AuthMethod> methods) {
+        return dialogs.requestAuthentication(methods);
     }
 
-    private CompletableFuture<String> requestPermissionFor(ChatSession session, String title, List<PermissionOption> options) {
-        return requestPermissionFor(session, new PermissionRequest(title, null, options));
+    private CompletableFuture<String> requestPermissionFor(ChatSessionModel session, String title, List<PermissionOption> options) {
+        return dialogs.requestPermission(title, options);
     }
 
-    private CompletableFuture<String> requestPermissionFor(ChatSession session, PermissionRequest request) {
-        CompletableFuture<String> result = new CompletableFuture<>();
-        ui(() -> {
-            List<PermissionOption> options = request.options();
-            if (options.isEmpty() || getSite().getShell().isDisposed()) {
-                result.complete(null);
-                return;
-            }
-            String[] labels = options.stream().map(PermissionOption::name).toArray(String[]::new);
-            int defaultIndex = defaultPermissionIndex(options);
-            String detail = permissionDetail(request);
-            MessageDialog dialog = new MessageDialog(
-                    getSite().getShell(),
-                    "ACP permission",
-                    null,
-                    detail,
-                    MessageDialog.QUESTION,
-                    labels,
-                    defaultIndex);
-            int selected = dialog.open();
-            result.complete(selected >= 0 && selected < options.size() ? options.get(selected).id() : null);
-        });
-        return result;
+    private CompletableFuture<String> requestPermissionFor(ChatSessionModel session, PermissionRequest request) {
+        return dialogs.requestPermission(request);
     }
 
-    private static String permissionDetail(PermissionRequest request) {
-        ToolCall tool = request.toolCall();
-        if (tool == null) return request.title();
-        StringBuilder detail = new StringBuilder(request.title());
-        detail.append("\n\nTool: ").append(tool.kind());
-        if (!tool.locations().isEmpty()) {
-            detail.append("\nFiles:");
-            tool.locations().forEach(location -> detail.append("\n• ").append(location.path())
-                    .append(location.line() == null ? "" : ":" + location.line()));
-        }
-        if (!tool.diffs().isEmpty()) detail.append("\nChanges proposed: ").append(tool.diffs().size());
-        appendPermissionField(detail, "Command", tool.command());
-        appendPermissionField(detail, "Working directory", tool.workingDirectory());
-        appendPermissionField(detail, "Path", tool.path());
-        return detail.toString();
-    }
-
-    private static void appendPermissionField(StringBuilder detail, String label, String value) {
-        if (value != null && !value.isBlank()) detail.append('\n').append(label).append(": ").append(value);
-    }
-
-    private void updateToolCall(ChatSession session, ToolCall toolCall) {
+    private void updateToolCall(ChatSessionModel session, ToolCall toolCall) {
         session.toolCalls.put(toolCall.id(), toolCall);
         if (session.reviewFileChanges) session.changes.stageAll(toolCall.diffs());
         appendNewToolDiffs(session, toolCall);
@@ -965,14 +797,14 @@ public final class AcpChatView extends ViewPart {
         if (!session.reviewFileChanges && toolCall.hasDiffs()) applyImmediately(session, toolCall.diffs());
     }
 
-    private void appendNewToolDiffs(ChatSession session, ToolCall toolCall) {
+    private void appendNewToolDiffs(ChatSessionModel session, ToolCall toolCall) {
         if (toolCall.diffs().isEmpty() || toolCall.diffs().equals(session.renderedToolDiffs.get(toolCall.id()))) return;
         session.renderedToolDiffs.put(toolCall.id(), List.copyOf(toolCall.diffs()));
         append(session, "\n> **File changes:** " + toolCall.diffs().size() + " file change(s)\n"
-                + toolDiffPreview(toolCall.diffs()) + "\n\n");
+                + ChatMessageFormatter.diffPreview(toolCall.diffs()) + "\n\n");
     }
 
-    private void applyImmediately(ChatSession session, List<FileDiff> diffs) {
+    private void applyImmediately(ChatSessionModel session, List<FileDiff> diffs) {
         CompletableFuture.runAsync(() -> {
             try {
                 session.changes.apply(diffs);
@@ -981,35 +813,13 @@ public final class AcpChatView extends ViewPart {
         });
     }
 
-    private static String toolDiffPreview(List<FileDiff> diffs) {
-        if (diffs.isEmpty()) return "";
-        StringBuilder preview = new StringBuilder();
-        for (FileDiff diff : diffs) {
-            preview.append("\n\n```diff\n--- ").append(diff.path()).append("\n+++ ").append(diff.path()).append("\n");
-            appendDiffLines(preview, '-', diff.oldText());
-            appendDiffLines(preview, '+', diff.newText());
-            preview.append("```");
-        }
-        return preview.toString();
-    }
-
-    private static void appendDiffLines(StringBuilder preview, char prefix, String text) {
-        if (text == null) return;
-        String[] lines = text.split("\\R", -1);
-        int maximumLines = 40;
-        for (int index = 0; index < Math.min(lines.length, maximumLines); index++) {
-            preview.append(prefix).append(lines[index]).append('\n');
-        }
-        if (lines.length > maximumLines) preview.append(prefix).append("… ").append(lines.length - maximumLines).append(" more lines\n");
-    }
-
-    private List<FileDiff> pendingDiffs(ChatSession session) {
+    private List<FileDiff> pendingDiffs(ChatSessionModel session) {
         if (session == null) return List.of();
         return session.changes.pending();
     }
 
     private void applyChanges() {
-        ChatSession session = activeSession;
+        ChatSessionModel session = activeSession;
         if (session == null) return;
         List<FileDiff> diffs = pendingDiffs(session);
         CompletableFuture.runAsync(() -> {
@@ -1026,7 +836,7 @@ public final class AcpChatView extends ViewPart {
     }
 
     private void rejectChanges() {
-        ChatSession session = activeSession;
+        ChatSessionModel session = activeSession;
         if (session == null) return;
         List<FileDiff> diffs = pendingDiffs(session);
         CompletableFuture.runAsync(() -> {
@@ -1044,7 +854,7 @@ public final class AcpChatView extends ViewPart {
     }
 
     private void undoApply() {
-        ChatSession session = activeSession;
+        ChatSessionModel session = activeSession;
         if (session == null) return;
         CompletableFuture.runAsync(() -> {
             try {
@@ -1065,16 +875,7 @@ public final class AcpChatView extends ViewPart {
         prompt.setFocus();
     }
 
-    private static int defaultPermissionIndex(List<PermissionOption> options) {
-        for (int index = 0; index < options.size(); index++) {
-            if (options.get(index).kind().startsWith("reject")) {
-                return index;
-            }
-        }
-        return options.size() - 1;
-    }
-
-    private void append(ChatSession session, String text) {
+    private void append(ChatSessionModel session, String text) {
         if (session == null) {
             return;
         }
@@ -1089,13 +890,13 @@ public final class AcpChatView extends ViewPart {
         if (!updated) transcript.setText(chatDocument(session.transcriptMarkdown.toString()));
     }
 
-    private void appendRestoredUserText(ChatSession session, String text) {
+    private void appendRestoredUserText(ChatSessionModel session, String text) {
         if (session == null || !session.acceptingRestoredTranscript || text.isEmpty()) return;
         append(session, "## You\n\n" + text + "\n\n");
         session.restoredAgentMessageOpen = false;
     }
 
-    private void appendAgentText(ChatSession session, String text) {
+    private void appendAgentText(ChatSessionModel session, String text) {
         if (session == null || text.isEmpty()) return;
         if (session.acceptingRestoredTranscript && !session.restoredAgentMessageOpen) {
             append(session, "## Agent\n\n");
@@ -1105,7 +906,7 @@ public final class AcpChatView extends ViewPart {
     }
 
     /** Coalesces high-frequency ACP chunks so the SWT/WebView queue cannot grow unbounded. */
-    private void queueAgentText(ChatSession session, String text) {
+    private void queueAgentText(ChatSessionModel session, String text) {
         if (session == null || text == null || text.isEmpty()) return;
         synchronized (session) {
             session.pendingAgentText.append(text);
@@ -1116,7 +917,7 @@ public final class AcpChatView extends ViewPart {
     }
 
     /** Runs on the SWT thread, either after the batching interval or at prompt completion. */
-    private void flushQueuedAgentText(ChatSession session) {
+    private void flushQueuedAgentText(ChatSessionModel session) {
         String text;
         long sentAt;
         long receivedAt;
@@ -1187,9 +988,9 @@ public final class AcpChatView extends ViewPart {
 
     private void updateControls() {
         if (sendButton == null || sendButton.isDisposed()) return;
-        boolean connected = activeSession != null && activeSession.client != null && !activeSession.switching;
+        boolean connected = activeSession != null && activeSession.isConnected();
         sendButton.setEnabled(connected && !activeSession.agentMessageOpen && !prompt.getText().isBlank());
-        boolean busy = connected && activeSession.agentMessageOpen;
+        boolean busy = activeSession != null && activeSession.isBusy();
         showControl(sendButton, !busy);
         showControl(stopButton, busy);
         stopButton.setEnabled(connected && activeSession.agentMessageOpen);
@@ -1237,7 +1038,7 @@ public final class AcpChatView extends ViewPart {
         transcript.execute("window.scrollTo(0, Math.max(document.body.scrollHeight, document.documentElement.scrollHeight));");
     }
 
-    private void closeSession(ChatSession session) {
+    private void closeSession(ChatSessionModel session) {
         retire(session);
         int index = sessions.indexOf(session);
         if (index >= 0) {
@@ -1254,7 +1055,7 @@ public final class AcpChatView extends ViewPart {
     }
 
     /** Replaces the active ACP conversation without changing the project entry in the selector. */
-    private void replaceSession(ChatSession previous, ChatSession replacement) {
+    private void replaceSession(ChatSessionModel previous, ChatSessionModel replacement) {
         int index = sessions.indexOf(previous);
         if (index < 0) return;
         retire(previous);
@@ -1267,14 +1068,14 @@ public final class AcpChatView extends ViewPart {
     }
 
     /** session/close gives agents a chance to durably store the conversation. */
-    private void retire(ChatSession session) {
+    private void retire(ChatSessionModel session) {
         AgentClient previousClient = session.client;
         session.client = null;
         if (previousClient != null) CompletableFuture.runAsync(previousClient::close);
     }
 
     private void disconnect() {
-        for (ChatSession session : new ArrayList<>(sessions)) {
+        for (ChatSessionModel session : new ArrayList<>(sessions)) {
             AgentClient previousClient = session.client;
             session.client = null;
             if (previousClient != null) CompletableFuture.runAsync(previousClient::close);
