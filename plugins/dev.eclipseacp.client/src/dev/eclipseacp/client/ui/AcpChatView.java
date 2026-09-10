@@ -71,6 +71,7 @@ public final class AcpChatView extends ViewPart {
     private Button attachButton;
     private Combo modelSelector;
     private Combo thoughtLevelSelector;
+    private Combo collaborationModeSelector;
     private Label status;
     private Composite reviewBar;
     private Label reviewSummary;
@@ -150,6 +151,20 @@ public final class AcpChatView extends ViewPart {
         composerLayout.marginWidth = 10;
         composerLayout.marginHeight = 8;
         composer.setLayout(composerLayout);
+
+        Composite collaborationModeBar = new Composite(composer, SWT.NONE);
+        collaborationModeBar.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
+        GridLayout collaborationModeLayout = new GridLayout(2, false);
+        collaborationModeLayout.marginWidth = collaborationModeLayout.marginHeight = 0;
+        collaborationModeBar.setLayout(collaborationModeLayout);
+        Label collaborationModeLabel = new Label(collaborationModeBar, SWT.NONE);
+        collaborationModeLabel.setText("Session mode:");
+        collaborationModeSelector = new Combo(collaborationModeBar, SWT.DROP_DOWN | SWT.READ_ONLY);
+        collaborationModeSelector.setLayoutData(new GridData(SWT.BEGINNING, SWT.CENTER, false, false));
+        collaborationModeSelector.setToolTipText("Session mode for the active ACP session");
+        collaborationModeSelector.setEnabled(false);
+        collaborationModeSelector.addListener(SWT.Selection, ignored -> changeConfigOption(collaborationModeSelector,
+                AgentConfigOptions.collaborationMode(activeSession), "Session mode"));
 
         prompt = new Text(composer, SWT.MULTI | SWT.WRAP | SWT.V_SCROLL);
         GridData promptData = new GridData(SWT.FILL, SWT.FILL, true, false);
@@ -609,6 +624,11 @@ public final class AcpChatView extends ViewPart {
         refreshConfigSelector(thoughtLevelSelector, AgentConfigOptions.thoughtLevel(activeSession), "Reasoning level for the active ACP session");
     }
 
+    private void refreshCollaborationModeSelector() {
+        refreshConfigSelector(collaborationModeSelector, AgentConfigOptions.collaborationMode(activeSession),
+                "Session mode for the active ACP session");
+    }
+
     private void refreshConfigSelector(Combo selector, ConfigOption option, String defaultTooltip) {
         if (selector == null || selector.isDisposed()) return;
         selector.removeAll();
@@ -807,7 +827,7 @@ public final class AcpChatView extends ViewPart {
         return "Agent command: " + title + " — " + status;
     }
 
-    private void reportFileWrite(ChatSessionModel session, String action, Path path) {
+    private void reportFileWrite(ChatSessionModel session, String action, String path) {
         if (session.hideAgentCommands) {
             setStatus(session, action + ": " + path);
         } else {
@@ -1027,10 +1047,12 @@ public final class AcpChatView extends ViewPart {
         attachButton.setEnabled(false);
         refreshModelSelector();
         refreshThoughtLevelSelector();
+        refreshCollaborationModeSelector();
         showControl(settingsButton, settingsButton.getEnabled());
         // Keep selectors visible while a turn is in progress; refresh disables them until idle.
         showControl(modelSelector, modelSelector.getItemCount() > 0);
         showControl(thoughtLevelSelector, thoughtLevelSelector.getItemCount() > 0);
+        showControl(collaborationModeSelector.getParent(), collaborationModeSelector.getItemCount() > 0);
         showControl(reviewBar, hasDiffs || undoButton.getEnabled());
         showControl(applyButton, hasDiffs);
         showControl(rejectButton, hasDiffs);
