@@ -531,7 +531,9 @@ public final class AcpChatView extends ViewPart {
             @Override public void commands(List<AgentCommand> commands) { ui(() -> updateCommands(session, commands)); }
             @Override public void configOptions(List<ConfigOption> options) { ui(() -> updateConfigOptions(session, options)); }
             @Override public void usage(Usage usage) { ui(() -> updateUsage(session, usage)); }
-            @Override public void terminalOutput(String output) { ui(() -> appendTerminalOutput(session, output)); }
+            @Override public void terminalOutput(String output) { ui(() -> {
+                if (!session.hideAgentCommands) appendTerminalOutput(session, output);
+            }); }
             @Override public CompletableFuture<String> authentication(List<AuthMethod> methods) {
                 return requestAuthenticationFor(session, methods);
             }
@@ -550,12 +552,12 @@ public final class AcpChatView extends ViewPart {
                         FileDiff diff = session.changes.preview(request.path(), request.content());
                         if (!session.reviewFileChanges) {
                             session.changes.apply(List.of(diff));
-                            ui(() -> append(session, "> **File write applied:** `" + diff.path() + "`\n\n"));
+                            ui(() -> reportFileWrite(session, "File write applied", diff.path()));
                             return;
                         }
                         ui(() -> {
                             session.changes.stage(diff);
-                            append(session, "> **File write staged:** `" + diff.path() + "`\n\n");
+                            reportFileWrite(session, "File write staged", diff.path());
                             updateControls();
                         });
                     } catch (Exception error) { throw new java.util.concurrent.CompletionException(error); }
@@ -785,8 +787,10 @@ public final class AcpChatView extends ViewPart {
     private void updateToolCall(ChatSessionModel session, ToolCall toolCall) {
         session.toolCalls.put(toolCall.id(), toolCall);
         if (session.reviewFileChanges) session.changes.stageAll(toolCall.diffs());
-        appendNewToolDiffs(session, toolCall);
-        if (!session.hideAgentCommands) {
+        if (session.hideAgentCommands) {
+            setStatus(session, toolCallStatus(toolCall));
+        } else {
+            appendNewToolDiffs(session, toolCall);
             append(session, "\n> **Tool " + toolCall.kind() + ":** " + toolCall.title() + " — " + toolCall.status()
                     + (toolCall.hasDiffs() ? " (" + toolCall.diffs().size() + " file change(s) ready for review)" : "")
                     + "\n\n");
@@ -795,6 +799,20 @@ public final class AcpChatView extends ViewPart {
         }
         updateControls();
         if (!session.reviewFileChanges && toolCall.hasDiffs()) applyImmediately(session, toolCall.diffs());
+    }
+
+    private static String toolCallStatus(ToolCall toolCall) {
+        String title = toolCall.title() == null || toolCall.title().isBlank() ? toolCall.kind() : toolCall.title();
+        String status = toolCall.status() == null || toolCall.status().isBlank() ? "updated" : toolCall.status();
+        return "Agent command: " + title + " — " + status;
+    }
+
+    private void reportFileWrite(ChatSessionModel session, String action, Path path) {
+        if (session.hideAgentCommands) {
+            setStatus(session, action + ": " + path);
+        } else {
+            append(session, "> **" + action + ":** `" + path + "`\n\n");
+        }
     }
 
     private void appendNewToolDiffs(ChatSessionModel session, ToolCall toolCall) {
