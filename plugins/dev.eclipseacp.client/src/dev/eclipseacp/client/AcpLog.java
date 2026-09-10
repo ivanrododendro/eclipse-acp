@@ -7,6 +7,8 @@ import org.eclipse.core.runtime.Status;
 import org.osgi.framework.Bundle;
 import org.osgi.framework.FrameworkUtil;
 
+import dev.eclipseacp.client.preferences.AcpPreferences;
+
 /** Centralized logging for the ACP client. */
 public final class AcpLog {
     private static final Bundle BUNDLE = FrameworkUtil.getBundle(AcpLog.class);
@@ -17,6 +19,16 @@ public final class AcpLog {
 
     public static void info(String message) {
         log(IStatus.INFO, message, null);
+    }
+
+    /**
+     * Emits diagnostics enabled from the ACP preference page. Eclipse IStatus has no DEBUG
+     * severity, so DEBUG is explicitly included in the message while using INFO severity.
+     */
+    public static void debug(String message) {
+        if (AcpPreferences.store().getBoolean(AcpPreferences.DEBUG_ACP_MESSAGES)) {
+            log(IStatus.INFO, "DEBUG " + message, null);
+        }
     }
 
     public static void warn(String message, Throwable error) {

@@ -86,7 +86,7 @@ final class JsonRpcConnection implements JsonRpcTransport {
             String line;
             while (!closed && (line = reader.readLine()) != null) {
                 if (!line.isBlank()) {
-                    AcpLog.info("JSON-RPC message received: " + summarize(line));
+                    AcpLog.debug("ACP JSON-RPC <- agent: " + line);
                     dispatch(JsonParser.parseString(line).getAsJsonObject());
                 }
             }
@@ -181,7 +181,9 @@ final class JsonRpcConnection implements JsonRpcTransport {
             if (closed) {
                 throw new IOException("ACP connection is closed");
             }
-            writer.write(gson.toJson(message));
+            String payload = gson.toJson(message);
+            AcpLog.debug("ACP JSON-RPC -> agent: " + payload);
+            writer.write(payload);
             writer.newLine();
             writer.flush();
         }

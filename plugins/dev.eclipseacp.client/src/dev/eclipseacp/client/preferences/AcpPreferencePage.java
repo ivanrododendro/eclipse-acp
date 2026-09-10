@@ -15,7 +15,7 @@ import dev.eclipseacp.client.agent.AgentProvider;
 import dev.eclipseacp.client.mcp.McpServerRegistry;
 
 public final class AcpPreferencePage extends PreferencePage implements IWorkbenchPreferencePage {
-    private List providerList; private Text name; private Text command; private Text arguments; private Text mcpServers; private Button reviewFileChanges; private Button hideAgentCommandsInChat; private AgentProviderRegistry registry; private McpServerRegistry mcpRegistry;
+    private List providerList; private Text name; private Text command; private Text arguments; private Text mcpServers; private Button reviewFileChanges; private Button hideAgentCommandsInChat; private Button debugAcpMessages; private AgentProviderRegistry registry; private McpServerRegistry mcpRegistry;
     @Override protected Composite createContents(Composite parent) {
         registry = new AgentProviderRegistry(AcpPreferences.store());
         mcpRegistry = new McpServerRegistry(AcpPreferences.store());
@@ -39,6 +39,12 @@ public final class AcpPreferencePage extends PreferencePage implements IWorkbenc
         GridData commandsData = new GridData(SWT.FILL, SWT.CENTER, true, false);
         commandsData.horizontalSpan = 2;
         hideAgentCommandsInChat.setLayoutData(commandsData);
+        debugAcpMessages = new Button(root, SWT.CHECK);
+        debugAcpMessages.setText("Enable DEBUG logging of all ACP JSON-RPC messages (may include prompts, file contents, and secrets)");
+        debugAcpMessages.setSelection(AcpPreferences.store().getBoolean(AcpPreferences.DEBUG_ACP_MESSAGES));
+        GridData debugData = new GridData(SWT.FILL, SWT.CENTER, true, false);
+        debugData.horizontalSpan = 2;
+        debugAcpMessages.setLayoutData(debugData);
         Label mcpLabel = new Label(root, SWT.NONE);
         mcpLabel.setText("MCP servers (JSON; optional providerId/projectName scopes; use ${env:NAME} for secrets):");
         GridData mcpLabelData = new GridData(SWT.FILL, SWT.CENTER, true, false); mcpLabelData.horizontalSpan = 2; mcpLabel.setLayoutData(mcpLabelData);
@@ -56,7 +62,8 @@ public final class AcpPreferencePage extends PreferencePage implements IWorkbenc
         try { mcpRegistry.saveSerialized(mcpServers.getText());
         } catch (RuntimeException error) { setErrorMessage("MCP servers must be a JSON array: " + error.getMessage()); return false; }
         AcpPreferences.store().setValue(AcpPreferences.REVIEW_FILE_CHANGES, reviewFileChanges.getSelection());
-        AcpPreferences.store().setValue(AcpPreferences.HIDE_AGENT_COMMANDS_IN_CHAT, hideAgentCommandsInChat.getSelection()); return true;
+        AcpPreferences.store().setValue(AcpPreferences.HIDE_AGENT_COMMANDS_IN_CHAT, hideAgentCommandsInChat.getSelection());
+        AcpPreferences.store().setValue(AcpPreferences.DEBUG_ACP_MESSAGES, debugAcpMessages.getSelection()); return true;
     }
     @Override public void init(IWorkbench workbench) { }
 }
