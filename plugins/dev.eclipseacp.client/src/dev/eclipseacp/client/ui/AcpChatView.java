@@ -56,7 +56,6 @@ import dev.eclipseacp.client.agent.AgentProvider;
 import dev.eclipseacp.client.agent.SessionInfo;
 import dev.eclipseacp.client.agent.PromptAttachment;
 import dev.eclipseacp.client.agent.ConfigOption;
-import dev.eclipseacp.client.preferences.AcpPreferences;
 
 public final class AcpChatView extends ViewPart implements AgentListener {
     public static final String ID = "dev.eclipseacp.client.views.chat";
@@ -84,7 +83,7 @@ public final class AcpChatView extends ViewPart implements AgentListener {
     private String chatFontFamily = "sans-serif";
     private int chatFontSizePoints = 10;
     private final List<ChatSession> sessions = new ArrayList<>();
-    private final AcpSessionService sessionService = new AcpSessionService(AcpPreferences.store());
+    private final AcpSessionService sessionService = new AcpSessionService();
     private ChatSession activeSession;
     private final ImageRegistry iconRegistry = new ImageRegistry();
 
@@ -93,6 +92,7 @@ public final class AcpChatView extends ViewPart implements AgentListener {
         private final String label;
         private final String providerId;
         private final boolean reviewFileChanges;
+        private final boolean hideAgentCommands;
         private final StringBuilder transcriptMarkdown = new StringBuilder();
         private final StringBuilder pendingAgentText = new StringBuilder();
         private boolean agentRenderScheduled;
@@ -117,11 +117,13 @@ public final class AcpChatView extends ViewPart implements AgentListener {
         private String initialPrompt;
         private String statusText = "Not connected";
 
-        private ChatSession(IProject project, String label, String providerId, boolean reviewFileChanges) {
+        private ChatSession(IProject project, String label, String providerId, boolean reviewFileChanges,
+                boolean hideAgentCommands) {
             this.project = project;
             this.label = label;
             this.providerId = providerId;
             this.reviewFileChanges = reviewFileChanges;
+            this.hideAgentCommands = hideAgentCommands;
             this.fileLinks = new WorkspaceFileLinks(project);
         }
     }
@@ -338,16 +340,23 @@ public final class AcpChatView extends ViewPart implements AgentListener {
         }
         ChatSession existing = sessionFor(project);
         if (existing != null) {
-            selectSession(existing);
-            if (initialPrompt != null && !initialPrompt.isBlank()) sendPrompt(existing, initialPrompt);
-            return;
+            // A failed connection remains visible so its diagnostic can be read.  Opening the
+            // project again is an explicit retry and must replace that disconnected session.
+            if (existing.client == null) {
+                closeSession(existing);
+            } else {
+                selectSession(existing);
+                if (initialPrompt != null && !initialPrompt.isBlank()) sendPrompt(existing, initialPrompt);
+                return;
+            }
         }
         AcpSessionService.SessionConfiguration configuration = sessionService.newSessionConfiguration();
         AgentProvider provider = configuration.provider();
         String agentName = provider.name();
 
         boolean reviewFileChanges = configuration.reviewFileChanges();
-        ChatSession session = new ChatSession(project, project.getName(), provider.id(), reviewFileChanges);
+        ChatSession session = new ChatSession(project, project.getName(), provider.id(), reviewFileChanges,
+                configuration.hideAgentCommands());
         session.initialPrompt = initialPrompt;
         sessions.add(session);
         projectSelector.add(session.label);
@@ -371,8 +380,8 @@ public final class AcpChatView extends ViewPart implements AgentListener {
                 return; // A newer connection replaced this one.
             }
             if (error != null) {
-                onError(session, "Could not start " + agentName, unwrap(error));
-                if (!restored) closeSession(session);
+                showConnectionError(session, "Could not start " + agentName, unwrap(error));
+                if (!restored) retire(session);
                 return;
             }
             session.persistedSessionId = newClient.sessionId();
@@ -640,12 +649,12 @@ public final class AcpChatView extends ViewPart implements AgentListener {
             } else if (options.isJsonObject()) storeConfigOption(session, options.getAsJsonObject());
         }
         case "usage_update" -> {
-            if (!sessionService.hideAgentCommands()) {
+            if (!session.hideAgentCommands) {
                 append(session, "> **Usage:** " + sessionUsageText(payload) + "\n\n");
             }
         }
         case "terminal_output", "terminal_output_update" -> {
-            if (!sessionService.hideAgentCommands()) {
+            if (!session.hideAgentCommands) {
                 appendTerminalOutput(session, payload);
             }
         }
@@ -694,15 +703,19 @@ public final class AcpChatView extends ViewPart implements AgentListener {
                 .findFirst().orElse(null);
     }
 
-    private static ConfigOption thoughtLevelOption(ChatSession session) {
-        return optionByCategoryOrId(session, "thought_level", "Reasoning level");
+    private static ConfigOption collaborationModeOption(ChatSession session) {
+        return optionByCategoryOrId(session, "collaboration_mode", "collaboration mode");
     }
 
-    private static ConfigOption optionByCategoryOrId(ChatSession session, String key, String displayName) {
+    private static ConfigOption thoughtLevelOption(ChatSession session) {
+        return optionByCategoryOrId(session, "thought_level", "thought level", "reasoning level");
+    }
+
+    private static ConfigOption optionByCategoryOrId(ChatSession session, String key, String... displayNames) {
         if (session == null) return null;
         return session.configOptions.values().stream().filter(option -> !option.choices().isEmpty())
                 .filter(option -> key.equalsIgnoreCase(option.category()) || key.equalsIgnoreCase(option.id())
-                        || displayName.equalsIgnoreCase(option.name()))
+                        || java.util.Arrays.stream(displayNames).anyMatch(name -> name.equalsIgnoreCase(option.name())))
                 .findFirst().orElse(null);
     }
 
@@ -907,10 +920,16 @@ public final class AcpChatView extends ViewPart implements AgentListener {
     private void onError(ChatSession session, String message, Throwable error) {
         ui(() -> {
             if (session == null) return;
-            String detail = error == null || error.getMessage() == null ? "" : ": " + error.getMessage();
-            append(session, "\n> **Error:** " + message + detail + "\n\n");
-            setStatus(session, "Error");
+            showConnectionError(session, message, error);
         });
+    }
+
+    /** Renders immediately when the caller is already on the SWT UI thread. */
+    private void showConnectionError(ChatSession session, String message, Throwable error) {
+        String detail = error == null || error.getMessage() == null ? "" : ": " + error.getMessage();
+        append(session, "\n> **Error:** " + message + detail + "\n\n");
+        setStatus(session, "Error");
+        updateControls();
     }
 
     @Override
@@ -999,7 +1018,7 @@ public final class AcpChatView extends ViewPart implements AgentListener {
         session.toolCalls.put(toolCall.id(), toolCall);
         if (session.reviewFileChanges) toolCall.diffs().forEach(diff -> session.pendingChanges.put(diff.path(), diff));
         appendNewToolDiffs(session, toolCall);
-        if (!sessionService.hideAgentCommands()) {
+        if (!session.hideAgentCommands) {
             append(session, "\n> **Tool " + toolCall.kind() + ":** " + toolCall.title() + " — " + toolCall.status()
                     + (toolCall.hasDiffs() ? " (" + toolCall.diffs().size() + " file change(s) ready for review)" : "")
                     + "\n\n");

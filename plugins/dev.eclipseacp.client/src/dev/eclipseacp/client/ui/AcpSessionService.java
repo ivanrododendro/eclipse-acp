@@ -22,21 +22,28 @@ import dev.eclipseacp.client.preferences.AgentProviderRegistry;
  * SWT controls, transcript rendering and dialogs deliberately remain in {@link AcpChatView}.
  */
 final class AcpSessionService {
-    record SessionConfiguration(AgentProvider provider, boolean reviewFileChanges) { }
+    record SessionConfiguration(AgentProvider provider, boolean reviewFileChanges, boolean hideAgentCommands) { }
     record SessionSwitch(String sessionId) { }
 
     private final IPreferenceStore preferences;
-    private final AgentProviderRegistry providers;
     private final McpServerRegistry mcpServers;
+
+    AcpSessionService() {
+        this(AcpPreferences.store());
+    }
 
     AcpSessionService(IPreferenceStore preferences) {
         this.preferences = preferences;
-        this.providers = new AgentProviderRegistry(preferences);
         this.mcpServers = new McpServerRegistry(preferences);
     }
 
     SessionConfiguration newSessionConfiguration() {
-        return new SessionConfiguration(providers.active(), preferences.getBoolean(AcpPreferences.REVIEW_FILE_CHANGES));
+        // Provider preferences can be changed while this view remains open.  Do not retain a
+        // registry snapshot from view creation, otherwise every subsequent session uses the
+        // provider that happened to be active when the view was opened.
+        AgentProvider provider = new AgentProviderRegistry(preferences).active();
+        return new SessionConfiguration(provider, preferences.getBoolean(AcpPreferences.REVIEW_FILE_CHANGES),
+                preferences.getBoolean(AcpPreferences.HIDE_AGENT_COMMANDS_IN_CHAT));
     }
 
     AgentClient createClient(AgentProvider provider, AgentListener listener, boolean reviewFileChanges, String projectName) {
@@ -86,7 +93,4 @@ final class AcpSessionService {
         });
     }
 
-    boolean hideAgentCommands() {
-        return preferences.getBoolean(AcpPreferences.HIDE_AGENT_COMMANDS_IN_CHAT);
-    }
 }

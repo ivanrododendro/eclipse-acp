@@ -49,35 +49,37 @@ plusieurs frontières de responsabilité ne sont pas respectées dans le code.
    pour les outils, permissions, fichiers et diffs. `AcpClient` convertit les objets
    Gson et messages ACP avant de franchir cette frontière.
 
-4. **`AcpClient` mélange adaptation ACP, gestion du processus et transport.**
+4. **`AcpClient` mélange adaptation ACP, gestion du processus et transport. — Traité**
 
-   La classe construit et lance le processus (`AcpClient.java`, lignes 92 à 114),
-   instancie le transport JSON-RPC, lit `stderr` (`AcpClient.java`, lignes 637 à
-   656), et traduit en même temps les messages et sessions ACP.
+   Avant le correctif, la classe construisait et lançait le processus, instanciait le
+   transport JSON-RPC, lisait `stderr` et traduisait en même temps les messages et
+   sessions ACP.
 
-   Le transport `JsonRpcConnection` existe bien, mais son cycle de vie et le
-   lancement du processus restent inclus dans l'adaptateur. Un `AgentProcessLauncher`
-   et une fabrique de transport rendraient ces responsabilités explicites et
-   testables séparément.
+   Le lancement, l'arrêt et les diagnostics `stderr` sont désormais isolés derrière
+   `AgentProcessLauncher` / `AgentProcess` (implémentation locale :
+   `DefaultAgentProcessLauncher`). La création du transport est isolée derrière
+   `JsonRpcTransportFactory` (implémentation : `DefaultJsonRpcTransportFactory`).
+   `AcpClient` ne conserve que l'adaptation du protocole ACP et dépend de ces deux
+   abstractions, injectables pour des tests indépendants.
 
-5. **La page de préférences contourne `McpServerRegistry`.**
+5. **La page de préférences contourne `McpServerRegistry`. — Traité**
 
    Le diagramme décrit le flux `AcpPreferencePage -> registres -> IPreferenceStore`.
-   Pourtant la page lit, valide et écrit directement le JSON MCP dans les préférences
-   (`AcpPreferencePage.java`, lignes 47 et 58), sans passer par
-   `McpServerRegistry`.
+   Auparavant, la page lisait, validait et écrivait directement le JSON MCP dans les
+   préférences, sans passer par `McpServerRegistry`.
 
-   La persistance MCP est ainsi répartie entre la page et le registre. La page devrait
-   déléguer la validation et la sauvegarde au registre.
+   La page délègue désormais la lecture du JSON sérialisé, sa validation et sa
+   sauvegarde à `McpServerRegistry`; elle ne conserve que l'affichage de l'éditeur et
+   la remontée des erreurs à l'utilisateur.
 
-6. **La vue contourne partiellement les services de configuration.**
+6. **La vue contourne partiellement les services de configuration. — Traité**
 
-   `AcpChatView` instancie les registres et lit directement
-   `AcpPreferences.store()` pour des décisions de session (`AcpChatView.java`,
-   lignes 345, 348, 364, 671, 676, 1025 et 1326).
+   Auparavant, `AcpChatView` instanciait les registres et lisait directement
+   `AcpPreferences.store()` pour des décisions de session.
 
-   La vue devient dépendante du mécanisme de persistance Eclipse. Elle devrait
-   recevoir une configuration/session préparée par une couche de service.
+   La vue ne dépend plus de `AcpPreferences`, des registres ou de
+   `IPreferenceStore`. `AcpSessionService` compose les registres et prépare une
+   `SessionConfiguration` immuable, dont les choix sont portés par la session UI.
 
 ## Points conformes
 

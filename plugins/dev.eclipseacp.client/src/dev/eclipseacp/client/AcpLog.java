@@ -29,7 +29,11 @@ public final class AcpLog {
 
     private static void log(int severity, String message, Throwable error) {
         if (LOG != null) {
-            LOG.log(new Status(severity, PluginIds.PLUGIN_ID, message, error));
+            LOG.log(status(severity, message, error));
         }
+    }
+
+    private static IStatus status(int severity, String message, Throwable error) {
+        return new Status(severity, PluginIds.PLUGIN_ID, message, error);
     }
 }

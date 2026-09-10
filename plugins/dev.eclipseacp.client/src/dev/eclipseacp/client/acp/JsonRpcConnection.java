@@ -19,7 +19,7 @@ import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import dev.eclipseacp.client.AcpLog;
 
-final class JsonRpcConnection implements Closeable {
+final class JsonRpcConnection implements JsonRpcTransport {
     private final Gson gson = new Gson();
     private final BufferedReader reader;
     private final BufferedWriter writer;
@@ -37,14 +37,16 @@ final class JsonRpcConnection implements Closeable {
         this.errorHandler = Objects.requireNonNull(errorHandler);
     }
 
-    void start() {
+    @Override
+    public void start() {
         AcpLog.info("Starting ACP JSON-RPC reader thread");
         Thread thread = new Thread(this::readLoop, "eclipse-acp-jsonrpc");
         thread.setDaemon(true);
         thread.start();
     }
 
-    CompletableFuture<JsonObject> request(String method, JsonObject params) {
+    @Override
+    public CompletableFuture<JsonObject> request(String method, JsonObject params) {
         long startedAt = System.nanoTime();
         long id = nextId.getAndIncrement();
         AcpLog.info("JSON-RPC request sent: id=" + id + ", method='" + method + "'");
@@ -65,7 +67,8 @@ final class JsonRpcConnection implements Closeable {
         return future;
     }
 
-    void notification(String method, JsonObject params) throws IOException {
+    @Override
+    public void notification(String method, JsonObject params) throws IOException {
         AcpLog.info("JSON-RPC notification sent: method='" + method + "'");
         send(envelope(method, params));
     }

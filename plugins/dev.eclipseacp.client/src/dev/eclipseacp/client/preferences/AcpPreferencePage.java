@@ -12,13 +12,13 @@ import org.eclipse.swt.widgets.Text;
 import org.eclipse.ui.IWorkbench;
 import org.eclipse.ui.IWorkbenchPreferencePage;
 import dev.eclipseacp.client.agent.AgentProvider;
-import com.google.gson.GsonBuilder;
-import com.google.gson.JsonParser;
+import dev.eclipseacp.client.mcp.McpServerRegistry;
 
 public final class AcpPreferencePage extends PreferencePage implements IWorkbenchPreferencePage {
-    private List providerList; private Text name; private Text command; private Text arguments; private Text mcpServers; private Button reviewFileChanges; private Button hideAgentCommandsInChat; private AgentProviderRegistry registry;
+    private List providerList; private Text name; private Text command; private Text arguments; private Text mcpServers; private Button reviewFileChanges; private Button hideAgentCommandsInChat; private AgentProviderRegistry registry; private McpServerRegistry mcpRegistry;
     @Override protected Composite createContents(Composite parent) {
         registry = new AgentProviderRegistry(AcpPreferences.store());
+        mcpRegistry = new McpServerRegistry(AcpPreferences.store());
         Composite root = new Composite(parent, SWT.NONE); root.setLayout(new GridLayout(2, false));
         providerList = new List(root, SWT.BORDER | SWT.SINGLE | SWT.V_SCROLL); providerList.setLayoutData(new GridData(SWT.FILL, SWT.FILL, true, true));
         Composite edit = new Composite(root, SWT.NONE); edit.setLayoutData(new GridData(SWT.FILL, SWT.TOP, true, false)); edit.setLayout(new GridLayout(2, false));
@@ -44,7 +44,7 @@ public final class AcpPreferencePage extends PreferencePage implements IWorkbenc
         GridData mcpLabelData = new GridData(SWT.FILL, SWT.CENTER, true, false); mcpLabelData.horizontalSpan = 2; mcpLabel.setLayoutData(mcpLabelData);
         mcpServers = new Text(root, SWT.BORDER | SWT.MULTI | SWT.V_SCROLL | SWT.H_SCROLL);
         GridData mcpData = new GridData(SWT.FILL, SWT.FILL, true, false); mcpData.horizontalSpan = 2; mcpData.heightHint = 120; mcpServers.setLayoutData(mcpData);
-        mcpServers.setText(AcpPreferences.store().getString(AcpPreferences.MCP_SERVERS_JSON));
+        mcpServers.setText(mcpRegistry.serialized());
         mcpServers.setMessage("[{\"name\":\"my-tools\",\"transport\":\"stdio\",\"command\":\"/absolute/path/server\",\"args\":[],\"environment\":{},\"providerId\":\"\",\"projectName\":\"\",\"enabled\":true}]");
         providerList.addListener(SWT.Selection, e -> loadSelected()); refresh(); return root;
     }
@@ -53,9 +53,8 @@ public final class AcpPreferencePage extends PreferencePage implements IWorkbenc
     private void loadSelected() { int i = providerList.getSelectionIndex(); if (i >= 0) { AgentProvider p = registry.list().get(i); name.setText(p.name()); command.setText(p.command()); arguments.setText(p.arguments()); } }
     private void saveProvider() { int i = providerList.getSelectionIndex(); String id = i >= 0 ? registry.list().get(i).id() : name.getText().trim().toLowerCase().replaceAll("[^a-z0-9]+", "-"); AgentProvider p = new AgentProvider(id, name.getText(), command.getText(), arguments.getText()); if (i >= 0) registry.update(p); else registry.add(p); refresh(); }
     @Override public boolean performOk() {
-        try { JsonParser.parseString(mcpServers.getText().isBlank() ? "[]" : mcpServers.getText()).getAsJsonArray();
+        try { mcpRegistry.saveSerialized(mcpServers.getText());
         } catch (RuntimeException error) { setErrorMessage("MCP servers must be a JSON array: " + error.getMessage()); return false; }
-        AcpPreferences.store().setValue(AcpPreferences.MCP_SERVERS_JSON, new GsonBuilder().setPrettyPrinting().create().toJson(JsonParser.parseString(mcpServers.getText().isBlank() ? "[]" : mcpServers.getText())));
         AcpPreferences.store().setValue(AcpPreferences.REVIEW_FILE_CHANGES, reviewFileChanges.getSelection());
         AcpPreferences.store().setValue(AcpPreferences.HIDE_AGENT_COMMANDS_IN_CHAT, hideAgentCommandsInChat.getSelection()); return true;
     }
