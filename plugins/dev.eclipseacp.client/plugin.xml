@@ -29,12 +29,30 @@
     <command
           categoryId="dev.eclipseacp.client.commands.category"
           id="dev.eclipseacp.client.commands.openChat"
-          name="Open session">
+          name="Open ACP Session">
       <commandParameter
             id="dev.eclipseacp.client.commands.openChat.action"
             name="Action"
             optional="true"/>
     </command>
+    <!-- These actions are listed as upcoming functionality.  Intentionally omit
+         handlers so Eclipse renders them disabled. -->
+    <command
+          categoryId="dev.eclipseacp.client.commands.category"
+          id="dev.eclipseacp.client.commands.explainSelection"
+          name="Explain selection"/>
+    <command
+          categoryId="dev.eclipseacp.client.commands.category"
+          id="dev.eclipseacp.client.commands.fixProblems"
+          name="Fix problems"/>
+    <command
+          categoryId="dev.eclipseacp.client.commands.category"
+          id="dev.eclipseacp.client.commands.refactorSelection"
+          name="Refactor selection"/>
+    <command
+          categoryId="dev.eclipseacp.client.commands.category"
+          id="dev.eclipseacp.client.commands.testSelection"
+          name="Test selection"/>
   </extension>
 
   <extension point="org.eclipse.ui.handlers">
@@ -46,7 +64,7 @@
   <extension point="org.eclipse.ui.menus">
     <menuContribution locationURI="popup:org.eclipse.ui.popup.any?after=additions">
       <menu id="dev.eclipseacp.client.menus.acp" label="ACP">
-        <command commandId="dev.eclipseacp.client.commands.openChat" label="Open session" style="push">
+        <command commandId="dev.eclipseacp.client.commands.openChat" label="Open ACP Session" style="push">
           <visibleWhen checkEnabled="false">
             <with variable="selection">
               <iterate ifEmpty="false">
@@ -55,18 +73,10 @@
             </with>
           </visibleWhen>
         </command>
-        <command commandId="dev.eclipseacp.client.commands.openChat" label="Explain selection" style="push">
-          <parameter name="dev.eclipseacp.client.commands.openChat.action" value="explain"/>
-        </command>
-        <command commandId="dev.eclipseacp.client.commands.openChat" label="Fix problems" style="push">
-          <parameter name="dev.eclipseacp.client.commands.openChat.action" value="fix"/>
-        </command>
-        <command commandId="dev.eclipseacp.client.commands.openChat" label="Refactor selection" style="push">
-          <parameter name="dev.eclipseacp.client.commands.openChat.action" value="refactor"/>
-        </command>
-        <command commandId="dev.eclipseacp.client.commands.openChat" label="Test selection" style="push">
-          <parameter name="dev.eclipseacp.client.commands.openChat.action" value="test"/>
-        </command>
+        <command commandId="dev.eclipseacp.client.commands.explainSelection" label="Explain selection" style="push"/>
+        <command commandId="dev.eclipseacp.client.commands.fixProblems" label="Fix problems" style="push"/>
+        <command commandId="dev.eclipseacp.client.commands.refactorSelection" label="Refactor selection" style="push"/>
+        <command commandId="dev.eclipseacp.client.commands.testSelection" label="Test selection" style="push"/>
       </menu>
     </menuContribution>
   </extension>
