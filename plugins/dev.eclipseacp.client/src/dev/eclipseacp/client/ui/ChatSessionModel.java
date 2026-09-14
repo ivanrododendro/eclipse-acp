@@ -8,6 +8,7 @@ import java.util.Map;
 import org.eclipse.core.resources.IProject;
 
 import dev.eclipseacp.client.agent.AgentClient;
+import dev.eclipseacp.client.agent.AgentProvider;
 import dev.eclipseacp.client.agent.ConfigOption;
 import dev.eclipseacp.client.agent.PromptAttachment;
 import dev.eclipseacp.client.agent.ToolCall;
@@ -16,6 +17,7 @@ import dev.eclipseacp.client.agent.ToolCall;
 final class ChatSessionModel {
     final IProject project;
     final String label;
+    final AgentProvider provider;
     final boolean reviewFileChanges;
     final boolean hideAgentCommands;
     final StringBuilder transcriptMarkdown = new StringBuilder();
@@ -34,37 +36,20 @@ final class ChatSessionModel {
     final List<PromptAttachment> attachments = new ArrayList<>();
     final Map<String, String> commands = new LinkedHashMap<>();
     final Map<String, ConfigOption> configOptions = new LinkedHashMap<>();
-    boolean switching;
     String initialPrompt;
     String statusText = "Not connected";
 
-    ChatSessionModel(IProject project, String label, boolean reviewFileChanges, boolean hideAgentCommands) {
+    ChatSessionModel(IProject project, String label, AgentProvider provider, boolean reviewFileChanges,
+            boolean hideAgentCommands) {
         this.project = project;
         this.label = label;
+        this.provider = provider;
         this.reviewFileChanges = reviewFileChanges;
         this.hideAgentCommands = hideAgentCommands;
         this.fileLinks = new WorkspaceFileLinks(project);
         this.changes = new ChangeReviewService(project);
     }
 
-    boolean isConnected() { return client != null && !switching; }
+    boolean isConnected() { return client != null; }
     boolean isBusy() { return isConnected() && agentMessageOpen; }
-
-    void resetConversation() {
-        transcriptMarkdown.setLength(0);
-        pendingAgentText.setLength(0);
-        agentRenderScheduled = false;
-        firstAgentChunkSentAtNanos = 0;
-        firstAgentChunkReceivedAtNanos = 0;
-        agentMessageOpen = false;
-        acceptingRestoredTranscript = false;
-        restoredAgentMessageOpen = false;
-        toolCalls.clear();
-        renderedToolDiffs.clear();
-        changes.clear();
-        attachments.clear();
-        commands.clear();
-        configOptions.clear();
-        changes = new ChangeReviewService(project);
-    }
 }

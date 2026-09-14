@@ -26,17 +26,17 @@ final class AcpChatDialogs {
         this.ui = ui;
     }
 
-    CompletableFuture<String> requestElicitation(ElicitationRequest request) {
+    CompletableFuture<String> requestElicitation(String sessionLabel, ElicitationRequest request) {
         CompletableFuture<String> result = new CompletableFuture<>();
         ui.accept(() -> {
             String title = nonBlank(request.message(), nonBlank(request.title(), "Agent input required"));
-            InputDialog dialog = new InputDialog(shell.get(), "ACP input", title, "", null);
+            InputDialog dialog = new InputDialog(shell.get(), "ACP input — " + sessionLabel, title, "", null);
             result.complete(dialog.open() == Window.OK ? dialog.getValue() : null);
         });
         return result;
     }
 
-    CompletableFuture<String> requestAuthentication(List<AuthMethod> methods) {
+    CompletableFuture<String> requestAuthentication(String sessionLabel, List<AuthMethod> methods) {
         CompletableFuture<String> result = new CompletableFuture<>();
         ui.accept(() -> {
             List<AuthMethod> available = methods.stream().filter(method -> !method.isTerminal()).toList();
@@ -45,7 +45,7 @@ final class AcpChatDialogs {
                 return;
             }
             String[] labels = available.stream().map(AuthMethod::name).toArray(String[]::new);
-            MessageDialog dialog = new MessageDialog(shell.get(), "ACP sign in", null,
+            MessageDialog dialog = new MessageDialog(shell.get(), "ACP sign in — " + sessionLabel, null,
                     "This agent requires authentication before it can open a session. Choose a sign-in method.",
                     MessageDialog.QUESTION, labels, 0);
             int selected = dialog.open();
@@ -54,11 +54,11 @@ final class AcpChatDialogs {
         return result;
     }
 
-    CompletableFuture<String> requestPermission(String title, List<PermissionOption> options) {
-        return requestPermission(new PermissionRequest(title, null, options));
+    CompletableFuture<String> requestPermission(String sessionLabel, String title, List<PermissionOption> options) {
+        return requestPermission(sessionLabel, new PermissionRequest(title, null, options));
     }
 
-    CompletableFuture<String> requestPermission(PermissionRequest request) {
+    CompletableFuture<String> requestPermission(String sessionLabel, PermissionRequest request) {
         CompletableFuture<String> result = new CompletableFuture<>();
         ui.accept(() -> {
             List<PermissionOption> options = request.options();
@@ -67,7 +67,8 @@ final class AcpChatDialogs {
                 return;
             }
             String[] labels = options.stream().map(PermissionOption::name).toArray(String[]::new);
-            MessageDialog dialog = new MessageDialog(shell.get(), "ACP permission", null, permissionDetail(request),
+            MessageDialog dialog = new MessageDialog(shell.get(), "ACP permission — " + sessionLabel, null,
+                    permissionDetail(request),
                     MessageDialog.QUESTION, labels, defaultPermissionIndex(options));
             int selected = dialog.open();
             result.complete(selected >= 0 && selected < options.size() ? options.get(selected).id() : null);

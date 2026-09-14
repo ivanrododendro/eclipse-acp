@@ -2,7 +2,9 @@ package dev.eclipseacp.client.ui;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.concurrent.CompletableFuture;
@@ -80,6 +82,7 @@ public final class AcpChatView extends ViewPart {
     private String chatFontFamily = "sans-serif";
     private int chatFontSizePoints = 10;
     private final List<ChatSessionModel> sessions = new ArrayList<>();
+    private final Map<String, Integer> sessionNumbers = new HashMap<>();
     private final AcpSessionService sessionService = new AcpSessionService();
     private final AcpChatDialogs dialogs = new AcpChatDialogs(() -> getSite().getShell(), this::ui);
     private ChatSessionModel activeSession;
@@ -103,7 +106,7 @@ public final class AcpChatView extends ViewPart {
         Label projectLabel = new Label(header, SWT.NONE);
         projectLabel.setText("Project:");
         projectSelector = new Combo(header, SWT.DROP_DOWN | SWT.READ_ONLY);
-        projectSelector.setToolTipText("Project with its active ACP session");
+        projectSelector.setToolTipText("Open ACP conversations");
         projectSelector.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
         projectSelector.addListener(SWT.Selection, ignored -> selectProjectFromCombo());
         var fontData = projectSelector.getFont().getFontData();
@@ -326,14 +329,10 @@ public final class AcpChatView extends ViewPart {
         String agentName = provider.name();
 
         boolean reviewFileChanges = configuration.reviewFileChanges();
-        ChatSessionModel session = new ChatSessionModel(project, project.getName(), reviewFileChanges,
+        ChatSessionModel session = new ChatSessionModel(project, nextSessionLabel(project), provider, reviewFileChanges,
                 configuration.hideAgentCommands());
         session.initialPrompt = initialPrompt;
-        sessions.add(session);
-        projectSelector.add(session.label);
-        activeSession = session;
-        projectSelector.select(projectSelector.getItemCount() - 1);
-        renderTranscript();
+        addAndSelectSession(session);
         setStatus(session, "Connecting to " + agentName + " in " + project.getLocation() + "…"
                 + (reviewFileChanges ? " Changes will be reviewed before applying." : " Changes apply immediately."));
         connect(session, provider, null, false, agentName);
@@ -352,7 +351,7 @@ public final class AcpChatView extends ViewPart {
             }
             if (error != null) {
                 showConnectionError(session, "Could not start " + agentName, unwrap(error));
-                if (!restored) retire(session);
+                retire(session);
                 return;
             }
             if (restored) {
@@ -376,7 +375,27 @@ public final class AcpChatView extends ViewPart {
     }
 
     private ChatSessionModel sessionFor(IProject project) {
-        return sessions.stream().filter(session -> session.project.equals(project)).findFirst().orElse(null);
+        if (activeSession != null && activeSession.project.equals(project)) return activeSession;
+        for (int index = sessions.size() - 1; index >= 0; index--) {
+            ChatSessionModel session = sessions.get(index);
+            if (session.project.equals(project)) return session;
+        }
+        return null;
+    }
+
+    private String nextSessionLabel(IProject project) {
+        int number = sessionNumbers.merge(project.getFullPath().toString(), 1, Integer::sum);
+        return project.getName() + " · " + number;
+    }
+
+    private void addAndSelectSession(ChatSessionModel session) {
+        sessions.add(session);
+        projectSelector.add(session.label);
+        activeSession = session;
+        projectSelector.select(projectSelector.getItemCount() - 1);
+        renderTranscript();
+        renderStatus();
+        updateControls();
     }
 
     private void selectSession(ChatSessionModel session) {
@@ -391,7 +410,7 @@ public final class AcpChatView extends ViewPart {
     private void sendPrompt() {
         String text = prompt.getText().trim();
         ChatSessionModel session = activeSession;
-        if (text.isEmpty() || session == null || session.client == null || session.agentMessageOpen || session.switching) {
+        if (text.isEmpty() || session == null || session.client == null || session.agentMessageOpen) {
             return;
         }
         prompt.setText("");
@@ -430,7 +449,7 @@ public final class AcpChatView extends ViewPart {
     }
 
     private void cancel() {
-        if (activeSession == null || activeSession.client == null || activeSession.switching) {
+        if (activeSession == null || activeSession.client == null) {
             return;
         }
         try {
@@ -441,8 +460,15 @@ public final class AcpChatView extends ViewPart {
     }
 
     private void openNewSessionForActiveProject() {
-        if (activeSession == null) return;
-        switchSession(activeSession, null);
+        ChatSessionModel current = activeSession;
+        if (current == null) return;
+        AcpSessionService.SessionConfiguration configuration = sessionService.newSessionConfiguration();
+        AgentProvider provider = configuration.provider();
+        ChatSessionModel session = new ChatSessionModel(current.project, nextSessionLabel(current.project), provider,
+                configuration.reviewFileChanges(), configuration.hideAgentCommands());
+        addAndSelectSession(session);
+        setStatus(session, "Connecting to " + provider.name() + " in " + current.project.getLocation() + "…");
+        connect(session, provider, null, false, provider.name());
     }
 
     private void chooseAgentSession() {
@@ -483,38 +509,13 @@ public final class AcpChatView extends ViewPart {
     }
 
     private void restoreListedSession(ChatSessionModel session, SessionInfo selected) {
-        switchSession(session, selected.id());
-    }
-
-    /**
-     * Switches conversations on one initialized ACP transport.  session/close is sent before
-     * session/new or session/load, so a prior session cannot remain active accidentally.
-     */
-    private void switchSession(ChatSessionModel session, String restoredSessionId) {
-        if (session == null || session.client == null || session.switching) return;
-        AgentClient client = session.client;
-        session.switching = true;
-        session.agentMessageOpen = false;
-        setStatus(session, "Closing current session…");
-        updateControls();
-        sessionService.switchSession(client, session.project.getLocation().toFile().toPath(), restoredSessionId,
-                replaysTranscript -> uiAndWait(() -> {
-                    session.resetConversation();
-                    session.acceptingRestoredTranscript = replaysTranscript;
-                    renderTranscript();
-                }))
-                .whenComplete((switched, operationError) -> ui(() -> {
-            if (session.client != client || !session.switching) return;
-            session.switching = false;
-            if (operationError != null) {
-                onError(session, "Could not open the selected session", unwrap(operationError));
-            } else {
-                // Keep this true until sendPrompt starts a new turn: session/load updates
-                // can be queued on the UI thread after its JSON-RPC response arrives.
-                setStatus(session, restoredSessionId == null ? "New session ready" : "Session restored");
-            }
-            updateControls();
-        }));
+        ChatSessionModel restored = new ChatSessionModel(session.project, nextSessionLabel(session.project),
+                session.provider, session.reviewFileChanges, session.hideAgentCommands);
+        // session/load may replay transcript updates before its response completes.
+        restored.acceptingRestoredTranscript = session.client.capabilities().loadSession();
+        addAndSelectSession(restored);
+        setStatus(restored, "Restoring session with " + session.provider.name() + "…");
+        connect(restored, session.provider, selected.id(), true, session.provider.name());
     }
 
     private AcpChatSessionListener listenerFor(ChatSessionModel session) {
@@ -615,8 +616,7 @@ public final class AcpChatView extends ViewPart {
         }
         if (selected >= 0) modelSelector.select(selected);
         else if (modelSelector.getItemCount() > 0) modelSelector.select(0);
-        modelSelector.setEnabled(activeSession != null && activeSession.client != null && !activeSession.agentMessageOpen
-                && !activeSession.switching);
+        modelSelector.setEnabled(activeSession != null && activeSession.client != null && !activeSession.agentMessageOpen);
         modelSelector.setToolTipText(option.description().isBlank() ? "Model for the active ACP session" : option.description());
     }
 
@@ -638,8 +638,7 @@ public final class AcpChatView extends ViewPart {
             selector.add(choice.label());
             if (choice.value().equals(current)) selector.select(selector.getItemCount() - 1);
         }
-        selector.setEnabled(activeSession != null && activeSession.client != null && !activeSession.agentMessageOpen
-                && !activeSession.switching);
+        selector.setEnabled(activeSession != null && activeSession.client != null && !activeSession.agentMessageOpen);
         selector.setToolTipText(option.description().isBlank() ? defaultTooltip : option.description());
     }
 
@@ -739,7 +738,7 @@ public final class AcpChatView extends ViewPart {
     }
 
     private CompletableFuture<String> requestElicitationFor(ChatSessionModel session, ElicitationRequest request) {
-        return dialogs.requestElicitation(request);
+        return dialogs.requestElicitation(sessionLabel(session), request);
     }
 
     public void onAgentText(String text) {
@@ -793,15 +792,19 @@ public final class AcpChatView extends ViewPart {
     }
 
     private CompletableFuture<String> requestAuthenticationFor(ChatSessionModel session, List<AuthMethod> methods) {
-        return dialogs.requestAuthentication(methods);
+        return dialogs.requestAuthentication(sessionLabel(session), methods);
     }
 
     private CompletableFuture<String> requestPermissionFor(ChatSessionModel session, String title, List<PermissionOption> options) {
-        return dialogs.requestPermission(title, options);
+        return dialogs.requestPermission(sessionLabel(session), title, options);
     }
 
     private CompletableFuture<String> requestPermissionFor(ChatSessionModel session, PermissionRequest request) {
-        return dialogs.requestPermission(request);
+        return dialogs.requestPermission(sessionLabel(session), request);
+    }
+
+    private static String sessionLabel(ChatSessionModel session) {
+        return session == null ? "ACP session" : session.label;
     }
 
     private void updateToolCall(ChatSessionModel session, ToolCall toolCall) {
@@ -1094,19 +1097,6 @@ public final class AcpChatView extends ViewPart {
         updateControls();
     }
 
-    /** Replaces the active ACP conversation without changing the project entry in the selector. */
-    private void replaceSession(ChatSessionModel previous, ChatSessionModel replacement) {
-        int index = sessions.indexOf(previous);
-        if (index < 0) return;
-        retire(previous);
-        sessions.set(index, replacement);
-        activeSession = replacement;
-        projectSelector.select(index);
-        renderTranscript();
-        renderStatus();
-        updateControls();
-    }
-
     /** session/close gives agents a chance to durably store the conversation. */
     private void retire(ChatSessionModel session) {
         AgentClient previousClient = session.client;
@@ -1155,19 +1145,6 @@ public final class AcpChatView extends ViewPart {
                 action.run();
             }
         });
-    }
-
-    /** Executes a state transition before the ACP service starts the next session operation. */
-    private void uiAndWait(Runnable action) {
-        Display display = getSite().getShell().getDisplay();
-        if (display.isDisposed()) return;
-        if (Display.getCurrent() == display) {
-            action.run();
-        } else {
-            display.syncExec(() -> {
-                if (transcript != null && !transcript.isDisposed()) action.run();
-            });
-        }
     }
 
     private static long elapsedMillis(long startedAt, long completedAt) {

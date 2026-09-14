@@ -4,7 +4,6 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
-import java.util.function.Consumer;
 
 import org.eclipse.jface.preference.IPreferenceStore;
 
@@ -23,7 +22,6 @@ import dev.eclipseacp.client.preferences.AgentProviderRegistry;
  */
 final class AcpSessionService {
     record SessionConfiguration(AgentProvider provider, boolean reviewFileChanges, boolean hideAgentCommands) { }
-    record SessionSwitch(String sessionId) { }
 
     private final IPreferenceStore preferences;
     private final McpServerRegistry mcpServers;
@@ -77,20 +75,6 @@ final class AcpSessionService {
         } catch (RuntimeException exception) {
             return false;
         }
-    }
-
-    /** Closes the active ACP session before creating or restoring its replacement. */
-    CompletableFuture<SessionSwitch> switchSession(AgentClient client, Path workingDirectory, String restoredSessionId,
-            Consumer<Boolean> beforeOpen) {
-        return client.closeSession().thenCompose(ignored -> {
-            boolean replayTranscript = restoredSessionId != null && client.capabilities().loadSession();
-            beforeOpen.accept(replayTranscript);
-            CompletableFuture<Void> operation = restoredSessionId == null
-                    ? client.startNewSession(workingDirectory)
-                    : replayTranscript ? client.loadSession(restoredSessionId, workingDirectory)
-                            : client.resumeSession(restoredSessionId, workingDirectory);
-            return operation.thenApply(result -> new SessionSwitch(client.sessionId()));
-        });
     }
 
 }
