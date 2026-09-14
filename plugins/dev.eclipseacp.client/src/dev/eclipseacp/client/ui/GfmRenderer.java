@@ -45,9 +45,7 @@ final class GfmRenderer {
         String content = markdown.isBlank()
                 ? "<section class='welcome'><div class='mark'>✦</div><h1>Build something great</h1>"
                     + "<p>Explore your code, solve a problem, or plan your next change.</p>"
-                    + "<div class='hint'>To start, right-click a project and open an ACP session.</div>"
-                    + "<div class='examples'><span>@file · Current file</span><span>@selection · Selected code</span>"
-                    + "<span>@problems · Workspace diagnostics</span></div></section>"
+                    + "<div class='hint'>To start, right-click a project and open an ACP session.</div></section>"
                 : (fileLinkResolver == null ? RENDERER : renderer(fileLinkResolver)).render(PARSER.parse(markdown));
         return "<!doctype html><html><head><meta charset=\"utf-8\"><meta name='viewport' content='width=device-width,initial-scale=1'><style>"
                 + ":root{color-scheme:light dark;--bg:#ffffff;--fg:#24292f;--muted:#626b78;--surface:#f5f6f8;--line:#dce1e8;--accent:#6254c7;}"
@@ -64,8 +62,7 @@ final class GfmRenderer {
                 + "blockquote{border-left:3px solid var(--accent);border-radius:0 8px 8px 0;margin:14px 0;padding:6px 12px;color:var(--muted);background:var(--surface);}"
                 + "a{color:var(--accent)}a:focus-visible{outline:2px solid var(--accent);outline-offset:3px}"
                 + ".welcome{padding:clamp(24px,10vh,100px) 4px 24px;max-width:430px;margin:auto}.mark{font-size:32px;color:var(--accent)}"
-                + ".welcome p,.hint{color:var(--muted)}.hint{font-size:.9em;margin-top:24px}.examples{display:flex;flex-wrap:wrap;gap:8px;margin-top:20px}"
-                + ".examples span{font-size:.85em;background:var(--surface);border:1px solid var(--line);padding:6px 10px;border-radius:8px}"
+                + ".welcome p,.hint{color:var(--muted)}.hint{font-size:.9em;margin-top:24px}"
                 + "@media(max-width:360px){body{padding:12px}}"
                 + "</style></head><body><main>" + content + "</main></body></html>";
     }
