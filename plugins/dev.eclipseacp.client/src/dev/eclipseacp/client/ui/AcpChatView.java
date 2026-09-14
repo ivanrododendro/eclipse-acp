@@ -167,7 +167,7 @@ public final class AcpChatView extends ViewPart {
         collaborationModeSelector.setToolTipText("Session mode for the active ACP session");
         collaborationModeSelector.setEnabled(false);
         collaborationModeSelector.addListener(SWT.Selection, ignored -> changeConfigOption(collaborationModeSelector,
-                AgentConfigOptions.collaborationMode(activeSession), "Session mode"));
+                AgentConfigOptions.sessionMode(activeSession), "Session mode"));
 
         prompt = new Text(composer, SWT.MULTI | SWT.WRAP | SWT.V_SCROLL);
         GridData promptData = new GridData(SWT.FILL, SWT.FILL, true, false);
@@ -183,7 +183,7 @@ public final class AcpChatView extends ViewPart {
                 promptData.heightHint = height;
                 composer.getParent().layout(true, true);
             }
-            updateControls();
+            updateSendButton();
         });
         prompt.addKeyListener(new KeyAdapter() {
             @Override public void keyPressed(KeyEvent event) {
@@ -625,7 +625,7 @@ public final class AcpChatView extends ViewPart {
     }
 
     private void refreshCollaborationModeSelector() {
-        refreshConfigSelector(collaborationModeSelector, AgentConfigOptions.collaborationMode(activeSession),
+        refreshConfigSelector(collaborationModeSelector, AgentConfigOptions.sessionMode(activeSession),
                 "Session mode for the active ACP session");
     }
 
@@ -1030,7 +1030,7 @@ public final class AcpChatView extends ViewPart {
     private void updateControls() {
         if (sendButton == null || sendButton.isDisposed()) return;
         boolean connected = activeSession != null && activeSession.isConnected();
-        sendButton.setEnabled(connected && !activeSession.agentMessageOpen && !prompt.getText().isBlank());
+        updateSendButton();
         boolean busy = activeSession != null && activeSession.isBusy();
         showControl(sendButton, !busy);
         showControl(stopButton, busy);
@@ -1066,6 +1066,18 @@ public final class AcpChatView extends ViewPart {
         prompt.setEnabled(connected);
         projectSelector.setEnabled(connected || !sessions.isEmpty());
         composer.getParent().layout(true, true);
+    }
+
+    /**
+     * The prompt modify listener runs for every keystroke. Keep that path limited to
+     * the one control whose state depends on its content: refreshing the whole
+     * composer rebuilds configuration combos and forces a costly SWT layout.
+     */
+    private void updateSendButton() {
+        if (sendButton == null || sendButton.isDisposed() || prompt == null || prompt.isDisposed()) return;
+        boolean enabled = activeSession != null && activeSession.isConnected()
+                && !activeSession.agentMessageOpen && !prompt.getText().isBlank();
+        if (sendButton.getEnabled() != enabled) sendButton.setEnabled(enabled);
     }
 
     private void closeActiveSession() {

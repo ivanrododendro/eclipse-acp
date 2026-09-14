@@ -9,7 +9,7 @@ import dev.eclipseacp.client.agent.ConfigValue;
 final class AgentConfigOptions {
     private AgentConfigOptions() { }
     static ConfigOption model(ChatSessionModel session) { return find(session, "model", "model"); }
-    static ConfigOption collaborationMode(ChatSessionModel session) { return find(session, "collaboration_mode", "collaboration mode"); }
+    static ConfigOption sessionMode(ChatSessionModel session) { return find(session, "mode", "session mode", "mode"); }
     static ConfigOption thoughtLevel(ChatSessionModel session) { return find(session, "thought_level", "thought level", "reasoning level"); }
     static String text(ConfigValue value) { return value == null || value.value() == null ? "" : String.valueOf(value.value()); }
 
