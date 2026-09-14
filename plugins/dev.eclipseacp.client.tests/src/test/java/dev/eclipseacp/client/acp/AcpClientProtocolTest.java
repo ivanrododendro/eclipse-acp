@@ -2,6 +2,7 @@ package dev.eclipseacp.client.acp;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
 import java.util.List;
@@ -140,7 +141,25 @@ public class AcpClientProtocolTest {
         client.onNotification("session/update", params);
 
         assertEquals("hello", listener.text);
-        assertEquals("hello", listener.text);
+    }
+
+    @Test
+    public void doesNotForwardToolContentMislabelledAsAnAgentMessageChunk() {
+        CapturingListener listener = new CapturingListener();
+        AcpClient client = new AcpClient("unused", "", listener);
+        JsonObject content = new JsonObject();
+        content.addProperty("type", "tool_result");
+        content.addProperty("text", "tool output that must stay out of the transcript");
+        JsonObject update = new JsonObject();
+        update.addProperty("sessionUpdate", "agent_message_chunk");
+        update.add("content", content);
+        JsonObject params = new JsonObject();
+        params.addProperty("sessionId", "session-1");
+        params.add("update", update);
+
+        client.onNotification("session/update", params);
+
+        assertNull(listener.text);
     }
 
     @Test

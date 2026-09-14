@@ -698,7 +698,19 @@ public final class AcpClient implements AgentClient, JsonRpcHandler {
         }
         if (element.isJsonObject()) {
             JsonObject object = element.getAsJsonObject();
-            if (object.has("text") && object.get("text").isJsonPrimitive()) {
+            // ACP content is a tagged union.  In particular, some agents serialize
+            // tool calls/results as chunks containing a textual preview.  Treating
+            // every object with a `text` member as an agent message leaks those
+            // previews into the transcript and bypasses the hide-agent-commands
+            // preference.  Only an actual text content block belongs in the chat.
+            if ("text".equals(string(object, "type"))
+                    && object.has("text") && object.get("text").isJsonPrimitive()) {
+                return object.get("text").getAsString();
+            }
+            // Older ACP implementations sometimes omit the tag for an otherwise
+            // normal text block. Keep that compatibility, but never unwrap a
+            // declared non-text block (such as tool_call or tool_result).
+            if (!object.has("type") && object.has("text") && object.get("text").isJsonPrimitive()) {
                 return object.get("text").getAsString();
             }
             return textFrom(object.get("content"));
