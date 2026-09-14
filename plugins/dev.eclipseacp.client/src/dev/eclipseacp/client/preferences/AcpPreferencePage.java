@@ -25,7 +25,7 @@ public final class AcpPreferencePage extends PreferencePage implements IWorkbenc
         new Label(edit, SWT.NONE).setText("Name:"); name = field(edit); new Label(edit, SWT.NONE).setText("Command:"); command = field(edit); new Label(edit, SWT.NONE).setText("Arguments:"); arguments = field(edit);
         Button fresh = new Button(edit, SWT.PUSH); fresh.setText("New provider"); fresh.addListener(SWT.Selection, e -> { providerList.deselectAll(); name.setText(""); command.setText(""); arguments.setText(""); });
         Button save = new Button(edit, SWT.PUSH); save.setText("Add / update"); save.addListener(SWT.Selection, e -> saveProvider());
-        Button select = new Button(edit, SWT.PUSH); select.setText("Use selected"); select.addListener(SWT.Selection, e -> { int i = providerList.getSelectionIndex(); if (i >= 0) { registry.select(registry.list().get(i).id()); refresh(); } });
+        Button select = new Button(edit, SWT.PUSH); select.setText("Set as default"); select.addListener(SWT.Selection, e -> { int i = providerList.getSelectionIndex(); if (i >= 0) { registry.select(registry.list().get(i).id()); refresh(); } });
         Button remove = new Button(edit, SWT.PUSH); remove.setText("Remove"); remove.addListener(SWT.Selection, e -> { int i = providerList.getSelectionIndex(); if (i >= 0) { registry.remove(registry.list().get(i).id()); refresh(); } });
         reviewFileChanges = new Button(root, SWT.CHECK);
         reviewFileChanges.setText("Review ACP file changes before applying them (Apply / Reject / Undo)");
