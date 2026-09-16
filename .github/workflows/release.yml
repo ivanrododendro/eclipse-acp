@@ -62,7 +62,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ inputs.release_tag || github.event.release.tag_name }}
-        run: gh release upload "$RELEASE_TAG" "eclipse-acp-p2-$RELEASE_TAG.zip" "eclipse-acp-p2-$RELEASE_TAG.zip.sha256" --clobber
+        run: gh release upload "$RELEASE_TAG" "eclipse-acp-p2-$RELEASE_TAG.zip" "eclipse-acp-p2-$RELEASE_TAG.zip.sha256" --clobber --repo "$GITHUB_REPOSITORY"
 
   publish-update-site:
     needs: build
