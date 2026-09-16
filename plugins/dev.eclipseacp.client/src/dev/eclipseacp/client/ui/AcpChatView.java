@@ -72,6 +72,9 @@ public final class AcpChatView extends ViewPart {
     private Combo modelSelector;
     private Combo thoughtLevelSelector;
     private Combo collaborationModeSelector;
+    private Label collaborationModeLabel;
+    private Label providerLabel;
+    private Composite collaborationModeBar;
     private Label status;
     private Composite reviewBar;
     private Label reviewSummary;
@@ -152,12 +155,12 @@ public final class AcpChatView extends ViewPart {
         composerLayout.marginHeight = 8;
         composer.setLayout(composerLayout);
 
-        Composite collaborationModeBar = new Composite(composer, SWT.NONE);
+        collaborationModeBar = new Composite(composer, SWT.NONE);
         collaborationModeBar.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
-        GridLayout collaborationModeLayout = new GridLayout(2, false);
+        GridLayout collaborationModeLayout = new GridLayout(3, false);
         collaborationModeLayout.marginWidth = collaborationModeLayout.marginHeight = 0;
         collaborationModeBar.setLayout(collaborationModeLayout);
-        Label collaborationModeLabel = new Label(collaborationModeBar, SWT.NONE);
+        collaborationModeLabel = new Label(collaborationModeBar, SWT.NONE);
         collaborationModeLabel.setText("Session mode:");
         collaborationModeSelector = new Combo(collaborationModeBar, SWT.DROP_DOWN | SWT.READ_ONLY);
         collaborationModeSelector.setLayoutData(new GridData(SWT.BEGINNING, SWT.CENTER, false, false));
@@ -165,6 +168,8 @@ public final class AcpChatView extends ViewPart {
         collaborationModeSelector.setEnabled(false);
         collaborationModeSelector.addListener(SWT.Selection, ignored -> changeConfigOption(collaborationModeSelector,
                 AgentConfigOptions.sessionMode(activeSession), "Session mode"));
+        providerLabel = new Label(collaborationModeBar, SWT.NONE);
+        providerLabel.setLayoutData(new GridData(SWT.END, SWT.CENTER, true, false));
 
         prompt = new Text(composer, SWT.MULTI | SWT.WRAP | SWT.V_SCROLL);
         GridData promptData = new GridData(SWT.FILL, SWT.FILL, true, false);
@@ -337,8 +342,7 @@ public final class AcpChatView extends ViewPart {
 
     private void connect(ChatSessionModel session, AgentProvider provider, String restoredSessionId,
             boolean restored, String agentName) {
-        AgentClient newClient = sessionService.createClient(provider, listenerFor(session), session.reviewFileChanges,
-                session.project.getName());
+        AgentClient newClient = sessionService.createClient(provider, listenerFor(session), session.reviewFileChanges);
         session.client = newClient;
         CompletableFuture<Void> connection = sessionService.connect(newClient,
                 session.project.getLocation().toFile().toPath(), restoredSessionId);
@@ -635,6 +639,11 @@ public final class AcpChatView extends ViewPart {
     private void refreshCollaborationModeSelector() {
         refreshConfigSelector(collaborationModeSelector, AgentConfigOptions.sessionMode(activeSession),
                 "Session mode for the active ACP session");
+    }
+
+    private void refreshProviderLabel() {
+        if (providerLabel == null || providerLabel.isDisposed()) return;
+        providerLabel.setText(activeSession == null ? "" : "Agent : " + activeSession.provider.name());
     }
 
     private void refreshConfigSelector(Combo selector, ConfigOption option, String defaultTooltip) {
@@ -1059,11 +1068,15 @@ public final class AcpChatView extends ViewPart {
         refreshModelSelector();
         refreshThoughtLevelSelector();
         refreshCollaborationModeSelector();
+        refreshProviderLabel();
         showControl(settingsButton, settingsButton.getEnabled());
         // Keep selectors visible while a turn is in progress; refresh disables them until idle.
         showControl(modelSelector, modelSelector.getItemCount() > 0);
         showControl(thoughtLevelSelector, thoughtLevelSelector.getItemCount() > 0);
-        showControl(collaborationModeSelector.getParent(), collaborationModeSelector.getItemCount() > 0);
+        boolean sessionModeAvailable = collaborationModeSelector.getItemCount() > 0;
+        showControl(collaborationModeLabel, sessionModeAvailable);
+        showControl(collaborationModeSelector, sessionModeAvailable);
+        showControl(collaborationModeBar, activeSession != null);
         showControl(reviewBar, hasDiffs || undoButton.getEnabled());
         showControl(applyButton, hasDiffs);
         showControl(rejectButton, hasDiffs);
