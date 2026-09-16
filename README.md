@@ -49,6 +49,22 @@ The p2 update site is generated in:
 releng/dev.eclipseacp.repository/target/repository
 ```
 
+## Release and Eclipse Marketplace
+
+Publishing a GitHub Release runs `.github/workflows/release.yml`. It produces both:
+
+- `eclipse-acp-p2-<tag>.zip` and its SHA-256 checksum as release assets. The ZIP
+  is a portable p2 archive: `artifacts.jar`, `content.jar`, `features/` and
+  `plugins/` are at its root.
+- the same uncompressed p2 repository on GitHub Pages. After Pages has been
+  enabled once in the repository settings with **Source: GitHub Actions**, use
+  `https://ivanrododendro.github.io/eclipse-acp/` as the **Update site URL** in
+  the Eclipse Marketplace listing.
+
+Marketplace installs from that HTTP update site; the ZIP is retained as a
+downloadable, immutable release artifact. The Pages URL always serves the most
+recent published release, so Marketplace users receive normal p2 updates.
+
 ## Installing safely
 
 The update site contains only the Eclipse ACP feature and bundle; it never embeds or

@@ -12,7 +12,6 @@ import dev.eclipseacp.client.agent.AgentClient;
 import dev.eclipseacp.client.agent.AgentListener;
 import dev.eclipseacp.client.agent.AgentProvider;
 import dev.eclipseacp.client.agent.SessionInfo;
-import dev.eclipseacp.client.mcp.McpServerRegistry;
 import dev.eclipseacp.client.preferences.AcpPreferences;
 import dev.eclipseacp.client.preferences.AgentProviderRegistry;
 
@@ -24,7 +23,6 @@ final class AcpSessionService {
     record SessionConfiguration(AgentProvider provider, boolean reviewFileChanges, boolean hideAgentCommands) { }
 
     private final IPreferenceStore preferences;
-    private final McpServerRegistry mcpServers;
 
     AcpSessionService() {
         this(AcpPreferences.store());
@@ -32,7 +30,6 @@ final class AcpSessionService {
 
     AcpSessionService(IPreferenceStore preferences) {
         this.preferences = preferences;
-        this.mcpServers = new McpServerRegistry(preferences);
     }
 
     SessionConfiguration newSessionConfiguration() {
@@ -44,9 +41,8 @@ final class AcpSessionService {
                 preferences.getBoolean(AcpPreferences.HIDE_AGENT_COMMANDS_IN_CHAT));
     }
 
-    AgentClient createClient(AgentProvider provider, AgentListener listener, boolean reviewFileChanges, String projectName) {
-        return AcpClientFactory.create(provider, listener, reviewFileChanges,
-                mcpServers.forSession(provider.id(), projectName));
+    AgentClient createClient(AgentProvider provider, AgentListener listener, boolean reviewFileChanges) {
+        return AcpClientFactory.create(provider, listener, reviewFileChanges, List.of());
     }
 
     CompletableFuture<Void> connect(AgentClient client, Path workingDirectory, String restoredSessionId) {

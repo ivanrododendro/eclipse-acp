@@ -12,12 +12,18 @@ on:
 
 permissions:
   contents: write
+  pages: write
+  id-token: write
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # A manually rerun workflow must rebuild the selected release tag,
+          # not the then-current default branch.
+          ref: ${{ inputs.release_tag || github.event.release.tag_name }}
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -47,10 +53,35 @@ jobs:
         env:
           RELEASE_TAG: ${{ inputs.release_tag || github.event.release.tag_name }}
         run: |
-          zip -r "eclipse-acp-p2-${RELEASE_TAG}.zip" release/p2
+          (
+            cd release/p2
+            zip -r "../../eclipse-acp-p2-${RELEASE_TAG}.zip" .
+          )
           sha256sum "eclipse-acp-p2-${RELEASE_TAG}.zip" > "eclipse-acp-p2-${RELEASE_TAG}.zip.sha256"
       - name: Attach files to GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ inputs.release_tag || github.event.release.tag_name }}
         run: gh release upload "$RELEASE_TAG" "eclipse-acp-p2-$RELEASE_TAG.zip" "eclipse-acp-p2-$RELEASE_TAG.zip.sha256" --clobber
+
+  publish-update-site:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Download p2 repository
+        uses: actions/download-artifact@v4
+        with:
+          name: eclipse-acp-p2
+          path: site
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+      - name: Upload p2 update site to GitHub Pages
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+      - name: Deploy p2 update site
+        id: deployment
+        uses: actions/deploy-pages@v4
