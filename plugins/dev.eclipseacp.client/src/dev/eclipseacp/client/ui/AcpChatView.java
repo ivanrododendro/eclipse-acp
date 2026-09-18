@@ -19,6 +19,8 @@ import org.eclipse.swt.browser.Browser;
 import org.eclipse.swt.browser.LocationAdapter;
 import org.eclipse.swt.browser.LocationEvent;
 import org.eclipse.swt.browser.ProgressAdapter;
+import org.eclipse.swt.widgets.Menu;
+import org.eclipse.swt.widgets.MenuItem;
 import org.eclipse.swt.events.KeyAdapter;
 import org.eclipse.swt.events.KeyEvent;
 import org.eclipse.swt.layout.GridData;
@@ -56,6 +58,8 @@ import dev.eclipseacp.client.agent.ConfigOption;
 public final class AcpChatView extends ViewPart {
     public static final String ID = "dev.eclipseacp.client.views.chat";
     private Browser transcript;
+    private Menu transcriptMenu;
+    private MenuItem copyPasteNewSessionItem;
     private Text prompt;
     private Button sendButton;
     private Button stopButton;
@@ -121,6 +125,7 @@ public final class AcpChatView extends ViewPart {
 
         transcript = new Browser(parent, SWT.NONE);
         transcript.setLayoutData(new GridData(SWT.FILL, SWT.FILL, true, true));
+        installTranscriptContextMenu();
         transcript.addLocationListener(new LocationAdapter() {
             @Override public void changing(LocationEvent event) {
                 ChatSessionModel session = activeSession;
@@ -481,6 +486,76 @@ public final class AcpChatView extends ViewPart {
         replaceSessionForProject(session);
         setStatus(session, "Connecting to " + provider.name() + " in " + current.project.getLocation() + "…");
         connect(session, provider, null, false, provider.name());
+    }
+
+    private void installTranscriptContextMenu() {
+        transcriptMenu = new Menu(transcript);
+        copyPasteNewSessionItem = new MenuItem(transcriptMenu, SWT.PUSH);
+        copyPasteNewSessionItem.setText("Copy and Paste in a New Session");
+        copyPasteNewSessionItem.addListener(SWT.Selection, ignored -> {
+            String selectedText = selectedTranscriptText();
+            if (!selectedText.isBlank()) {
+                copyAndPasteInNewSession(selectedText);
+            }
+        });
+        transcriptMenu.addListener(SWT.Show, ignored -> {
+            String selectedText = selectedTranscriptText();
+            copyPasteNewSessionItem.setEnabled(!selectedText.isBlank()
+                    && activeSession != null
+                    && activeSession.client != null
+                    && !activeSession.isBusy());
+        });
+        transcript.setMenu(transcriptMenu);
+    }
+
+    private String selectedTranscriptText() {
+        if (transcript == null || transcript.isDisposed()) return "";
+        try {
+            Object value = transcript.evaluate(
+                    "window.getSelection ? window.getSelection().toString() : ''");
+            return value == null ? "" : value.toString();
+        } catch (RuntimeException exception) {
+            AcpLog.warn("Could not read selected transcript text", exception);
+            return "";
+        }
+    }
+
+    private void copyAndPasteInNewSession(String selectedText) {
+        ChatSessionModel session = activeSession;
+        if (session == null || session.client == null || session.isBusy() || selectedText.isBlank()) return;
+
+        session.sessionTransitioning = true;
+        updateControls();
+        Path projectDirectory = session.project.getLocation().toFile().toPath();
+        session.client.startNewSession(projectDirectory).whenComplete((ignored, error) -> ui(() -> {
+            session.sessionTransitioning = false;
+            if (error != null) {
+                onError(session, "Could not create a new ACP session", unwrap(error));
+                updateControls();
+                return;
+            }
+            resetSessionPresentation(session);
+            selectSession(session);
+            prompt.setText(selectedText);
+            prompt.setSelection(prompt.getText().length());
+            prompt.setFocus();
+            setStatus(session, "New session ready");
+            updateControls();
+        }));
+    }
+
+    private void resetSessionPresentation(ChatSessionModel session) {
+        session.transcriptMarkdown.setLength(0);
+        session.pendingAgentText.setLength(0);
+        session.toolCalls.clear();
+        session.renderedToolDiffs.clear();
+        session.attachments.clear();
+        session.commands.clear();
+        session.changes = new ChangeReviewService(session.project);
+        session.agentMessageOpen = false;
+        session.sessionTransitioning = false;
+        session.acceptingRestoredTranscript = false;
+        session.restoredAgentMessageOpen = false;
     }
 
     private void chooseAgentSession() {
