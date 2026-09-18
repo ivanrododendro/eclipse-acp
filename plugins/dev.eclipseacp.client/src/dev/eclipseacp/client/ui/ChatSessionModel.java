@@ -38,6 +38,7 @@ final class ChatSessionModel {
     final Map<String, String> commands = new LinkedHashMap<>();
     final Map<String, ConfigOption> configOptions = new LinkedHashMap<>();
     String sessionName = "New session";
+    String pendingInputText;
     String initialPrompt;
     String statusText = "Not connected";
 
