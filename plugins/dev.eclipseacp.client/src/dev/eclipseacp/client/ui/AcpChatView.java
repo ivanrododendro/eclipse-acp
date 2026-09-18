@@ -126,7 +126,7 @@ public final class AcpChatView extends ViewPart {
         GridData sessionNameData = new GridData(SWT.FILL, SWT.CENTER, true, false);
         sessionNameData.horizontalSpan = 2;
         sessionNameLabel.setLayoutData(sessionNameData);
-        sessionNameLabel.setText("Session: —");
+        sessionNameLabel.setText("Session : —");
         var fontData = projectSelector.getFont().getFontData();
         if (fontData.length > 0) {
             chatFontFamily = fontData[0].getName();
@@ -886,7 +886,7 @@ public final class AcpChatView extends ViewPart {
         if (sessionNameLabel == null || sessionNameLabel.isDisposed()) return;
         String name = activeSession == null || activeSession.sessionName == null
                 || activeSession.sessionName.isBlank() ? "—" : activeSession.sessionName;
-        sessionNameLabel.setText("Session: " + name);
+        sessionNameLabel.setText("Session : " + name);
         sessionNameLabel.getParent().layout();
     }
 
