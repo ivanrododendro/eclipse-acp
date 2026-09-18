@@ -42,6 +42,16 @@ jobs:
           mvn --batch-mode --no-transfer-progress \
             org.eclipse.tycho:tycho-versions-plugin:5.0.4:set-version \
             -DnewVersion="${RELEASE_VERSION}-SNAPSHOT"
+
+          # category.xml contains a versioned feature JAR reference which is not
+          # updated by tycho-versions-plugin. Keep it aligned with feature.xml.
+          CATEGORY_FILE="releng/dev.eclipseacp.repository/category.xml"
+          sed -i -E \
+            "s/dev\\.eclipseacp\\.feature_[0-9]+\\.[0-9]+\\.[0-9]+\\.qualifier\\.jar/dev.eclipseacp.feature_${RELEASE_VERSION}.qualifier.jar/" \
+            "$CATEGORY_FILE"
+          sed -i -E \
+            "s/(id=\"dev\\.eclipseacp\\.feature\" version=\")[^\"]+/\\1${RELEASE_VERSION}.qualifier/" \
+            "$CATEGORY_FILE"
       - name: Build p2 repository
         run: mvn --batch-mode --no-transfer-progress clean verify
       - name: Verify p2 repository isolation
