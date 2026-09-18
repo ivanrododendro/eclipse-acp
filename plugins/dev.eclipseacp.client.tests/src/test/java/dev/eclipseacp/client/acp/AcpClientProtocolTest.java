@@ -42,6 +42,46 @@ public class AcpClientProtocolTest {
     }
 
     @Test
+    public void deliversUpdateReceivedBeforeNewSessionResponse() {
+        FakeTransport transport = new FakeTransport();
+        CapturingListener listener = new CapturingListener();
+        AcpClient client = new AcpClient("agent", "", listener, false, List.of(),
+                (command, arguments, workingDirectory, diagnosticConsumer, diagnosticErrorConsumer) ->
+                        new FakeProcess(),
+                (reader, writer, handler, errorHandler) -> {
+                    transport.handler = handler;
+                    transport.sendUpdateBeforeSecondSessionResponse = true;
+                    return transport;
+                });
+
+        client.connect(Path.of("/workspace/project")).join();
+        client.startNewSession(Path.of("/workspace/project"), listener).join();
+
+        assertEquals("session-2", client.sessionId());
+        assertEquals("early update", listener.text);
+    }
+
+    @Test
+    public void discardsLateUpdateFromClosedSessionWhileNewSessionIsPending() {
+        FakeTransport transport = new FakeTransport();
+        CapturingListener listener = new CapturingListener();
+        AcpClient client = new AcpClient("agent", "", listener, false, List.of(),
+                (command, arguments, workingDirectory, diagnosticConsumer, diagnosticErrorConsumer) ->
+                        new FakeProcess(),
+                (reader, writer, handler, errorHandler) -> {
+                    transport.handler = handler;
+                    transport.sendOldUpdateBeforeSecondSessionResponse = true;
+                    return transport;
+                });
+
+        client.connect(Path.of("/workspace/project")).join();
+        client.startNewSession(Path.of("/workspace/project"), listener).join();
+
+        assertEquals("session-2", client.sessionId());
+        assertNull(listener.text);
+    }
+
+    @Test
     public void parsesV1AgentCapabilitiesAtTheirSpecifiedLocations() {
         JsonObject caps = new JsonObject();
         caps.addProperty("loadSession", true);
@@ -245,6 +285,9 @@ public class AcpClientProtocolTest {
     private static final class FakeTransport implements JsonRpcTransport {
         private final List<String> methods = new ArrayList<>();
         private int sessionNumber;
+        private JsonRpcHandler handler;
+        private boolean sendUpdateBeforeSecondSessionResponse;
+        private boolean sendOldUpdateBeforeSecondSessionResponse;
 
         @Override public void start() { }
 
@@ -259,9 +302,29 @@ public class AcpClientProtocolTest {
                 capabilities.add("sessionCapabilities", session);
                 result.add("agentCapabilities", capabilities);
             } else if ("session/new".equals(method)) {
-                result.addProperty("sessionId", "session-" + (++sessionNumber));
+                String newSessionId = "session-" + (++sessionNumber);
+                if (sessionNumber == 2 && sendUpdateBeforeSecondSessionResponse) {
+                    handler.onNotification("session/update", agentTextUpdate(newSessionId, "early update"));
+                }
+                if (sessionNumber == 2 && sendOldUpdateBeforeSecondSessionResponse) {
+                    handler.onNotification("session/update", agentTextUpdate("session-1", "late old update"));
+                }
+                result.addProperty("sessionId", newSessionId);
             }
             return CompletableFuture.completedFuture(result);
+        }
+
+        private static JsonObject agentTextUpdate(String sessionId, String text) {
+            JsonObject content = new JsonObject();
+            content.addProperty("type", "text");
+            content.addProperty("text", text);
+            JsonObject update = new JsonObject();
+            update.addProperty("sessionUpdate", "agent_message_chunk");
+            update.add("content", content);
+            JsonObject params = new JsonObject();
+            params.addProperty("sessionId", sessionId);
+            params.add("update", update);
+            return params;
         }
 
         @Override public void notification(String method, JsonObject params) { }
