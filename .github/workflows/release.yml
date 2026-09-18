@@ -29,6 +29,19 @@ jobs:
           distribution: temurin
           java-version: "21"
           cache: maven
+      - name: Set release version in Tycho reactor
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag || github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          RELEASE_VERSION="${RELEASE_TAG#v}"
+          if [[ ! "$RELEASE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Release tag must be a semantic version such as 0.1.4 or v0.1.4: $RELEASE_TAG" >&2
+            exit 1
+          fi
+          mvn --batch-mode --no-transfer-progress \
+            org.eclipse.tycho:tycho-versions-plugin:5.0.4:set-version \
+            -DnewVersion="${RELEASE_VERSION}-SNAPSHOT"
       - name: Build p2 repository
         run: mvn --batch-mode --no-transfer-progress clean verify
       - name: Verify p2 repository isolation
