@@ -53,6 +53,9 @@ public final class AcpClient implements AgentClient, JsonRpcHandler {
     private volatile AgentCapabilities capabilities = AgentCapabilities.NONE;
     private volatile List<AuthMethod> authenticationMethods = List.of();
     private final ToolCallTracker toolCalls = new ToolCallTracker();
+    private final Object sessionLifecycleLock = new Object();
+    private final List<JsonObject> pendingNewSessionUpdates = new ArrayList<>();
+    private boolean newSessionPending;
     private final List<String> recentAgentDiagnostics = new ArrayList<>();
     private volatile long promptSentAtNanos;
     private final AtomicBoolean firstAgentChunkReceived = new AtomicBoolean();
@@ -430,15 +433,47 @@ public final class AcpClient implements AgentClient, JsonRpcHandler {
         params.add("mcpServers", configuredMcpServers());
 
         AcpLog.info("Sending ACP request: method='session/new', cwd='" + params.get("cwd").getAsString() + "'");
-        return connection.request("session/new", params).thenApply(result -> {
-            if (!result.has("sessionId")) {
-                throw new IllegalStateException("ACP agent did not return a sessionId");
+        synchronized (sessionLifecycleLock) {
+            newSessionPending = true;
+            pendingNewSessionUpdates.clear();
+        }
+        CompletableFuture<JsonObject> request;
+        try {
+            request = connection.request("session/new", params);
+        } catch (RuntimeException error) {
+            clearPendingNewSessionUpdates();
+            throw error;
+        }
+        return request.thenApply(result -> {
+            synchronized (sessionLifecycleLock) {
+                if (!result.has("sessionId")) {
+                    throw new IllegalStateException("ACP agent did not return a sessionId");
+                }
+                sessionId = result.get("sessionId").getAsString();
+                newSessionPending = false;
+                publishConfigOptions(result);
+                AcpLog.info("ACP session created: sessionId='" + sessionId + "'");
+                for (JsonObject pending : pendingNewSessionUpdates) {
+                    String pendingSessionId = string(pending, "sessionId");
+                    if (Objects.equals(sessionId, pendingSessionId)) {
+                        deliverSessionUpdate(pending);
+                    } else {
+                        AcpLog.info("Ignoring ACP update for inactive sessionId='" + pendingSessionId + "'");
+                    }
+                }
+                pendingNewSessionUpdates.clear();
             }
-            sessionId = result.get("sessionId").getAsString();
-            publishConfigOptions(result);
-            AcpLog.info("ACP session created: sessionId='" + sessionId + "'");
             return result;
+        }).whenComplete((result, error) -> {
+            if (error != null) clearPendingNewSessionUpdates();
         });
+    }
+
+    private void clearPendingNewSessionUpdates() {
+        synchronized (sessionLifecycleLock) {
+            newSessionPending = false;
+            pendingNewSessionUpdates.clear();
+        }
     }
 
     /** Delivers option state returned by session/new and session/set_config_option. */
@@ -533,18 +568,30 @@ public final class AcpClient implements AgentClient, JsonRpcHandler {
         if (!"session/update".equals(method)) {
             return;
         }
+        synchronized (sessionLifecycleLock) {
+            String updateSessionId = string(params, "sessionId");
+            if (connection != null && sessionId == null && newSessionPending && !updateSessionId.isBlank()) {
+                pendingNewSessionUpdates.add(params.deepCopy());
+                AcpLog.info("Buffering ACP update until session/new completes: sessionId='" + updateSessionId + "'");
+                return;
+            }
+            // A live connection is attached to exactly one session in this client. Once
+            // session/close completes, sessionId is null, so late updates from the retired
+            // session must not leak into the conversation that is about to be loaded. Some
+            // agents omit sessionId while replaying session/load, however; those updates belong
+            // to the sole active session and must still reach the transcript.
+            if (connection != null && (sessionId == null
+                    || (!updateSessionId.isBlank() && !Objects.equals(sessionId, updateSessionId)))) {
+                AcpLog.info("Ignoring ACP update for inactive sessionId='" + updateSessionId + "'");
+                return;
+            }
+            deliverSessionUpdate(params);
+        }
+    }
+
+    private void deliverSessionUpdate(JsonObject params) {
         JsonObject update = object(params.get("update"));
         String updateSessionId = string(params, "sessionId");
-        // A live connection is attached to exactly one session in this client. Once
-        // session/close completes, sessionId is null, so late updates from the retired
-        // session must not leak into the conversation that is about to be loaded. Some
-        // agents omit sessionId while replaying session/load, however; those updates belong
-        // to the sole active session and must still reach the transcript.
-        if (connection != null && (sessionId == null
-                || (!updateSessionId.isBlank() && !Objects.equals(sessionId, updateSessionId)))) {
-            AcpLog.info("Ignoring ACP update for inactive sessionId='" + updateSessionId + "'");
-            return;
-        }
         String kind = string(update, "sessionUpdate");
 
         if ("available_commands_update".equals(kind)) {
