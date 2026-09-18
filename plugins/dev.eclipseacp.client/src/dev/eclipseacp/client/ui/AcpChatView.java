@@ -159,6 +159,7 @@ public final class AcpChatView extends ViewPart {
                     transcript.execute("document.querySelector('main').innerHTML=new DOMParser().parseFromString("
                             + document + ", 'text/html').querySelector('main').innerHTML;");
                 }
+                installTranscriptSelectionTracking();
                 scrollTranscriptToBottom();
             }
         });
@@ -566,9 +567,10 @@ public final class AcpChatView extends ViewPart {
                 copyAndPasteInNewSession(selectedText);
             }
             transcriptSelection = "";
+            clearSelectedTranscriptText();
         });
         transcriptMenu.addListener(SWT.Show, ignored -> {
-            if (transcriptSelection.isBlank()) transcriptSelection = readSelectedTranscriptText();
+            transcriptSelection = readSelectedTranscriptText();
             String selectedText = transcriptSelection;
             copyPasteNewSessionItem.setEnabled(!selectedText.isBlank()
                     && activeSession != null
@@ -579,16 +581,42 @@ public final class AcpChatView extends ViewPart {
         transcript.setMenu(transcriptMenu);
     }
 
+    private void installTranscriptSelectionTracking() {
+        if (transcript == null || transcript.isDisposed()) return;
+        transcript.execute("(() => {"
+                + "if (window.__acpSelectionTrackingInstalled) return;"
+                + "window.__acpSelectionTrackingInstalled = true;"
+                + "window.__acpSelectedText = '';"
+                + "const rememberSelection = () => {"
+                + "const text = window.getSelection ? window.getSelection().toString() : '';"
+                + "if (text.trim()) window.__acpSelectedText = text;"
+                + "};"
+                + "document.addEventListener('selectionchange', rememberSelection);"
+                + "document.addEventListener('contextmenu', rememberSelection, true);"
+                + "document.addEventListener('mousedown', event => {"
+                + "if (event.button === 0) window.__acpSelectedText = '';"
+                + "}, true);"
+                + "})()");
+    }
+
     private String readSelectedTranscriptText() {
         if (transcript == null || transcript.isDisposed()) return "";
         try {
             Object value = transcript.evaluate(
-                    "window.getSelection ? window.getSelection().toString() : ''");
+                    "(() => {"
+                    + "const current = window.getSelection ? window.getSelection().toString() : '';"
+                    + "return current.trim() ? current : (window.__acpSelectedText || '');"
+                    + "})()");
             return value == null ? "" : value.toString();
         } catch (RuntimeException exception) {
             AcpLog.warn("Could not read selected transcript text", exception);
             return "";
         }
+    }
+
+    private void clearSelectedTranscriptText() {
+        if (transcript == null || transcript.isDisposed()) return;
+        transcript.execute("window.__acpSelectedText = ''");
     }
 
     private void copyAndPasteInNewSession(String selectedText) {
