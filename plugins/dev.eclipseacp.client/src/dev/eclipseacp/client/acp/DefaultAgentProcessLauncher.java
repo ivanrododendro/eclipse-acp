@@ -7,6 +7,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Objects;
 import java.util.function.Consumer;
 
@@ -27,10 +28,9 @@ final class DefaultAgentProcessLauncher implements AgentProcessLauncher {
     @Override
     public AgentProcess launch(String command, String arguments, Path workingDirectory,
             Consumer<String> diagnosticConsumer, Consumer<Throwable> diagnosticErrorConsumer) throws IOException {
-        List<String> processCommand = new ArrayList<>();
         String resolvedCommand = commandResolver.resolve(command);
-        processCommand.add(resolvedCommand);
-        processCommand.addAll(parseArguments(arguments));
+        List<String> agentArguments = parseArguments(arguments);
+        List<String> processCommand = buildProcessCommand(resolvedCommand, agentArguments);
 
         ProcessBuilder builder = new ProcessBuilder(processCommand).directory(workingDirectory.toFile());
         addCommonNodeLocationsToPath(builder);
@@ -38,6 +38,36 @@ final class DefaultAgentProcessLauncher implements AgentProcessLauncher {
         AcpLog.info("ACP agent process started: pid=" + process.pid() + ", executable='" + resolvedCommand + "'");
         streamStandardError(process, diagnosticConsumer, diagnosticErrorConsumer);
         return new LocalAgentProcess(process);
+    }
+
+    /**
+     * Builds the operating-system process command. Windows batch launchers cannot be passed
+     * directly to CreateProcess; they must be executed through the command interpreter.
+     * The command interpreter receives the resolved launcher and all user-configured arguments.
+     */
+    static List<String> buildProcessCommand(String resolvedCommand, List<String> agentArguments) {
+        List<String> processCommand = new ArrayList<>();
+        if (isWindowsScript(resolvedCommand)) {
+            processCommand.add(windowsCommandInterpreter());
+            processCommand.add("/d");
+            processCommand.add("/c");
+            processCommand.add(resolvedCommand);
+        } else {
+            processCommand.add(resolvedCommand);
+        }
+        processCommand.addAll(agentArguments);
+        return processCommand;
+    }
+
+    private static boolean isWindowsScript(String command) {
+        String lowerCaseCommand = command.toLowerCase(Locale.ROOT);
+        return DefaultCommandResolver.isWindows()
+                && (lowerCaseCommand.endsWith(".cmd") || lowerCaseCommand.endsWith(".bat"));
+    }
+
+    private static String windowsCommandInterpreter() {
+        String commandInterpreter = System.getenv("ComSpec");
+        return commandInterpreter == null || commandInterpreter.isBlank() ? "cmd.exe" : commandInterpreter;
     }
 
     /**
