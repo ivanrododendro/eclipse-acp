@@ -27,6 +27,7 @@ final class ChatSessionModel {
     long firstAgentChunkReceivedAtNanos;
     AgentClient client;
     boolean agentMessageOpen;
+    boolean sessionTransitioning;
     boolean acceptingRestoredTranscript;
     boolean restoredAgentMessageOpen;
     final Map<String, ToolCall> toolCalls = new LinkedHashMap<>();
@@ -36,6 +37,7 @@ final class ChatSessionModel {
     final List<PromptAttachment> attachments = new ArrayList<>();
     final Map<String, String> commands = new LinkedHashMap<>();
     final Map<String, ConfigOption> configOptions = new LinkedHashMap<>();
+    String sessionName = "New session";
     String initialPrompt;
     String statusText = "Not connected";
 
@@ -51,5 +53,5 @@ final class ChatSessionModel {
     }
 
     boolean isConnected() { return client != null; }
-    boolean isBusy() { return isConnected() && agentMessageOpen; }
+    boolean isBusy() { return isConnected() && (agentMessageOpen || sessionTransitioning); }
 }
