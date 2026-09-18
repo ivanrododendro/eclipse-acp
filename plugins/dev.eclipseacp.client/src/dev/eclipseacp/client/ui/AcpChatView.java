@@ -78,6 +78,7 @@ public final class AcpChatView extends ViewPart {
     private Combo collaborationModeSelector;
     private Label collaborationModeLabel;
     private Label providerLabel;
+    private Label sessionNameLabel;
     private Composite collaborationModeBar;
     private Label status;
     private Composite reviewBar;
@@ -102,17 +103,30 @@ public final class AcpChatView extends ViewPart {
 
         Composite header = new Composite(parent, SWT.NONE);
         header.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
-        GridLayout headerLayout = new GridLayout(3, false);
+        GridLayout headerLayout = new GridLayout(2, false);
         headerLayout.marginWidth = 0;
         headerLayout.marginHeight = 0;
         header.setLayout(headerLayout);
 
-        Label projectLabel = new Label(header, SWT.NONE);
+        Composite projectInfo = new Composite(header, SWT.NONE);
+        projectInfo.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
+        GridLayout projectInfoLayout = new GridLayout(2, false);
+        projectInfoLayout.marginWidth = 0;
+        projectInfoLayout.marginHeight = 0;
+        projectInfo.setLayout(projectInfoLayout);
+
+        Label projectLabel = new Label(projectInfo, SWT.NONE);
         projectLabel.setText("Project:");
-        projectSelector = new Combo(header, SWT.DROP_DOWN | SWT.READ_ONLY);
+        projectSelector = new Combo(projectInfo, SWT.DROP_DOWN | SWT.READ_ONLY);
         projectSelector.setToolTipText("Projects with an open ACP session");
         projectSelector.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
         projectSelector.addListener(SWT.Selection, ignored -> selectProjectFromCombo());
+
+        sessionNameLabel = new Label(projectInfo, SWT.NONE);
+        GridData sessionNameData = new GridData(SWT.FILL, SWT.CENTER, true, false);
+        sessionNameData.horizontalSpan = 2;
+        sessionNameLabel.setLayoutData(sessionNameData);
+        sessionNameLabel.setText("Session: —");
         var fontData = projectSelector.getFont().getFontData();
         if (fontData.length > 0) {
             chatFontFamily = fontData[0].getName();
@@ -412,6 +426,7 @@ public final class AcpChatView extends ViewPart {
         activeSession = replacement;
         renderTranscript();
         renderStatus();
+        renderSessionName();
         updateControls();
     }
 
@@ -421,6 +436,7 @@ public final class AcpChatView extends ViewPart {
         if (index >= 0 && projectSelector != null && !projectSelector.isDisposed()) projectSelector.select(index);
         renderTranscript();
         renderStatus();
+        renderSessionName();
         updateControls();
     }
 
@@ -535,6 +551,7 @@ public final class AcpChatView extends ViewPart {
                 return;
             }
             resetSessionPresentation(session);
+            session.sessionName = "New session";
             selectSession(session);
             prompt.setText(selectedText);
             prompt.setSelection(prompt.getText().length());
@@ -598,6 +615,7 @@ public final class AcpChatView extends ViewPart {
     private void restoreListedSession(ChatSessionModel session, SessionInfo selected) {
         ChatSessionModel restored = new ChatSessionModel(session.project, projectSessionLabel(session.project),
                 session.provider, session.reviewFileChanges, session.hideAgentCommands);
+        restored.sessionName = selected.title().isBlank() ? selected.id() : selected.title();
         // session/load may replay transcript updates before its response completes.
         restored.acceptingRestoredTranscript = session.client.capabilities().loadSession();
         replaceSessionForProject(restored);
@@ -862,6 +880,14 @@ public final class AcpChatView extends ViewPart {
         if (status == null || status.isDisposed()) return;
         status.setText(activeSession == null ? "Not connected" : activeSession.statusText);
         status.getParent().layout();
+    }
+
+    private void renderSessionName() {
+        if (sessionNameLabel == null || sessionNameLabel.isDisposed()) return;
+        String name = activeSession == null || activeSession.sessionName == null
+                || activeSession.sessionName.isBlank() ? "—" : activeSession.sessionName;
+        sessionNameLabel.setText("Session: " + name);
+        sessionNameLabel.getParent().layout();
     }
 
     private void onError(ChatSessionModel session, String message, Throwable error) {
@@ -1201,6 +1227,7 @@ public final class AcpChatView extends ViewPart {
             if (activeSession != null) projectSelector.select(sessions.indexOf(activeSession));
             renderTranscript();
             renderStatus();
+            renderSessionName();
         }
         updateControls();
     }
@@ -1221,6 +1248,7 @@ public final class AcpChatView extends ViewPart {
         sessions.clear();
         activeSession = null;
         renderStatus();
+        renderSessionName();
         // Deliberately retain history: closing Eclipse must not discard resumable ACP sessions.
         if (sendButton != null && !sendButton.isDisposed()) {
             sendButton.setEnabled(false);
