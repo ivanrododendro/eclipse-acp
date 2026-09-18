@@ -12,6 +12,10 @@ public interface AgentClient extends AutoCloseable {
     default CompletableFuture<Void> startNewSession(Path workingDirectory) {
         return CompletableFuture.failedFuture(new UnsupportedOperationException("Opening another session is not supported"));
     }
+    /** Replace the active session while retaining the initialized ACP connection. */
+    default CompletableFuture<Void> startNewSession(Path workingDirectory, AgentListener listener) {
+        return startNewSession(workingDirectory);
+    }
     /** Connect to an already persisted agent-side session without creating a new one. */
     default CompletableFuture<Void> restoreSession(String sessionId, Path workingDirectory) {
         return CompletableFuture.failedFuture(new UnsupportedOperationException("Session restore is not supported"));
