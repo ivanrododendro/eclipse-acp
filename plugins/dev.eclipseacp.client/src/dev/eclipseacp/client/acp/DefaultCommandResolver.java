@@ -21,25 +21,26 @@ final class DefaultCommandResolver implements CommandResolver {
 
     private static String resolveWindowsCommand(String command) throws IOException {
         Process resolver = new ProcessBuilder("where.exe", command).redirectErrorStream(true).start();
-        String output;
-        try (resolver) {
-            output = new String(resolver.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+        try {
+            String output = new String(resolver.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
             int exitCode = resolver.waitFor();
             if (exitCode != 0) {
                 throw new IOException("Cannot resolve ACP agent command '" + command
                         + "' through PATH/PATHEXT (where.exe exit code " + exitCode + ")");
             }
+
+            return output.lines()
+                    .map(String::strip)
+                    .filter(line -> !line.isEmpty())
+                    .findFirst()
+                    .orElseThrow(() -> new IOException(
+                            "Cannot resolve ACP agent command '" + command + "' through PATH/PATHEXT"));
         } catch (InterruptedException exception) {
             Thread.currentThread().interrupt();
             throw new IOException("Interrupted while resolving ACP agent command '" + command + "'", exception);
+        } finally {
+            resolver.destroy();
         }
-
-        return output.lines()
-                .map(String::strip)
-                .filter(line -> !line.isEmpty())
-                .findFirst()
-                .orElseThrow(() -> new IOException(
-                        "Cannot resolve ACP agent command '" + command + "' through PATH/PATHEXT"));
     }
 
     static boolean containsPathSeparator(String command) {
