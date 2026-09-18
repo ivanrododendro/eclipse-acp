@@ -60,6 +60,7 @@ public final class AcpChatView extends ViewPart {
     private Browser transcript;
     private Menu transcriptMenu;
     private MenuItem copyPasteNewSessionItem;
+    private String transcriptSelection = "";
     private Text prompt;
     private Button sendButton;
     private Button stopButton;
@@ -127,6 +128,7 @@ public final class AcpChatView extends ViewPart {
         sessionNameData.horizontalSpan = 2;
         sessionNameLabel.setLayoutData(sessionNameData);
         sessionNameLabel.setText("Session : —");
+        
         var fontData = projectSelector.getFont().getFontData();
         if (fontData.length > 0) {
             chatFontFamily = fontData[0].getName();
@@ -140,6 +142,7 @@ public final class AcpChatView extends ViewPart {
         transcript = new Browser(parent, SWT.NONE);
         transcript.setLayoutData(new GridData(SWT.FILL, SWT.FILL, true, true));
         installTranscriptContextMenu();
+        transcript.addListener(SWT.MenuDetect, ignored -> transcriptSelection = readSelectedTranscriptText());
         transcript.addLocationListener(new LocationAdapter() {
             @Override public void changing(LocationEvent event) {
                 ChatSessionModel session = activeSession;
@@ -384,7 +387,10 @@ public final class AcpChatView extends ViewPart {
                 String initial = session.initialPrompt;
                 session.initialPrompt = null;
                 sendPrompt(session, initial);
-            } else if (activeSession == session) prompt.setFocus();
+            } else if (activeSession == session) {
+                preparePendingInput(session);
+                prompt.setFocus();
+            }
         }));
     }
 
@@ -493,12 +499,18 @@ public final class AcpChatView extends ViewPart {
     }
 
     private void openNewSessionForActiveProject() {
+        openNewSessionForActiveProject(null);
+    }
+
+    private void openNewSessionForActiveProject(String pendingInputText) {
         ChatSessionModel current = activeSession;
         if (current == null || current.client == null || current.isBusy()) return;
         AcpSessionService.SessionConfiguration configuration = sessionService.newSessionConfiguration();
         AgentProvider provider = configuration.provider();
         ChatSessionModel session = new ChatSessionModel(current.project, projectSessionLabel(current.project), provider,
                 configuration.reviewFileChanges(), configuration.hideAgentCommands());
+        session.sessionName = "New session";
+        session.pendingInputText = pendingInputText;
         setStatus(session, "Connecting to " + provider.name() + " in " + current.project.getLocation() + "…");
 
         AgentClient existingClient = current.client;
@@ -518,6 +530,7 @@ public final class AcpChatView extends ViewPart {
         session.client = existingClient;
         renderTranscript();
         renderStatus();
+        renderSessionName();
         updateControls();
 
         existingClient.startNewSession(current.project.getLocation().toFile().toPath(), listenerFor(session))
@@ -527,10 +540,20 @@ public final class AcpChatView extends ViewPart {
                         session.client = null;
                         onError(session, "Could not create a new ACP session", unwrap(error));
                     } else {
+                        preparePendingInput(session);
                         setStatus(session, "Connected");
                         updateControls();
                     }
                 }));
+    }
+
+    private void preparePendingInput(ChatSessionModel session) {
+        if (session != activeSession || session.pendingInputText == null) return;
+        String text = session.pendingInputText;
+        session.pendingInputText = null;
+        prompt.setText(text);
+        prompt.setSelection(text.length());
+        prompt.setFocus();
     }
 
     private void installTranscriptContextMenu() {
@@ -538,22 +561,25 @@ public final class AcpChatView extends ViewPart {
         copyPasteNewSessionItem = new MenuItem(transcriptMenu, SWT.PUSH);
         copyPasteNewSessionItem.setText("Copy and Paste in a New Session");
         copyPasteNewSessionItem.addListener(SWT.Selection, ignored -> {
-            String selectedText = selectedTranscriptText();
+            String selectedText = transcriptSelection;
             if (!selectedText.isBlank()) {
                 copyAndPasteInNewSession(selectedText);
             }
+            transcriptSelection = "";
         });
         transcriptMenu.addListener(SWT.Show, ignored -> {
-            String selectedText = selectedTranscriptText();
+            if (transcriptSelection.isBlank()) transcriptSelection = readSelectedTranscriptText();
+            String selectedText = transcriptSelection;
             copyPasteNewSessionItem.setEnabled(!selectedText.isBlank()
                     && activeSession != null
                     && activeSession.client != null
-                    && !activeSession.isBusy());
+                    && !activeSession.agentMessageOpen
+                    && !activeSession.sessionTransitioning);
         });
         transcript.setMenu(transcriptMenu);
     }
 
-    private String selectedTranscriptText() {
+    private String readSelectedTranscriptText() {
         if (transcript == null || transcript.isDisposed()) return "";
         try {
             Object value = transcript.evaluate(
@@ -566,42 +592,8 @@ public final class AcpChatView extends ViewPart {
     }
 
     private void copyAndPasteInNewSession(String selectedText) {
-        ChatSessionModel session = activeSession;
-        if (session == null || session.client == null || session.isBusy() || selectedText.isBlank()) return;
-
-        session.sessionTransitioning = true;
-        updateControls();
-        Path projectDirectory = session.project.getLocation().toFile().toPath();
-        session.client.startNewSession(projectDirectory).whenComplete((ignored, error) -> ui(() -> {
-            session.sessionTransitioning = false;
-            if (error != null) {
-                onError(session, "Could not create a new ACP session", unwrap(error));
-                updateControls();
-                return;
-            }
-            resetSessionPresentation(session);
-            session.sessionName = "New session";
-            selectSession(session);
-            prompt.setText(selectedText);
-            prompt.setSelection(prompt.getText().length());
-            prompt.setFocus();
-            setStatus(session, "New session ready");
-            updateControls();
-        }));
-    }
-
-    private void resetSessionPresentation(ChatSessionModel session) {
-        session.transcriptMarkdown.setLength(0);
-        session.pendingAgentText.setLength(0);
-        session.toolCalls.clear();
-        session.renderedToolDiffs.clear();
-        session.attachments.clear();
-        session.commands.clear();
-        session.changes = new ChangeReviewService(session.project);
-        session.agentMessageOpen = false;
-        session.sessionTransitioning = false;
-        session.acceptingRestoredTranscript = false;
-        session.restoredAgentMessageOpen = false;
+        if (selectedText == null || selectedText.isBlank()) return;
+        openNewSessionForActiveProject(selectedText);
     }
 
     private void chooseAgentSession() {
@@ -666,6 +658,8 @@ public final class AcpChatView extends ViewPart {
                     flushQueuedAgentText(session);
                     append(session, "\n> **Timing:** session/prompt completed in "
                             + elapsedMillis(sentAtNanos, completedAtNanos) + " ms\n\n");
+                    session.agentMessageOpen = false;
+                    updateControls();
                 });
             }
             @Override public void userText(String text) { ui(() -> appendRestoredUserText(session, text)); }
@@ -916,6 +910,7 @@ public final class AcpChatView extends ViewPart {
         String name = activeSession == null || activeSession.sessionName == null
                 || activeSession.sessionName.isBlank() ? "—" : activeSession.sessionName;
         sessionNameLabel.setText("Session : " + name);
+        
         sessionNameLabel.getParent().layout();
     }
 
