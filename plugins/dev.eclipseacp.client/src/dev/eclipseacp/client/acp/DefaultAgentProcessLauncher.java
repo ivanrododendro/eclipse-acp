@@ -14,17 +14,28 @@ import dev.eclipseacp.client.AcpLog;
 
 /** Default local-process implementation of {@link AgentProcessLauncher}. */
 final class DefaultAgentProcessLauncher implements AgentProcessLauncher {
+    private final CommandResolver commandResolver;
+
+    DefaultAgentProcessLauncher() {
+        this(new DefaultCommandResolver());
+    }
+
+    DefaultAgentProcessLauncher(CommandResolver commandResolver) {
+        this.commandResolver = Objects.requireNonNull(commandResolver);
+    }
+
     @Override
     public AgentProcess launch(String command, String arguments, Path workingDirectory,
             Consumer<String> diagnosticConsumer, Consumer<Throwable> diagnosticErrorConsumer) throws IOException {
         List<String> processCommand = new ArrayList<>();
-        processCommand.add(command);
+        String resolvedCommand = commandResolver.resolve(command);
+        processCommand.add(resolvedCommand);
         processCommand.addAll(parseArguments(arguments));
 
         ProcessBuilder builder = new ProcessBuilder(processCommand).directory(workingDirectory.toFile());
         addCommonNodeLocationsToPath(builder);
         Process process = builder.start();
-        AcpLog.info("ACP agent process started: pid=" + process.pid() + ", executable='" + command + "'");
+        AcpLog.info("ACP agent process started: pid=" + process.pid() + ", executable='" + resolvedCommand + "'");
         streamStandardError(process, diagnosticConsumer, diagnosticErrorConsumer);
         return new LocalAgentProcess(process);
     }
