@@ -2,6 +2,8 @@ package dev.eclipseacp.client.acp;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
+import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
 
@@ -29,18 +31,32 @@ final class DefaultCommandResolver implements CommandResolver {
                         + "' through PATH/PATHEXT (where.exe exit code " + exitCode + ")");
             }
 
-            return output.lines()
+            List<String> candidates = output.lines()
                     .map(String::strip)
                     .filter(line -> !line.isEmpty())
+                    .toList();
+
+            return candidates.stream()
+                    .filter(DefaultCommandResolver::isWindowsLaunchableCandidate)
                     .findFirst()
                     .orElseThrow(() -> new IOException(
-                            "Cannot resolve ACP agent command '" + command + "' through PATH/PATHEXT"));
+                            "Cannot resolve ACP agent command '" + command
+                                    + "' to a Win32 executable or command script through PATH/PATHEXT. "
+                                    + "Candidates returned by where.exe: " + candidates));
         } catch (InterruptedException exception) {
             Thread.currentThread().interrupt();
             throw new IOException("Interrupted while resolving ACP agent command '" + command + "'", exception);
         } finally {
             resolver.destroy();
         }
+    }
+
+    private static boolean isWindowsLaunchableCandidate(String candidate) {
+        String lowerCaseCandidate = candidate.toLowerCase(Locale.ROOT);
+        return lowerCaseCandidate.endsWith(".exe")
+                || lowerCaseCandidate.endsWith(".com")
+                || lowerCaseCandidate.endsWith(".cmd")
+                || lowerCaseCandidate.endsWith(".bat");
     }
 
     static boolean containsPathSeparator(String command) {
