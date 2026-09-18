@@ -6,6 +6,13 @@ import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
 import java.util.List;
+import java.util.ArrayList;
+import java.io.IOException;
+import java.io.Reader;
+import java.io.StringReader;
+import java.io.StringWriter;
+import java.io.Writer;
+import java.nio.file.Path;
 import java.util.concurrent.CompletableFuture;
 
 import org.junit.Test;
@@ -16,6 +23,24 @@ import dev.eclipseacp.client.agent.PermissionOption;
 import dev.eclipseacp.client.agent.ToolCall;
 
 public class AcpClientProtocolTest {
+    @Test
+    public void replacesSessionWithoutReinitializingTheConnection() {
+        FakeTransport transport = new FakeTransport();
+        AgentListener first = new CapturingListener();
+        AgentListener second = new CapturingListener();
+        AcpClient client = new AcpClient("agent", "", first, false, List.of(),
+                (command, arguments, workingDirectory, diagnosticConsumer, diagnosticErrorConsumer) ->
+                        new FakeProcess(),
+                (reader, writer, handler, errorHandler) -> transport);
+
+        client.connect(Path.of("/workspace/project")).join();
+        client.startNewSession(Path.of("/workspace/project"), second).join();
+
+        assertEquals(List.of("initialize", "session/new", "session/close", "session/new"), transport.methods);
+        assertEquals(1, transport.count("initialize"));
+        assertEquals("session-2", client.sessionId());
+    }
+
     @Test
     public void parsesV1AgentCapabilitiesAtTheirSpecifiedLocations() {
         JsonObject caps = new JsonObject();
@@ -209,5 +234,38 @@ public class AcpClientProtocolTest {
         @Override public CompletableFuture<String> requestPermission(String title, List<PermissionOption> options) {
             return CompletableFuture.completedFuture(null);
         }
+    }
+
+    private static final class FakeProcess implements AgentProcess {
+        @Override public Reader standardOutput() { return new StringReader(""); }
+        @Override public Writer standardInput() { return new StringWriter(); }
+        @Override public void close() throws IOException { }
+    }
+
+    private static final class FakeTransport implements JsonRpcTransport {
+        private final List<String> methods = new ArrayList<>();
+        private int sessionNumber;
+
+        @Override public void start() { }
+
+        @Override public CompletableFuture<JsonObject> request(String method, JsonObject params) {
+            methods.add(method);
+            JsonObject result = new JsonObject();
+            if ("initialize".equals(method)) {
+                result.addProperty("protocolVersion", 1);
+                JsonObject capabilities = new JsonObject();
+                JsonObject session = new JsonObject();
+                session.add("close", new JsonObject());
+                capabilities.add("sessionCapabilities", session);
+                result.add("agentCapabilities", capabilities);
+            } else if ("session/new".equals(method)) {
+                result.addProperty("sessionId", "session-" + (++sessionNumber));
+            }
+            return CompletableFuture.completedFuture(result);
+        }
+
+        @Override public void notification(String method, JsonObject params) { }
+        @Override public void close() { }
+        int count(String method) { return (int) methods.stream().filter(method::equals).count(); }
     }
 }

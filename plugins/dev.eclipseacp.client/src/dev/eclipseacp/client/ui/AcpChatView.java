@@ -473,14 +473,43 @@ public final class AcpChatView extends ViewPart {
 
     private void openNewSessionForActiveProject() {
         ChatSessionModel current = activeSession;
-        if (current == null) return;
+        if (current == null || current.client == null || current.isBusy()) return;
         AcpSessionService.SessionConfiguration configuration = sessionService.newSessionConfiguration();
         AgentProvider provider = configuration.provider();
         ChatSessionModel session = new ChatSessionModel(current.project, projectSessionLabel(current.project), provider,
                 configuration.reviewFileChanges(), configuration.hideAgentCommands());
-        replaceSessionForProject(session);
         setStatus(session, "Connecting to " + provider.name() + " in " + current.project.getLocation() + "…");
-        connect(session, provider, null, false, provider.name());
+
+        AgentClient existingClient = current.client;
+        boolean reusable = current.provider.equals(provider)
+                && current.reviewFileChanges == configuration.reviewFileChanges();
+        if (!reusable) {
+            replaceSessionForProject(session);
+            connect(session, provider, null, false, provider.name());
+            return;
+        }
+
+        int index = sessions.indexOf(current);
+        current.client = null;
+        sessions.set(index, session);
+        projectSelector.select(index);
+        activeSession = session;
+        session.client = existingClient;
+        renderTranscript();
+        renderStatus();
+        updateControls();
+
+        existingClient.startNewSession(current.project.getLocation().toFile().toPath(), listenerFor(session))
+                .whenComplete((ignored, error) -> ui(() -> {
+                    if (session.client != existingClient) return;
+                    if (error != null) {
+                        session.client = null;
+                        onError(session, "Could not create a new ACP session", unwrap(error));
+                    } else {
+                        setStatus(session, "Connected");
+                        updateControls();
+                    }
+                }));
     }
 
     private void chooseAgentSession() {
@@ -1052,7 +1081,7 @@ public final class AcpChatView extends ViewPart {
         showControl(sendButton, !busy);
         showControl(stopButton, busy);
         stopButton.setEnabled(connected && activeSession.agentMessageOpen);
-        newSessionButton.setEnabled(connected && activeSession.project.isOpen());
+        newSessionButton.setEnabled(connected && !busy && activeSession.project.isOpen());
         closeButton.setEnabled(connected);
         sessionsButton.setEnabled(connected && activeSession.client.capabilities().sessionList()
                 && (activeSession.client.capabilities().sessionResume() || activeSession.client.capabilities().loadSession()));

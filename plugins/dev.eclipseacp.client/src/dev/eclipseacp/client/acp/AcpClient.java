@@ -40,7 +40,7 @@ import dev.eclipseacp.client.mcp.McpServerConfig;
 /** ACP v1 adapter. The rest of the plug-in talks to AgentClient only. */
 public final class AcpClient implements AgentClient, JsonRpcHandler {
     private static final int PROTOCOL_VERSION = 1;
-    private final AgentListener listener;
+    private volatile AgentListener listener;
     private final String command;
     private final String arguments;
     private final boolean reviewFileChanges;
@@ -86,13 +86,19 @@ public final class AcpClient implements AgentClient, JsonRpcHandler {
 
     @Override
     public CompletableFuture<Void> startNewSession(Path workingDirectory) {
+        return startNewSession(workingDirectory, listener);
+    }
+
+    @Override
+    public CompletableFuture<Void> startNewSession(Path workingDirectory, AgentListener newListener) {
         if (connection == null) {
             return CompletableFuture.failedFuture(new IllegalStateException("ACP connection is not connected"));
         }
-        if (sessionId != null) {
-            return CompletableFuture.failedFuture(new IllegalStateException("Close the active ACP session before opening another one"));
-        }
-        return establishSession(() -> newSession(workingDirectory).thenAccept(result -> { }));
+        Objects.requireNonNull(newListener);
+        return closeSession().thenCompose(ignored -> {
+            listener = newListener;
+            return establishSession(() -> newSession(workingDirectory).thenAccept(result -> { }));
+        });
     }
 
     @Override
