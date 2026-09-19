@@ -16,6 +16,7 @@ import org.eclipse.jface.viewers.ArrayContentProvider;
 import org.eclipse.jface.viewers.LabelProvider;
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.browser.Browser;
+import org.eclipse.swt.browser.BrowserFunction;
 import org.eclipse.swt.browser.LocationAdapter;
 import org.eclipse.swt.browser.LocationEvent;
 import org.eclipse.swt.browser.ProgressAdapter;
@@ -58,6 +59,7 @@ import dev.eclipseacp.client.agent.ConfigOption;
 public final class AcpChatView extends ViewPart {
     public static final String ID = "dev.eclipseacp.client.views.chat";
     private Browser transcript;
+    private BrowserFunction transcriptSelectionBridge;
     private Menu transcriptMenu;
     private MenuItem copyPasteNewSessionItem;
     private String transcriptSelection = "";
@@ -141,8 +143,8 @@ public final class AcpChatView extends ViewPart {
 
         transcript = new Browser(parent, SWT.NONE);
         transcript.setLayoutData(new GridData(SWT.FILL, SWT.FILL, true, true));
+        installTranscriptSelectionBridge();
         installTranscriptContextMenu();
-        transcript.addListener(SWT.MenuDetect, ignored -> transcriptSelection = readSelectedTranscriptText());
         transcript.addLocationListener(new LocationAdapter() {
             @Override public void changing(LocationEvent event) {
                 ChatSessionModel session = activeSession;
@@ -566,19 +568,32 @@ public final class AcpChatView extends ViewPart {
             if (!selectedText.isBlank()) {
                 copyAndPasteInNewSession(selectedText);
             }
-            transcriptSelection = "";
-            clearSelectedTranscriptText();
+            clearTranscriptSelection();
         });
         transcriptMenu.addListener(SWT.Show, ignored -> {
-            transcriptSelection = readSelectedTranscriptText();
             String selectedText = transcriptSelection;
-            copyPasteNewSessionItem.setEnabled(!selectedText.isBlank()
-                    && activeSession != null
-                    && activeSession.client != null
-                    && !activeSession.agentMessageOpen
-                    && !activeSession.sessionTransitioning);
+            boolean hasSelection = !selectedText.isBlank();
+            boolean hasActiveSession = activeSession != null;
+            boolean connected = hasActiveSession && activeSession.client != null;
+            boolean agentMessageOpen = hasActiveSession && activeSession.agentMessageOpen;
+            boolean sessionTransitioning = hasActiveSession && activeSession.sessionTransitioning;
+            boolean enabled = hasSelection && connected && !agentMessageOpen && !sessionTransitioning;
+            copyPasteNewSessionItem.setEnabled(enabled);
         });
         transcript.setMenu(transcriptMenu);
+    }
+
+    /**
+     * SWT's native context menu can clear the WebKit selection before Java reads it.
+     * Receive selection updates directly from the page so the Java side retains the last value.
+     */
+    private void installTranscriptSelectionBridge() {
+        transcriptSelectionBridge = new BrowserFunction(transcript, "__acpRecordTranscriptSelection") {
+            @Override public Object function(Object[] arguments) {
+                transcriptSelection = arguments.length == 0 || arguments[0] == null ? "" : arguments[0].toString();
+                return null;
+            }
+        };
     }
 
     private void installTranscriptSelectionTracking() {
@@ -586,37 +601,30 @@ public final class AcpChatView extends ViewPart {
         transcript.execute("(() => {"
                 + "if (window.__acpSelectionTrackingInstalled) return;"
                 + "window.__acpSelectionTrackingInstalled = true;"
-                + "window.__acpSelectedText = '';"
+                + "const publishSelection = text => {"
+                + "if (typeof window.__acpRecordTranscriptSelection === 'function') {"
+                + "window.__acpRecordTranscriptSelection(text || '');"
+                + "}"
+                + "};"
                 + "const rememberSelection = () => {"
                 + "const text = window.getSelection ? window.getSelection().toString() : '';"
-                + "if (text.trim()) window.__acpSelectedText = text;"
+                + "if (!text.trim()) return;"
+                + "publishSelection(text);"
                 + "};"
                 + "document.addEventListener('selectionchange', rememberSelection);"
                 + "document.addEventListener('contextmenu', rememberSelection, true);"
+                + "document.addEventListener('mouseup', rememberSelection, true);"
+                + "document.addEventListener('keyup', rememberSelection, true);"
                 + "document.addEventListener('mousedown', event => {"
-                + "if (event.button === 0) window.__acpSelectedText = '';"
+                + "if (event.button === 0) publishSelection('');"
                 + "}, true);"
                 + "})()");
     }
 
-    private String readSelectedTranscriptText() {
-        if (transcript == null || transcript.isDisposed()) return "";
-        try {
-            Object value = transcript.evaluate(
-                    "(() => {"
-                    + "const current = window.getSelection ? window.getSelection().toString() : '';"
-                    + "return current.trim() ? current : (window.__acpSelectedText || '');"
-                    + "})()");
-            return value == null ? "" : value.toString();
-        } catch (RuntimeException exception) {
-            AcpLog.warn("Could not read selected transcript text", exception);
-            return "";
-        }
-    }
-
-    private void clearSelectedTranscriptText() {
+    private void clearTranscriptSelection() {
+        transcriptSelection = "";
         if (transcript == null || transcript.isDisposed()) return;
-        transcript.execute("window.__acpSelectedText = ''");
+        transcript.execute("if (window.getSelection) window.getSelection().removeAllRanges();");
     }
 
     private void copyAndPasteInNewSession(String selectedText) {
@@ -1351,6 +1359,7 @@ public final class AcpChatView extends ViewPart {
     @Override
     public void dispose() {
         disconnect();
+        if (transcriptSelectionBridge != null) transcriptSelectionBridge.dispose();
         iconRegistry.dispose();
         super.dispose();
     }
