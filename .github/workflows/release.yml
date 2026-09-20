@@ -94,11 +94,14 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
+      - uses: actions/checkout@v4
       - name: Download p2 repository
         uses: actions/download-artifact@v4
         with:
           name: eclipse-acp-p2
           path: site
+      - name: Add update-site home page
+        run: cp releng/dev.eclipseacp.repository/site/index.html site/index.html
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v5
       - name: Upload p2 update site to GitHub Pages
