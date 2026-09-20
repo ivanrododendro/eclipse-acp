@@ -18,12 +18,20 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    outputs:
+      is_prerelease: ${{ steps.release-state.outputs.is_prerelease }}
     steps:
       - uses: actions/checkout@v4
         with:
           # A manually rerun workflow must rebuild the selected release tag,
           # not the then-current default branch.
           ref: ${{ inputs.release_tag || github.event.release.tag_name }}
+      - name: Read release state
+        id: release-state
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag || github.event.release.tag_name }}
+        run: echo "is_prerelease=$(gh release view "$RELEASE_TAG" --json isPrerelease --jq .isPrerelease --repo "$GITHUB_REPOSITORY")" >> "$GITHUB_OUTPUT"
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -89,6 +97,7 @@ jobs:
 
   publish-update-site:
     needs: build
+    if: needs.build.outputs.is_prerelease == 'false'
     runs-on: ubuntu-latest
     environment:
       name: github-pages
