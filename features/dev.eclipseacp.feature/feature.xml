@@ -1,12 +1,12 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <feature
       id="dev.eclipseacp.feature"
-      label="Eclipse ACP Client"
+      label="Eclipse ACP Connector"
       version="0.1.0.qualifier"
       provider-name="Eclipse ACP contributors">
 
   <description>
-    Agent Client Protocol integration for the Eclipse IDE.
+    Eclipse ACP Connector integrates Agent Client Protocol with the Eclipse IDE.
   </description>
 
   <copyright>

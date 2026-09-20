@@ -3,7 +3,7 @@
   <feature url="features/dev.eclipseacp.feature_0.1.0.qualifier.jar" id="dev.eclipseacp.feature" version="0.1.0.qualifier">
     <category name="dev.eclipseacp.category"/>
   </feature>
-  <category-def name="dev.eclipseacp.category" label="Eclipse ACP">
-    <description>ACP clients and integrations for Eclipse IDE.</description>
+  <category-def name="dev.eclipseacp.category" label="Eclipse ACP Connector">
+    <description>Eclipse ACP Connector integrates Agent Client Protocol with the Eclipse IDE.</description>
   </category-def>
 </site>

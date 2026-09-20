@@ -19,7 +19,7 @@
     <page
           class="dev.eclipseacp.client.preferences.AcpPreferencePage"
           id="dev.eclipseacp.client.preferences"
-          name="ACP"/>
+          name="ACP Connector"/>
   </extension>
 
   <extension point="org.eclipse.ui.commands">

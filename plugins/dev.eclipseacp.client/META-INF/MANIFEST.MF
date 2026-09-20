@@ -1,6 +1,6 @@
 Manifest-Version: 1.0
 Bundle-ManifestVersion: 2
-Bundle-Name: Eclipse ACP Client
+Bundle-Name: Eclipse ACP Connector
 Bundle-SymbolicName: dev.eclipseacp.client;singleton:=true
 Bundle-Version: 0.1.0.qualifier
 Bundle-Vendor: Eclipse ACP contributors

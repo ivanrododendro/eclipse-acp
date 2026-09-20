@@ -35,8 +35,8 @@ import org.eclipse.swt.widgets.Text;
 import org.eclipse.swt.widgets.FileDialog;
 import org.eclipse.ui.ISharedImages;
 import org.eclipse.ui.PlatformUI;
-import org.eclipse.ui.part.ViewPart;
 import org.eclipse.ui.dialogs.ListDialog;
+import org.eclipse.ui.part.ViewPart;
 
 import dev.eclipseacp.client.AcpLog;
 import dev.eclipseacp.client.agent.AgentClient;
@@ -68,7 +68,7 @@ public final class AcpChatView extends ViewPart {
     private Button stopButton;
     private Button newSessionButton;
     private Button closeButton;
-    private Button sessionsButton;
+    private Combo sessionSelector;
     private Button applyButton;
     private Button rejectButton;
     private Button undoButton;
@@ -81,7 +81,6 @@ public final class AcpChatView extends ViewPart {
     private Combo collaborationModeSelector;
     private Label collaborationModeLabel;
     private Label providerLabel;
-    private Label sessionNameLabel;
     private Composite collaborationModeBar;
     private Label status;
     private Composite reviewBar;
@@ -91,6 +90,7 @@ public final class AcpChatView extends ViewPart {
     private String chatFontFamily = "sans-serif";
     private int chatFontSizePoints = 10;
     private final List<ChatSessionModel> sessions = new ArrayList<>();
+    private final List<SessionInfo> sessionSelectorEntries = new ArrayList<>();
     private final AcpSessionService sessionService = new AcpSessionService();
     private final AcpChatDialogs dialogs = new AcpChatDialogs(() -> getSite().getShell(), this::ui);
     private ChatSessionModel activeSession;
@@ -106,13 +106,15 @@ public final class AcpChatView extends ViewPart {
 
         Composite header = new Composite(parent, SWT.NONE);
         header.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
-        GridLayout headerLayout = new GridLayout(2, false);
-        headerLayout.marginWidth = 0;
-        headerLayout.marginHeight = 0;
+        org.eclipse.swt.layout.RowLayout headerLayout = new org.eclipse.swt.layout.RowLayout();
+        headerLayout.wrap = true;
+        headerLayout.center = true;
+        headerLayout.spacing = 4;
+        headerLayout.marginLeft = headerLayout.marginRight = 0;
+        headerLayout.marginTop = headerLayout.marginBottom = 0;
         header.setLayout(headerLayout);
 
         Composite projectInfo = new Composite(header, SWT.NONE);
-        projectInfo.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
         GridLayout projectInfoLayout = new GridLayout(2, false);
         projectInfoLayout.marginWidth = 0;
         projectInfoLayout.marginHeight = 0;
@@ -122,24 +124,45 @@ public final class AcpChatView extends ViewPart {
         projectLabel.setText("Project:");
         projectSelector = new Combo(projectInfo, SWT.DROP_DOWN | SWT.READ_ONLY);
         projectSelector.setToolTipText("Projects with an open ACP session");
-        projectSelector.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
+        GridData projectSelectorData = new GridData(SWT.FILL, SWT.CENTER, true, false);
+        projectSelectorData.widthHint = 240;
+        projectSelector.setLayoutData(projectSelectorData);
         projectSelector.addListener(SWT.Selection, ignored -> selectProjectFromCombo());
 
-        sessionNameLabel = new Label(projectInfo, SWT.NONE);
-        GridData sessionNameData = new GridData(SWT.FILL, SWT.CENTER, true, false);
-        sessionNameData.horizontalSpan = 2;
-        sessionNameLabel.setLayoutData(sessionNameData);
-        sessionNameLabel.setText("Session : —");
+        Composite sessionInfo = new Composite(header, SWT.NONE);
+        GridLayout sessionInfoLayout = new GridLayout(4, false);
+        sessionInfoLayout.marginWidth = 0;
+        sessionInfoLayout.marginHeight = 0;
+        sessionInfo.setLayout(sessionInfoLayout);
+
+        Label sessionLabel = new Label(sessionInfo, SWT.NONE);
+        sessionLabel.setText("Session:");
+        sessionSelector = new Combo(sessionInfo, SWT.DROP_DOWN | SWT.READ_ONLY);
+        sessionSelector.setToolTipText("Saved sessions for this project");
+        sessionSelector.setEnabled(false);
+        GridData sessionSelectorData = new GridData(SWT.FILL, SWT.CENTER, true, false);
+        sessionSelectorData.widthHint = 240;
+        sessionSelector.setLayoutData(sessionSelectorData);
+        sessionSelector.addListener(SWT.Selection, ignored -> selectAgentSession());
+
+        newSessionButton = new Button(sessionInfo, SWT.PUSH);
+        newSessionButton.setToolTipText("New chat in this project");
+        newSessionButton.setEnabled(false);
+        newSessionButton.addListener(SWT.Selection, ignored -> openNewSessionForActiveProject());
+
+        closeButton = new Button(sessionInfo, SWT.PUSH);
+        closeButton.setToolTipText("Close this chat");
+        closeButton.setEnabled(false);
+        closeButton.addListener(SWT.Selection, ignored -> closeActiveSession());
+
+        header.addListener(SWT.Resize, ignored -> updateHeaderBlockWidths(header, projectInfo, sessionInfo));
+        header.getDisplay().asyncExec(() -> updateHeaderBlockWidths(header, projectInfo, sessionInfo));
         
         var fontData = projectSelector.getFont().getFontData();
         if (fontData.length > 0) {
             chatFontFamily = fontData[0].getName();
             chatFontSizePoints = Math.max(8, fontData[0].getHeight() - 1);
         }
-
-        Composite sessionMore = new Composite(header, SWT.NONE);
-        sessionMore.setLayoutData(new GridData(SWT.END, SWT.CENTER, false, false));
-        sessionMore.setLayout(new org.eclipse.swt.layout.RowLayout());
 
         transcript = new Browser(parent, SWT.NONE);
         transcript.setLayoutData(new GridData(SWT.FILL, SWT.FILL, true, true));
@@ -250,11 +273,6 @@ public final class AcpChatView extends ViewPart {
         stopButton.setEnabled(false);
         stopButton.addListener(SWT.Selection, ignored -> cancel());
 
-        closeButton = new Button(sessionMore, SWT.PUSH);
-        closeButton.setToolTipText("Close this chat");
-        closeButton.setEnabled(false);
-        closeButton.addListener(SWT.Selection, ignored -> closeActiveSession());
-
         applyButton = new Button(reviewBar, SWT.PUSH);
         applyButton.setText("Apply changes");
         applyButton.setToolTipText("Apply the reviewed file changes");
@@ -272,17 +290,6 @@ public final class AcpChatView extends ViewPart {
         undoButton.setToolTipText("Undo the last applied file changes");
         undoButton.setEnabled(false);
         undoButton.addListener(SWT.Selection, ignored -> undoApply());
-
-        newSessionButton = new Button(actions, SWT.PUSH);
-        newSessionButton.setToolTipText("New chat in this project");
-        newSessionButton.setEnabled(false);
-        newSessionButton.addListener(SWT.Selection, ignored -> openNewSessionForActiveProject());
-
-        sessionsButton = new Button(actions, SWT.PUSH);
-        sessionsButton.setText("");
-        sessionsButton.setToolTipText("Open sessions for this project");
-        sessionsButton.setEnabled(false);
-        sessionsButton.addListener(SWT.Selection, ignored -> chooseAgentSession());
 
         modelSelector = new Combo(actions, SWT.DROP_DOWN | SWT.READ_ONLY);
         modelSelector.setToolTipText("Model for the active ACP session");
@@ -326,6 +333,32 @@ public final class AcpChatView extends ViewPart {
         status.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
 
         updateControls();
+    }
+
+    /** Keeps the header compact on wide views and makes each wrapped block use the full row. */
+    private void updateHeaderBlockWidths(Composite header, Composite projectInfo, Composite sessionInfo) {
+        if (header.isDisposed() || projectInfo.isDisposed() || sessionInfo.isDisposed()) return;
+        int availableWidth = header.getClientArea().width;
+        if (availableWidth <= 0) return;
+        org.eclipse.swt.layout.RowLayout layout = (org.eclipse.swt.layout.RowLayout) header.getLayout();
+        int requiredWidth = projectInfo.computeSize(SWT.DEFAULT, SWT.DEFAULT).x
+                + sessionInfo.computeSize(SWT.DEFAULT, SWT.DEFAULT).x + layout.spacing;
+        boolean wrap = requiredWidth > availableWidth;
+        boolean changed = setHeaderBlockWidth(projectInfo, wrap ? availableWidth : SWT.DEFAULT)
+                | setHeaderBlockWidth(sessionInfo, wrap ? availableWidth : SWT.DEFAULT);
+        if (changed) header.layout(true);
+    }
+
+    private static boolean setHeaderBlockWidth(Composite block, int width) {
+        Object data = block.getLayoutData();
+        if (width == SWT.DEFAULT) {
+            if (data == null) return false;
+            block.setLayoutData(null);
+            return true;
+        }
+        if (data instanceof org.eclipse.swt.layout.RowData rowData && rowData.width == width) return false;
+        block.setLayoutData(new org.eclipse.swt.layout.RowData(width, SWT.DEFAULT));
+        return true;
     }
 
     /** Called only by the project/resource context-menu command. */
@@ -386,6 +419,10 @@ public final class AcpChatView extends ViewPart {
                 setStatus(session, "Session restored");
             }
             updateControls();
+            if (newClient.capabilities().sessionList()
+                    && (newClient.capabilities().sessionResume() || newClient.capabilities().loadSession())) {
+                loadAgentSessions(session);
+            }
             if (session.initialPrompt != null && !session.initialPrompt.isBlank()) {
                 String initial = session.initialPrompt;
                 session.initialPrompt = null;
@@ -632,41 +669,51 @@ public final class AcpChatView extends ViewPart {
         openNewSessionForActiveProject(selectedText);
     }
 
-    private void chooseAgentSession() {
-        ChatSessionModel session = activeSession;
+    /** Preload saved sessions after connecting so opening the selector never waits on the agent. */
+    private void loadAgentSessions(ChatSessionModel session) {
         if (session == null || session.client == null) return;
         AgentClient client = session.client;
         sessionService.listSessions(client, session.project.getLocation().toFile().toPath())
                 .whenComplete((available, error) -> ui(() -> {
-                    if (session.client != client) return;
+                    if (activeSession != session || session.client != client) return;
                     if (error != null) {
                         onError(session, "Could not list agent sessions", unwrap(error));
                         return;
                     }
-                    ListDialog dialog = new ListDialog(getSite().getShell());
-                    dialog.setTitle("ACP sessions");
-                    dialog.setMessage("Select a saved session for " + session.project.getName() + ":");
-                    dialog.setContentProvider(ArrayContentProvider.getInstance());
-                    dialog.setLabelProvider(new LabelProvider() {
-                        @Override public String getText(Object element) {
-                            SessionInfo info = (SessionInfo) element;
-                            String title = info.title().isBlank() ? info.id() : info.title();
-                            return info.updatedAt().isBlank() ? title : title + " — " + info.updatedAt();
-                        }
-                    });
                     List<SessionInfo> projectSessions = available.stream()
                             .filter(info -> sessionService.belongsToProject(info,
                                     session.project.getLocation().toFile().toPath()))
                             .toList();
-                    if (projectSessions.isEmpty()) {
-                        setStatus(session, "No saved sessions for this project");
-                        return;
-                    }
-                    dialog.setInput(projectSessions);
-                    if (dialog.open() != org.eclipse.jface.window.Window.OK
-                            || dialog.getResult() == null || dialog.getResult().length == 0) return;
-                    restoreListedSession(session, (SessionInfo) dialog.getResult()[0]);
+                    populateSessionSelector(projectSessions);
                 }));
+    }
+
+    private void populateSessionSelector(List<SessionInfo> available) {
+        if (sessionSelector == null || sessionSelector.isDisposed()) return;
+        String activeName = activeSession == null || activeSession.sessionName == null
+                || activeSession.sessionName.isBlank() ? "—" : activeSession.sessionName;
+        sessionSelector.removeAll();
+        sessionSelectorEntries.clear();
+        sessionSelector.add(activeName);
+        sessionSelectorEntries.add(null);
+        for (SessionInfo info : available) {
+            String title = info.title().isBlank() ? info.id() : info.title();
+            if (!title.equals(activeName)) {
+                sessionSelector.add(title);
+                sessionSelectorEntries.add(info);
+            }
+        }
+        sessionSelector.select(0);
+    }
+
+    private void selectAgentSession() {
+        if (sessionSelector == null || sessionSelector.isDisposed()) return;
+        int index = sessionSelector.getSelectionIndex();
+        SessionInfo info = index >= 0 && index < sessionSelectorEntries.size()
+                ? sessionSelectorEntries.get(index) : null;
+        if (info != null && activeSession != null) {
+            restoreListedSession(activeSession, info);
+        }
     }
 
     private void restoreListedSession(ChatSessionModel session, SessionInfo selected) {
@@ -942,12 +989,9 @@ public final class AcpChatView extends ViewPart {
     }
 
     private void renderSessionName() {
-        if (sessionNameLabel == null || sessionNameLabel.isDisposed()) return;
-        String name = activeSession == null || activeSession.sessionName == null
-                || activeSession.sessionName.isBlank() ? "—" : activeSession.sessionName;
-        sessionNameLabel.setText("Session : " + name);
-        
-        sessionNameLabel.getParent().layout();
+        if (sessionSelector == null || sessionSelector.isDisposed()) return;
+        populateSessionSelector(List.of());
+        sessionSelector.getParent().layout();
     }
 
     private void onError(ChatSessionModel session, String message, Throwable error) {
@@ -1183,7 +1227,6 @@ public final class AcpChatView extends ViewPart {
         stopButton.setImage(images.getImage(ISharedImages.IMG_ELCL_STOP));
         newSessionButton.setImage(lucideIcon("message-square-plus"));
         closeButton.setImage(lucideIcon("x"));
-        sessionsButton.setImage(lucideIcon("list-clock"));
         applyButton.setImage(images.getImage(ISharedImages.IMG_ETOOL_SAVE_EDIT));
         rejectButton.setImage(images.getImage(ISharedImages.IMG_ETOOL_DELETE));
         undoButton.setImage(images.getImage(ISharedImages.IMG_TOOL_UNDO));
@@ -1215,7 +1258,7 @@ public final class AcpChatView extends ViewPart {
         stopButton.setEnabled(connected && activeSession.agentMessageOpen);
         newSessionButton.setEnabled(connected && !busy && activeSession.project.isOpen());
         closeButton.setEnabled(connected);
-        sessionsButton.setEnabled(connected && activeSession.client.capabilities().sessionList()
+        sessionSelector.setEnabled(connected && activeSession.client.capabilities().sessionList()
                 && (activeSession.client.capabilities().sessionResume() || activeSession.client.capabilities().loadSession()));
         boolean reviewFileChanges = connected && activeSession.reviewFileChanges;
         boolean hasDiffs = reviewFileChanges && !pendingDiffs(activeSession).isEmpty();
@@ -1320,7 +1363,7 @@ public final class AcpChatView extends ViewPart {
         if (closeButton != null && !closeButton.isDisposed()) {
             closeButton.setEnabled(false);
         }
-        if (sessionsButton != null && !sessionsButton.isDisposed()) sessionsButton.setEnabled(false);
+        if (sessionSelector != null && !sessionSelector.isDisposed()) sessionSelector.setEnabled(false);
         if (applyButton != null && !applyButton.isDisposed()) applyButton.setEnabled(false);
         if (rejectButton != null && !rejectButton.isDisposed()) rejectButton.setEnabled(false);
         if (undoButton != null && !undoButton.isDisposed()) undoButton.setEnabled(false);

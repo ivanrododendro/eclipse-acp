@@ -10,7 +10,7 @@
   <packaging>pom</packaging>
 
   <name>Eclipse ACP</name>
-  <description>ACP client integration for the Eclipse IDE</description>
+  <description>Eclipse ACP Connector integrates Agent Client Protocol with the Eclipse IDE</description>
 
   <properties>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
