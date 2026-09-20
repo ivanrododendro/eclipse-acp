@@ -5,11 +5,18 @@ import java.util.List;
 
 import dev.eclipseacp.client.agent.FileDiff;
 import dev.eclipseacp.client.agent.Usage;
+import dev.eclipseacp.client.agent.ToolCall;
 
 /** Pure Markdown formatting for protocol events displayed in the transcript. */
 final class ChatMessageFormatter {
     private static final int MAX_DIFF_LINES = 40;
     private ChatMessageFormatter() { }
+
+    static String toolCallStatus(ToolCall toolCall) {
+        String title = toolCall.title() == null || toolCall.title().isBlank() ? toolCall.kind() : toolCall.title();
+        String status = toolCall.status() == null || toolCall.status().isBlank() ? "updated" : toolCall.status();
+        return "Agent command: " + title + " — " + status;
+    }
 
     static String usage(Usage usage) {
         List<String> entries = new ArrayList<>();

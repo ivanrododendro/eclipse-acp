@@ -19,7 +19,10 @@ actor "Utilisateur" as user
 rectangle "Eclipse IDE" as eclipse #EDF2F7 {
   component "Commandes Eclipse\nplugin.xml + OpenAcpChatHandler" as commands #FFFFFF
   component "ACP Chat\nAcpChatView" as chat #FFFFFF
-  component "Rendu et integration workspace\nGfmRenderer · WorkspaceFileLinks\nWorkspaceFileOpener" as presentation #FFFFFF
+  component "Saisie et options\nChatComposer" as composer #FFFFFF
+  component "Dialogs\nAcpChatDialogs" as dialogs #FFFFFF
+  component "Rendu et integration workspace\nChatTranscript · GfmRenderer\nWorkspaceFileLinks · WorkspaceFileOpener" as presentation #FFFFFF
+  component "Etat d'une conversation\nChatSessionModel" as chatModel #FFFFFF
   component "Gestion des changements\nChangeReviewService · WorkspaceDiffApplier" as changes #FFFFFF
   database "Workspace Eclipse\nIProject · IFile" as workspace #FFFFFF
 
@@ -57,6 +60,9 @@ commands --> chat : projet et contexte
 user --> chat : prompt / decisions
 
 chat --> presentation : transcript Markdown
+chat --> composer : compose
+composer --> sessionService : prompts et options
+composer --> dialogs : commandes et fichiers joints
 presentation --> workspace : liens et ouverture
 
 chat --> changes : revue des diffs
@@ -75,7 +81,12 @@ acpClient ..|> agentClient
 acpClient --> acpEvents : statut, texte, permissions\nlectures/ecritures de fichiers
 acpClient --> agentListener : evenements convertis\nvers les modeles agent
 agentListener <|.. sessionListener
-sessionListener --> chat : callbacks UI
+sessionService --> chatModel : cycle de vie des sessions
+sessionService --> chat : notifications de presentation
+sessionListener --> chatModel : texte, outils et options
+sessionListener --> sessionService : notifications de presentation
+sessionListener --> dialogs : interactions de l'agent
+sessionListener --> changes : operations de fichiers
 acpClient --> processLauncher : demarre l'agent
 processLauncher --> process : stdio / diagnostics
 acpClient --> transportFactory : cree le transport

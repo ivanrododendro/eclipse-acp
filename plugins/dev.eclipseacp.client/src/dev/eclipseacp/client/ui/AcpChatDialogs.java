@@ -1,6 +1,10 @@
 package dev.eclipseacp.client.ui;
 
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
@@ -8,15 +12,22 @@ import java.util.function.Supplier;
 import org.eclipse.jface.dialogs.InputDialog;
 import org.eclipse.jface.dialogs.MessageDialog;
 import org.eclipse.jface.window.Window;
+import org.eclipse.swt.SWT;
+import org.eclipse.swt.widgets.FileDialog;
 import org.eclipse.swt.widgets.Shell;
+import org.eclipse.jface.viewers.ArrayContentProvider;
+import org.eclipse.jface.viewers.LabelProvider;
+import org.eclipse.ui.dialogs.ListDialog;
 
 import dev.eclipseacp.client.agent.AuthMethod;
+import dev.eclipseacp.client.agent.ConfigOption;
+import dev.eclipseacp.client.agent.PromptAttachment;
 import dev.eclipseacp.client.agent.ElicitationRequest;
 import dev.eclipseacp.client.agent.PermissionOption;
 import dev.eclipseacp.client.agent.PermissionRequest;
 import dev.eclipseacp.client.agent.ToolCall;
 
-/** Owns modal interaction requested by an ACP agent. */
+/** Owns modal interactions for the chat and its agent. */
 final class AcpChatDialogs {
     private final Supplier<Shell> shell;
     private final Consumer<Runnable> ui;
@@ -24,6 +35,48 @@ final class AcpChatDialogs {
     AcpChatDialogs(Supplier<Shell> shell, Consumer<Runnable> ui) {
         this.shell = shell;
         this.ui = ui;
+    }
+
+    String chooseCommand(Map<String, String> commands) {
+        if (commands.isEmpty()) return null;
+        ListDialog dialog = new ListDialog(shell.get());
+        dialog.setTitle("ACP commands");
+        dialog.setMessage("Insert a slash command:");
+        dialog.setContentProvider(ArrayContentProvider.getInstance());
+        dialog.setLabelProvider(new LabelProvider() {
+            @Override public String getText(Object value) {
+                String name = (String) value;
+                String description = commands.get(name);
+                return "/" + name + (description.isBlank() ? "" : " — " + description);
+            }
+        });
+        dialog.setInput(commands.keySet());
+        return dialog.open() == Window.OK && dialog.getResult() != null && dialog.getResult().length > 0
+                ? "/" + dialog.getResult()[0] + " " : null;
+    }
+
+    Map<ConfigOption, Object> editConfigOptions(List<ConfigOption> options) {
+        ConfigOptionsDialog dialog = new ConfigOptionsDialog(shell.get(), options);
+        return dialog.open() == Window.OK ? dialog.changedValues() : Map.of();
+    }
+
+    PromptAttachment chooseAttachment() throws IOException {
+        FileDialog dialog = new FileDialog(shell.get(), SWT.OPEN);
+        dialog.setText("Attach image or audio");
+        dialog.setFilterExtensions(new String[] { "*.png;*.jpg;*.jpeg;*.gif;*.webp;*.mp3;*.wav;*.ogg", "*.*" });
+        String selected = dialog.open();
+        if (selected == null) return null;
+        Path path = Path.of(selected);
+        if (Files.size(path) > 10 * 1024 * 1024) {
+            MessageDialog.openWarning(shell.get(), "Attachment too large", "Attachments are limited to 10 MiB.");
+            return null;
+        }
+        String mime = Files.probeContentType(path);
+        if (mime == null || !(mime.startsWith("image/") || mime.startsWith("audio/"))) {
+            MessageDialog.openWarning(shell.get(), "Unsupported attachment", "Choose an image or audio file.");
+            return null;
+        }
+        return new PromptAttachment(path, mime);
     }
 
     CompletableFuture<String> requestElicitation(String sessionLabel, ElicitationRequest request) {

@@ -11,9 +11,10 @@ import dev.eclipseacp.client.agent.AgentClient;
 import dev.eclipseacp.client.agent.AgentProvider;
 import dev.eclipseacp.client.agent.ConfigOption;
 import dev.eclipseacp.client.agent.PromptAttachment;
+import dev.eclipseacp.client.agent.SessionInfo;
 import dev.eclipseacp.client.agent.ToolCall;
 
-/** Mutable state owned by one project chat. SWT widgets deliberately stay in the view. */
+/** Mutable state and transcript transitions for one project chat, independent of SWT widgets. */
 final class ChatSessionModel {
     final IProject project;
     final String label;
@@ -33,7 +34,8 @@ final class ChatSessionModel {
     final Map<String, ToolCall> toolCalls = new LinkedHashMap<>();
     final Map<String, List<dev.eclipseacp.client.agent.FileDiff>> renderedToolDiffs = new LinkedHashMap<>();
     final WorkspaceFileLinks fileLinks;
-    ChangeReviewService changes;
+    final ChangeReviewService changes;
+    List<SessionInfo> savedSessions = List.of();
     final List<PromptAttachment> attachments = new ArrayList<>();
     final Map<String, String> commands = new LinkedHashMap<>();
     final Map<String, ConfigOption> configOptions = new LinkedHashMap<>();
@@ -51,6 +53,37 @@ final class ChatSessionModel {
         this.hideAgentCommands = hideAgentCommands;
         this.fileLinks = new WorkspaceFileLinks(project);
         this.changes = new ChangeReviewService(project);
+    }
+
+    void append(String text) {
+        transcriptMarkdown.append(text);
+    }
+
+    void appendRestoredUserText(String text) {
+        if (!acceptingRestoredTranscript || text.isEmpty()) return;
+        append("## You\n\n" + text + "\n\n");
+        restoredAgentMessageOpen = false;
+    }
+
+    void appendAgentText(String text) {
+        if (text.isEmpty()) return;
+        if (acceptingRestoredTranscript && !restoredAgentMessageOpen) {
+            append("## Agent\n\n");
+            restoredAgentMessageOpen = true;
+        }
+        append(text);
+    }
+
+    void beginPrompt(String text) {
+        acceptingRestoredTranscript = false;
+        restoredAgentMessageOpen = false;
+        append("## You\n\n" + text + "\n\n## Agent\n\n");
+        agentMessageOpen = true;
+    }
+
+    boolean canListSessions() {
+        return client != null && client.capabilities().sessionList()
+                && (client.capabilities().sessionResume() || client.capabilities().loadSession());
     }
 
     boolean isConnected() { return client != null; }
