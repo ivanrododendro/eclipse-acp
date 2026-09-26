@@ -1,6 +1,5 @@
 package dev.eclipseacp.client.ui;
 
-import java.io.IOException;
 import java.util.ArrayList;
 import java.util.function.Function;
 
@@ -12,17 +11,13 @@ import org.eclipse.swt.graphics.Image;
 import org.eclipse.swt.layout.GridData;
 import org.eclipse.swt.layout.GridLayout;
 import org.eclipse.swt.widgets.Button;
-import org.eclipse.swt.widgets.Combo;
 import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Control;
-import org.eclipse.swt.widgets.Label;
 import org.eclipse.swt.widgets.Text;
-import org.eclipse.ui.ISharedImages;
+import org.eclipse.swt.custom.CCombo;
 import org.eclipse.ui.IWorkbenchPage;
-import org.eclipse.ui.PlatformUI;
 
 import dev.eclipseacp.client.agent.ConfigOption;
-import dev.eclipseacp.client.agent.PromptAttachment;
 
 /** SWT prompt editor and agent option selectors. Session actions belong to AcpSessionService. */
 final class ChatComposer {
@@ -33,16 +28,9 @@ final class ChatComposer {
     private Text prompt;
     private Button sendButton;
     private Button stopButton;
-    private Button contextButton;
-    private Button commandsButton;
-    private Button settingsButton;
     private Button attachButton;
-    private Combo modelSelector;
-    private Combo thoughtLevelSelector;
-    private Combo collaborationModeSelector;
-    private Label collaborationModeLabel;
-    private Label providerLabel;
-    private Composite collaborationModeBar;
+    private CCombo modelSelector;
+    private CCombo collaborationModeSelector;
     private ChatSessionModel activeSession;
 
     ChatComposer(Composite parent, Font font, IWorkbenchPage page, AcpSessionService sessions,
@@ -50,35 +38,28 @@ final class ChatComposer {
         this.sessions = sessions;
         this.dialogs = dialogs;
         this.page = page;
-        composer = new Composite(parent, SWT.BORDER);
+        composer = new Composite(parent, SWT.DOUBLE_BUFFERED);
         composer.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
+        composer.setBackground(parent.getDisplay().getSystemColor(SWT.COLOR_LIST_BACKGROUND));
+        composer.setBackgroundMode(SWT.INHERIT_FORCE);
         GridLayout composerLayout = new GridLayout(1, false);
-        composerLayout.marginWidth = 10;
-        composerLayout.marginHeight = 8;
+        composerLayout.marginWidth = 14;
+        composerLayout.marginHeight = 12;
+        composerLayout.verticalSpacing = 8;
         composer.setLayout(composerLayout);
+        composer.addPaintListener(event -> {
+            var bounds = composer.getClientArea();
+            event.gc.setAntialias(SWT.ON);
+            event.gc.setForeground(composer.getDisplay().getSystemColor(SWT.COLOR_WIDGET_NORMAL_SHADOW));
+            event.gc.drawRoundRectangle(0, 0, bounds.width - 1, bounds.height - 1, 22, 22);
+        });
 
-        collaborationModeBar = new Composite(composer, SWT.NONE);
-        collaborationModeBar.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
-        GridLayout collaborationModeLayout = new GridLayout(3, false);
-        collaborationModeLayout.marginWidth = collaborationModeLayout.marginHeight = 0;
-        collaborationModeBar.setLayout(collaborationModeLayout);
-        collaborationModeLabel = new Label(collaborationModeBar, SWT.NONE);
-        collaborationModeLabel.setText("Session mode:");
-        collaborationModeSelector = new Combo(collaborationModeBar, SWT.DROP_DOWN | SWT.READ_ONLY);
-        collaborationModeSelector.setLayoutData(new GridData(SWT.BEGINNING, SWT.CENTER, false, false));
-        collaborationModeSelector.setToolTipText("Session mode for the active ACP session");
-        collaborationModeSelector.setEnabled(false);
-        collaborationModeSelector.addListener(SWT.Selection, ignored -> changeConfigOption(collaborationModeSelector,
-                AgentConfigOptions.sessionMode(activeSession), "Session mode"));
-        providerLabel = new Label(collaborationModeBar, SWT.NONE);
-        providerLabel.setLayoutData(new GridData(SWT.END, SWT.CENTER, true, false));
-
-        prompt = new Text(composer, SWT.MULTI | SWT.WRAP | SWT.V_SCROLL);
+        prompt = new Text(composer, SWT.MULTI | SWT.WRAP);
         GridData promptData = new GridData(SWT.FILL, SWT.FILL, true, false);
         promptData.heightHint = 64;
         prompt.setLayoutData(promptData);
         prompt.setFont(font);
-        prompt.setMessage("Ask anything, or add code context…");
+        prompt.setMessage("Do anything");
         prompt.addModifyListener(event -> {
             int lines = Math.max(prompt.getLineCount(), prompt.getText().length()
                     / Math.max(20, prompt.getClientArea().width / 8) + 1);
@@ -100,77 +81,45 @@ final class ChatComposer {
 
         Composite footer = new Composite(composer, SWT.NONE);
         footer.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
-        GridLayout footerLayout = new GridLayout(2, false);
+        GridLayout footerLayout = new GridLayout(5, false);
         footerLayout.marginWidth = footerLayout.marginHeight = 0;
+        footerLayout.horizontalSpacing = 6;
         footer.setLayout(footerLayout);
-        Composite actions = new Composite(footer, SWT.NONE);
-        actions.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
-        org.eclipse.swt.layout.RowLayout actionsLayout = new org.eclipse.swt.layout.RowLayout();
-        actionsLayout.wrap = true;
-        actionsLayout.center = true;
-        actionsLayout.spacing = 3;
-        actionsLayout.marginLeft = actionsLayout.marginRight = 0;
-        actions.setLayout(actionsLayout);
-        Composite submit = new Composite(footer, SWT.NONE);
-        submit.setLayoutData(new GridData(SWT.END, SWT.BOTTOM, false, false));
-        submit.setLayout(new GridLayout(1, false));
 
-        sendButton = new Button(submit, SWT.PUSH);
-        sendButton.setText("Send");
-        sendButton.setToolTipText("Send message (Cmd/Ctrl+Enter)");
-        sendButton.setEnabled(false);
-        sendButton.addListener(SWT.Selection, ignored -> sendPrompt());
+        attachButton = new Button(footer, SWT.FLAT);
+        attachButton.setImage(icon.apply("plus"));
+        attachButton.setToolTipText("Attach (not available yet)");
+        attachButton.setEnabled(false);
 
-        stopButton = new Button(submit, SWT.PUSH);
-        stopButton.setText("Stop");
-        stopButton.setToolTipText("Stop generating the response");
-        stopButton.setEnabled(false);
-        stopButton.addListener(SWT.Selection, ignored -> sessions.cancel());
+        collaborationModeSelector = new CCombo(footer, SWT.READ_ONLY | SWT.FLAT);
+        collaborationModeSelector.setToolTipText("Session mode for the active ACP session");
+        collaborationModeSelector.setEnabled(false);
+        collaborationModeSelector.addListener(SWT.Selection, ignored -> changeConfigOption(collaborationModeSelector,
+                AgentConfigOptions.sessionMode(activeSession), "Session mode"));
 
-        modelSelector = new Combo(actions, SWT.DROP_DOWN | SWT.READ_ONLY);
+        Composite spacer = new Composite(footer, SWT.NONE);
+        spacer.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
+
+        modelSelector = new CCombo(footer, SWT.READ_ONLY | SWT.FLAT);
         modelSelector.setToolTipText("Model for the active ACP session");
         modelSelector.setEnabled(false);
         modelSelector.addListener(SWT.Selection, ignored -> changeConfigOption(modelSelector,
                 AgentConfigOptions.model(activeSession), "Model"));
 
-        thoughtLevelSelector = new Combo(actions, SWT.DROP_DOWN | SWT.READ_ONLY);
-        thoughtLevelSelector.setToolTipText("Reasoning level for the active ACP session");
-        thoughtLevelSelector.setEnabled(false);
-        thoughtLevelSelector.addListener(SWT.Selection, ignored -> changeConfigOption(thoughtLevelSelector,
-                AgentConfigOptions.thoughtLevel(activeSession), "Reasoning level"));
+        Composite submit = new Composite(footer, SWT.NONE);
+        submit.setLayout(new GridLayout(1, false));
+        sendButton = new Button(submit, SWT.FLAT);
+        sendButton.setToolTipText("Send message (Cmd/Ctrl+Enter)");
+        sendButton.setEnabled(false);
+        sendButton.addListener(SWT.Selection, ignored -> sendPrompt());
 
-        settingsButton = new Button(actions, SWT.PUSH);
-        settingsButton.setText("Options…");
-        settingsButton.setToolTipText("Configure agent options");
-        settingsButton.setEnabled(false);
-        settingsButton.addListener(SWT.Selection, ignored -> editConfigOption());
+        stopButton = new Button(submit, SWT.FLAT);
+        stopButton.setToolTipText("Stop generating the response");
+        stopButton.setEnabled(false);
+        stopButton.addListener(SWT.Selection, ignored -> sessions.cancel());
 
-        // Keep these optional actions at the end of the action list, but disable them for now.
-        contextButton = new Button(actions, SWT.PUSH);
-        contextButton.setText("@ Context");
-        contextButton.setToolTipText("Insert @file, @selection, @java, @problems and @console references");
-        contextButton.setEnabled(false);
-        contextButton.addListener(SWT.Selection, ignored -> insert("@file\n@selection\n@java\n@problems\n@console\n"));
-
-        commandsButton = new Button(actions, SWT.PUSH);
-        commandsButton.setText("Commands");
-        commandsButton.setToolTipText("Agent slash commands");
-        commandsButton.setEnabled(false);
-        commandsButton.addListener(SWT.Selection, ignored -> chooseCommand());
-
-        attachButton = new Button(actions, SWT.PUSH);
-        attachButton.setText("Attach");
-        attachButton.setToolTipText("Attach an image or audio file to the next prompt");
-        attachButton.setEnabled(false);
-        attachButton.addListener(SWT.Selection, ignored -> attachFile());
-
-        ISharedImages images = PlatformUI.getWorkbench().getSharedImages();
-        sendButton.setImage(icon.apply("send-horizontal"));
-        stopButton.setImage(images.getImage(ISharedImages.IMG_ELCL_STOP));
-        contextButton.setImage(icon.apply("circle-fading-plus"));
-        commandsButton.setImage(icon.apply("square-slash"));
-        settingsButton.setImage(icon.apply("circle-ellipsis"));
-        attachButton.setImage(images.getImage(ISharedImages.IMG_OBJ_FILE));
+        sendButton.setImage(icon.apply("arrow-up"));
+        stopButton.setImage(icon.apply("square"));
     }
 
     void update() {
@@ -182,22 +131,11 @@ final class ChatComposer {
         showControl(sendButton, !busy);
         showControl(stopButton, busy);
         stopButton.setEnabled(connected && activeSession.agentMessageOpen);
-        settingsButton.setEnabled(connected && !busy && !activeSession.configOptions.isEmpty());
         refreshModelSelector();
-        refreshConfigSelector(thoughtLevelSelector, AgentConfigOptions.thoughtLevel(activeSession),
-                "Reasoning level for the active ACP session");
         refreshConfigSelector(collaborationModeSelector, AgentConfigOptions.sessionMode(activeSession),
                 "Session mode for the active ACP session");
-        providerLabel.setText(activeSession == null ? "" : "Agent : " + activeSession.provider.name());
-        showControl(settingsButton, settingsButton.getEnabled());
         showControl(modelSelector, modelSelector.getItemCount() > 0);
-        showControl(thoughtLevelSelector, thoughtLevelSelector.getItemCount() > 0);
-        boolean sessionModeAvailable = collaborationModeSelector.getItemCount() > 0;
-        showControl(collaborationModeLabel, sessionModeAvailable);
-        showControl(collaborationModeSelector, sessionModeAvailable);
-        showControl(collaborationModeBar, activeSession != null);
-        attachButton.setText(connected && !activeSession.attachments.isEmpty()
-                ? "Attach (" + activeSession.attachments.size() + ")" : "Attach");
+        showControl(collaborationModeSelector, collaborationModeSelector.getItemCount() > 0);
         prompt.setEnabled(connected);
         composer.getParent().layout(true, true);
     }
@@ -227,39 +165,20 @@ final class ChatComposer {
         }
     }
 
-    private void insert(String text) {
-        if (activeSession == null || text == null) return;
-        prompt.insert(text);
-        setFocus();
+    boolean canEditConfigOption() {
+        return activeSession != null && activeSession.isConnected() && !activeSession.isBusy()
+                && !activeSession.configOptions.isEmpty();
     }
 
-    private void chooseCommand() {
-        if (activeSession != null) insert(dialogs.chooseCommand(activeSession.commands));
-    }
-
-    private void editConfigOption() {
+    void editConfigOption() {
         ChatSessionModel session = activeSession;
-        if (session == null || !session.isConnected() || session.configOptions.isEmpty()) return;
+        if (!canEditConfigOption()) return;
         dialogs.editConfigOptions(new ArrayList<>(session.configOptions.values())).forEach((option, value) ->
                 sessions.changeConfigOption(session, option, value, "Updated " + option.name(),
                         "Could not update " + option.name()));
     }
 
-    private void attachFile() {
-        ChatSessionModel session = activeSession;
-        if (session == null) return;
-        try {
-            PromptAttachment attachment = dialogs.chooseAttachment();
-            if (attachment == null) return;
-            session.attachments.add(attachment);
-            sessions.setStatus(session, "Attachment ready: " + attachment.path().getFileName());
-            sessions.changed(session);
-        } catch (IOException error) {
-            sessions.error(session, "Could not attach file", error);
-        }
-    }
-
-    private void changeConfigOption(Combo selector, ConfigOption option, String optionName) {
+    private void changeConfigOption(CCombo selector, ConfigOption option, String optionName) {
         ChatSessionModel session = activeSession;
         int selected = selector.getSelectionIndex();
         if (session == null || !session.isConnected() || session.isBusy()
@@ -291,7 +210,7 @@ final class ChatComposer {
         modelSelector.setToolTipText(option.description().isBlank() ? "Model for the active ACP session" : option.description());
     }
 
-    private void refreshConfigSelector(Combo selector, ConfigOption option, String defaultTooltip) {
+    private void refreshConfigSelector(CCombo selector, ConfigOption option, String defaultTooltip) {
         if (selector == null || selector.isDisposed()) return;
         selector.removeAll();
         if (option == null) { selector.setEnabled(false); return; }
@@ -313,15 +232,9 @@ final class ChatComposer {
 
     private static void showControl(Control control, boolean visible) {
         control.setVisible(visible);
-        if (control.getParent().getLayout() instanceof GridLayout) {
-            GridData data = control.getLayoutData() instanceof GridData existing ? existing : new GridData();
-            data.exclude = !visible;
-            control.setLayoutData(data);
-        } else {
-            org.eclipse.swt.layout.RowData data = new org.eclipse.swt.layout.RowData();
-            data.exclude = !visible;
-            control.setLayoutData(data);
-        }
+        GridData data = control.getLayoutData() instanceof GridData existing ? existing : new GridData();
+        data.exclude = !visible;
+        control.setLayoutData(data);
     }
 
     void setFocus() {

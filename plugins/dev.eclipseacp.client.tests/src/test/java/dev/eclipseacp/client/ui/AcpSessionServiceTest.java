@@ -154,8 +154,34 @@ public class AcpSessionServiceTest {
         h.service.select(first);
         h.service.restore(saved);
         assertTrue(h.service.activeSession().acceptingRestoredTranscript);
+        assertEquals(List.of(saved, older), h.service.activeSession().savedSessions);
+        assertEquals("saved", h.service.activeSession().sessionId);
         assertEquals("saved", h.client().restoredId);
         assertEquals("saved", h.service.activeSession().sessionName);
+    }
+
+    @Test
+    public void refreshesTheSessionTitleAfterTheFirstCompletedConversation() {
+        Harness h = new Harness();
+        h.service.openSessionFor(project("first"), null);
+        ChatSessionModel session = h.service.activeSession();
+        FakeClient client = h.client();
+        client.capabilities = historyCapabilities();
+        client.activeSessionId = "current";
+        client.connection.complete(null);
+        h.drainUi();
+
+        assertEquals("New session", session.sessionName);
+        assertTrue(session.savedSessions.isEmpty());
+
+        SessionInfo named = new SessionInfo("current", "/workspace/first", List.of(), "Named conversation", "");
+        client.pages.put("", new SessionPage(List.of(named), null));
+        h.service.sendPrompt(session, "Hello");
+        client.prompt.complete(null);
+        h.drainUi();
+
+        assertEquals("Named conversation", session.sessionName);
+        assertEquals(List.of(named), session.savedSessions);
     }
 
     @Test
@@ -354,6 +380,7 @@ public class AcpSessionServiceTest {
         List<PromptAttachment> attachments;
         ConfigValue configValue;
         String restoredId;
+        String activeSessionId;
         int promptCount;
 
         FakeClient(AgentListener listener) { this.listener = listener; }
@@ -383,6 +410,7 @@ public class AcpSessionServiceTest {
                     new SessionPage(List.of(), null)));
         }
         @Override public void cancel() { }
+        @Override public String sessionId() { return activeSessionId; }
         @Override public AgentCapabilities capabilities() { return capabilities; }
         @Override public void close() { closed.complete(null); }
     }

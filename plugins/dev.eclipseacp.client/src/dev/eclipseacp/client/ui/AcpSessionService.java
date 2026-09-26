@@ -153,6 +153,7 @@ final class AcpSessionService {
         session.statusText = "Connecting to " + session.provider.name() + " in " + current.project.getLocation() + "…";
         boolean reusable = current.provider.equals(session.provider)
                 && current.reviewFileChanges == session.reviewFileChanges;
+        if (reusable) session.savedSessions = current.savedSessions;
         if (!reusable) {
             replace(session);
             connect(session, null);
@@ -181,6 +182,8 @@ final class AcpSessionService {
         if (current == null || !current.isConnected() || current.isBusy()) return;
         ChatSessionModel restored = new ChatSessionModel(current.project, current.label,
                 current.provider, current.reviewFileChanges, current.hideAgentCommands);
+        restored.savedSessions = current.savedSessions;
+        restored.sessionId = selected.id();
         restored.sessionName = selected.title().isBlank() ? selected.id() : selected.title();
         // session/load may replay messages before its response completes.
         restored.acceptingRestoredTranscript = current.client.capabilities().loadSession();
@@ -190,6 +193,8 @@ final class AcpSessionService {
     }
 
     private void connected(ChatSessionModel session) {
+        String connectedSessionId = session.client.sessionId();
+        if (connectedSessionId != null && !connectedSessionId.isBlank()) session.sessionId = connectedSessionId;
         changed(session);
         if (session.canListSessions()) loadAgentSessions(session);
         presentation.inputReady(session, session.initialPrompt);
@@ -218,6 +223,7 @@ final class AcpSessionService {
             }
             session.agentMessageOpen = false;
             changed(session);
+            if (failure == null && session.canListSessions()) loadAgentSessions(session);
         }));
     }
 
@@ -253,7 +259,13 @@ final class AcpSessionService {
             if (failure != null) {
                 error(session, "Could not list agent sessions", unwrap(failure));
             } else {
-                session.savedSessions = available.stream().filter(info -> belongsToProject(info, directory(session))).toList();
+                session.savedSessions = available.stream()
+                        .filter(info -> belongsToProject(info, directory(session)))
+                        .toList();
+                session.savedSessions.stream()
+                        .filter(info -> info.id().equals(session.sessionId) && !info.title().isBlank())
+                        .findFirst()
+                        .ifPresent(info -> session.sessionName = info.title());
                 changed(session);
             }
         }));
