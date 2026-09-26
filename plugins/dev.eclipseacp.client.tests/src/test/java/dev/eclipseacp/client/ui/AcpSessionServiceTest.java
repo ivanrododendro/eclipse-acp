@@ -134,7 +134,7 @@ public class AcpSessionServiceTest {
     }
 
     @Test
-    public void cachesPaginatedHistoryForItsProjectWhileAnotherProjectIsSelected() {
+    public void cachesPaginatedHistoryForItsProjectWhileAnotherProjectIsSelected() throws Exception {
         Harness h = new Harness();
         h.service.openSessionFor(project("first"), null);
         ChatSessionModel first = h.service.activeSession();
@@ -153,6 +153,8 @@ public class AcpSessionServiceTest {
         assertEquals(List.of(saved, older), first.savedSessions);
         h.service.select(first);
         h.service.restore(saved);
+        client.closed.get(2, TimeUnit.SECONDS);
+        h.awaitClients(3);
         assertTrue(h.service.activeSession().acceptingRestoredTranscript);
         assertEquals(List.of(saved, older), h.service.activeSession().savedSessions);
         assertEquals("saved", h.service.activeSession().sessionId);
@@ -358,6 +360,15 @@ public class AcpSessionServiceTest {
 
         FakeClient client() { return clients.getLast(); }
         void drainUi() { while (!ui.isEmpty()) ui.remove().run(); }
+        void awaitClients(int count) throws Exception {
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
+            while (clients.size() < count && System.nanoTime() < deadline) {
+                drainUi();
+                Thread.sleep(1);
+            }
+            drainUi();
+            assertEquals(count, clients.size());
+        }
         @Override public void selected(ChatSessionModel session) { }
         @Override public void changed(ChatSessionModel session) { }
         @Override public void statusChanged(ChatSessionModel session) { }

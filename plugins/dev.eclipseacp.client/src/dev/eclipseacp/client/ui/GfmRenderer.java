@@ -11,6 +11,7 @@ import org.commonmark.Extension;
 import org.commonmark.ext.gfm.tables.TablesExtension;
 import org.commonmark.node.FencedCodeBlock;
 import org.commonmark.node.Code;
+import org.commonmark.node.Heading;
 import org.commonmark.node.Link;
 import org.commonmark.node.Node;
 import org.commonmark.node.Text;
@@ -41,19 +42,35 @@ final class GfmRenderer {
      * for a reference that is not an unambiguous file in the active project.
      */
     static String document(String markdown, String fontFamily, int fontSizePoints, Function<String, String> fileLinkResolver) {
+        return document(markdown, fontFamily, fontSizePoints, fileLinkResolver, null);
+    }
+
+    static String document(String markdown, String fontFamily, int fontSizePoints,
+            Function<String, String> fileLinkResolver, String backgroundColor) {
         String cssFontFamily = fontFamily == null ? "sans-serif" : fontFamily.replace("\\", "\\\\").replace("'", "\\'");
+        String systemBackground = backgroundColor != null && backgroundColor.matches("#[0-9a-fA-F]{6}")
+                ? backgroundColor : null;
+        String lightBackground = systemBackground == null ? "#dce1e8" : systemBackground;
+        String darkBackground = systemBackground == null ? "#414550" : systemBackground;
         String content = markdown.isBlank()
                 ? "<section class='welcome'><div class='mark'>✦</div><h1>Build something great</h1>"
                     + "<p>Explore your code, solve a problem, or plan your next change.</p>"
                     + "<div class='hint'>To start, right-click a project and open an ACP session.</div></section>"
-                : (fileLinkResolver == null ? RENDERER : renderer(fileLinkResolver)).render(PARSER.parse(markdown));
+                : "<section class='conversation'><section class='conversation-preamble'>"
+                    + (fileLinkResolver == null ? RENDERER : renderer(fileLinkResolver)).render(PARSER.parse(markdown))
+                    + "</section></section>";
         return "<!doctype html><html><head><meta charset=\"utf-8\"><meta name='viewport' content='width=device-width,initial-scale=1'><style>"
-                + ":root{color-scheme:light dark;--bg:#ffffff;--fg:#24292f;--muted:#626b78;--surface:#f5f6f8;--line:#dce1e8;--accent:#6254c7;}"
-                + "@media(prefers-color-scheme:dark){:root{--bg:#1e1f22;--fg:#e1e4ea;--muted:#a4adba;--surface:#292b30;--line:#414550;--accent:#b1a5ff;}}"
+                + ":root{color-scheme:light dark;--bg:" + lightBackground + ";--fg:#24292f;--muted:#626b78;--surface:#f5f6f8;--line:"
+                + lightBackground + ";--accent:#6254c7;}"
+                + "@media(prefers-color-scheme:dark){:root{--bg:" + darkBackground
+                + ";--fg:#e1e4ea;--muted:#a4adba;--surface:#292b30;--line:" + darkBackground + ";--accent:#b1a5ff;}}"
                 + "*{box-sizing:border-box}body{background:var(--bg);color:var(--fg);font-family:'" + cssFontFamily
                 + "',sans-serif;font-size:" + fontSizePoints + "pt;margin:0;padding:20px;line-height:1.65;overflow-wrap:anywhere;}"
                 + "main{max-width:900px;margin:auto}h1{font-size:1.5em;letter-spacing:-.03em;line-height:1.3}"
-                + "h2{font-size:.85em;letter-spacing:.04em;color:var(--accent);border-top:1px solid var(--line);padding-top:20px;margin-top:28px}"
+                + "h2{font-size:1.15em;color:var(--fg);margin:18px 0 10px}"
+                + ".conversation{display:flex;flex-direction:column;gap:18px}.conversation-preamble{align-self:flex-start;width:100%}"
+                + ".message{min-width:0}.message-user{align-self:flex-end;width:fit-content;max-width:82%;text-align:left}"
+                + ".message-agent{align-self:flex-start;width:100%;text-align:left}"
                 + "p{margin:10px 0}pre{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:14px;overflow:auto;overflow-wrap:normal;}"
                 + "code{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:.92em;background:var(--surface);padding:2px 5px;border-radius:4px}pre code{padding:0}"
                 + "pre.diff{padding:8px 0}.diff code{display:block}.diff-line{display:block;padding:0 14px;min-height:1.65em}.diff-remove{background:#fde2e1;color:#852d2b}.diff-add{background:#dff3e4;color:#1f6b3b}"
@@ -69,9 +86,48 @@ final class GfmRenderer {
 
     private static HtmlRenderer renderer(Function<String, String> fileLinkResolver) {
         HtmlRenderer.Builder builder = HtmlRenderer.builder().extensions(EXTENSIONS).escapeHtml(true)
-                .nodeRendererFactory(DiffCodeBlockRenderer::new);
+                .nodeRendererFactory(DiffCodeBlockRenderer::new)
+                .nodeRendererFactory(ConversationHeadingRenderer::new);
         if (fileLinkResolver != null) builder.nodeRendererFactory(context -> new FileReferenceRenderer(context, fileLinkResolver));
         return builder.build();
+    }
+
+    /** Turns the internal You/Agent headings into aligned, unlabeled message containers. */
+    private static final class ConversationHeadingRenderer implements NodeRenderer {
+        private final HtmlNodeRendererContext context;
+        private final HtmlWriter writer;
+
+        private ConversationHeadingRenderer(HtmlNodeRendererContext context) {
+            this.context = context;
+            this.writer = context.getWriter();
+        }
+
+        @Override public Set<Class<? extends Node>> getNodeTypes() { return Set.of(Heading.class); }
+
+        @Override public void render(Node node) {
+            Heading heading = (Heading) node;
+            String role = conversationRole(heading);
+            if (role != null) {
+                writer.raw("</section><section class=\"message message-" + role + "\">");
+                return;
+            }
+            String tag = "h" + heading.getLevel();
+            writer.line();
+            writer.tag(tag);
+            for (Node child = heading.getFirstChild(); child != null; child = child.getNext()) context.render(child);
+            writer.tag("/" + tag);
+            writer.line();
+        }
+
+        private static String conversationRole(Heading heading) {
+            if (heading.getLevel() != 2 || !(heading.getFirstChild() instanceof Text text)
+                    || text.getNext() != null) return null;
+            return switch (text.getLiteral()) {
+                case "You" -> "user";
+                case "Agent" -> "agent";
+                default -> null;
+            };
+        }
     }
 
     /** Links only plain text and inline code; fenced code remains literal source text. */

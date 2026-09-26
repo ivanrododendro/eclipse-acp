@@ -45,10 +45,10 @@ public final class AcpChatView extends ViewPart {
     private Composite pageHost;
     private Composite sessionsPage;
     private Composite chatPage;
-    private Button backButton;
+    private IconButton backButton;
     private Combo projectSelector;
-    private Button newSessionButton;
-    private Button optionsButton;
+    private IconButton newSessionButton;
+    private IconButton optionsButton;
     private final Canvas[] recentButtons = new Canvas[3];
     private Canvas viewAllButton;
     private List<RecentSession> recentSessions = List.of();
@@ -101,10 +101,7 @@ public final class AcpChatView extends ViewPart {
         header.setLayout(headerLayout);
 
         ISharedImages images = PlatformUI.getWorkbench().getSharedImages();
-        backButton = new Button(header, SWT.FLAT);
-        backButton.setImage(images.getImage(ISharedImages.IMG_TOOL_BACK));
-        backButton.setToolTipText("Back to chats");
-        backButton.addListener(SWT.Selection, ignored -> {
+        backButton = new IconButton(header, lucideIcon("arrow-left"), "Back to chats", () -> {
             updateRecentSessions();
             showChatPage(false, true);
         });
@@ -115,19 +112,15 @@ public final class AcpChatView extends ViewPart {
         title.setFont(JFaceResources.getFontRegistry().getBold(JFaceResources.DEFAULT_FONT));
         title.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
 
-        optionsButton = new Button(header, SWT.FLAT);
-        optionsButton.setImage(lucideIcon("settings"));
-        optionsButton.setToolTipText("Agent options");
-        optionsButton.addListener(SWT.Selection, ignored -> composer.editConfigOption());
+        optionsButton = new IconButton(header, lucideIcon("settings"), "Agent options",
+                () -> composer.editConfigOption());
 
-        newSessionButton = new Button(header, SWT.FLAT);
-        newSessionButton.setToolTipText("New chat in this project");
+        newSessionButton = new IconButton(header, lucideIcon("square-pen"),
+                "New chat in this project", () -> {
+                    showChatPage(true, true);
+                    sessionService.newSession(null);
+                });
         newSessionButton.setEnabled(false);
-        newSessionButton.addListener(SWT.Selection, ignored -> {
-            showChatPage(true, true);
-            sessionService.newSession(null);
-        });
-        newSessionButton.setImage(lucideIcon("message-square-plus-muted"));
 
         pageHost = new Composite(parent, SWT.DOUBLE_BUFFERED);
         pageHost.setBackground(parent.getBackground());
@@ -138,7 +131,7 @@ public final class AcpChatView extends ViewPart {
         sessionsPage.setBackground(parent.getBackground());
         GridLayout recentLayout = new GridLayout(1, false);
         recentLayout.marginWidth = recentLayout.marginHeight = 0;
-        recentLayout.verticalSpacing = 2;
+        recentLayout.verticalSpacing = 1;
         sessionsPage.setLayout(recentLayout);
         for (int i = 0; i < recentButtons.length; i++) {
             final int index = i;
@@ -197,8 +190,8 @@ public final class AcpChatView extends ViewPart {
         undoButton.setEnabled(false);
         undoButton.addListener(SWT.Selection, ignored -> undoApply());
 
-        composer = new ChatComposer(parent, title.getFont(), getSite().getPage(),
-                sessionService, dialogs, this::lucideIcon);
+        composer = new ChatComposer(parent, JFaceResources.getFontRegistry().get(JFaceResources.DEFAULT_FONT), getSite().getPage(),
+                sessionService, dialogs, () -> chatPageVisible, this::sendInNewSession, this::lucideIcon);
         applyButton.setImage(images.getImage(ISharedImages.IMG_ETOOL_SAVE_EDIT));
         rejectButton.setImage(images.getImage(ISharedImages.IMG_ETOOL_DELETE));
         undoButton.setImage(images.getImage(ISharedImages.IMG_TOOL_UNDO));
@@ -225,6 +218,11 @@ public final class AcpChatView extends ViewPart {
         refreshProjectSelector();
         transcript.render();
         updateControls();
+    }
+
+    private void sendInNewSession(String prompt) {
+        showChatPage(true, true);
+        sessionService.newSessionWithInitialPrompt(prompt);
     }
 
     private void selectProjectFromCombo() {
@@ -263,12 +261,13 @@ public final class AcpChatView extends ViewPart {
                 boolean active = info.id().equals(activeSession.sessionId);
                 if (active && info.title().isBlank()) continue;
                 entries.add(new RecentSession(info.title().isBlank() ? info.id() : info.title(),
-                        active ? activeSession : null, active ? null : info));
+                        active && activeSession.isConnected() ? activeSession : null,
+                        active && activeSession.isConnected() ? null : info));
             }
         }
         recentSessions = List.copyOf(entries);
-        boolean canRestore = activeSession != null && activeSession.isConnected()
-                && !activeSession.isBusy() && activeSession.canListSessions();
+        boolean canRestore = activeSession != null && !activeSession.isBusy()
+                && activeSession.canRestoreSavedSessions();
         for (int i = 0; i < recentButtons.length; i++) {
             boolean visible = i < entries.size();
             Canvas button = recentButtons[i];
@@ -292,7 +291,7 @@ public final class AcpChatView extends ViewPart {
         control.setForeground(parent.getDisplay().getSystemColor(SWT.COLOR_WIDGET_FOREGROUND));
         control.setCursor(parent.getDisplay().getSystemCursor(SWT.CURSOR_HAND));
         GridData data = new GridData(SWT.FILL, SWT.CENTER, true, false);
-        data.heightHint = 28;
+        data.heightHint = 18;
         control.setLayoutData(data);
         control.addPaintListener(event -> {
             String text = label.get();

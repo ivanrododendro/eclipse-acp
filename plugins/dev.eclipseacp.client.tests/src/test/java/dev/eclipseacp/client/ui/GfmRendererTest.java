@@ -44,4 +44,25 @@ public class GfmRendererTest {
         assertTrue(html, html.contains("href=\"eclipse-acp://open?path=src%2Fdev%2Feclipseacp%2Fclient%2Fmcp%2FMcpServerRegistry.java&amp;line=14\""));
         assertFalse(html.contains("href=\"" + location + "\""));
     }
+
+    @Test
+    public void alignsConversationMessagesWithoutRoleLabelsOrSeparators() {
+        String html = GfmRenderer.document("## You\n\nA question\n\n## Agent\n\nAn answer");
+
+        assertTrue(html.contains("class=\"message message-user\""));
+        assertTrue(html.contains("class=\"message message-agent\""));
+        assertFalse(html.contains("<h2>You</h2>"));
+        assertFalse(html.contains("<h2>Agent</h2>"));
+        assertFalse(html.contains("border-top:1px"));
+        assertTrue(html.contains("body{background:var(--bg)"));
+    }
+
+    @Test
+    public void usesTheSuppliedSwtViewColorAsTheChatBackground() {
+        String html = GfmRenderer.document("## Agent\n\nAnswer", "sans-serif", 10, null, "#a1b2c3");
+
+        assertTrue(html.contains("--bg:#a1b2c3"));
+        assertTrue(html.contains("--line:#a1b2c3"));
+    }
+
 }

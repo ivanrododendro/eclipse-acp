@@ -145,11 +145,21 @@ final class AcpSessionService {
     }
 
     void newSession(String pendingInputText) {
+        newSession(pendingInputText, null);
+    }
+
+    /** Starts a new session and sends the supplied prompt as soon as it is connected. */
+    void newSessionWithInitialPrompt(String initialPrompt) {
+        newSession(null, initialPrompt);
+    }
+
+    private void newSession(String pendingInputText, String initialPrompt) {
         ChatSessionModel current = activeSession;
         if (current == null || !current.isConnected() || current.isBusy()) return;
         SessionConfiguration configuration = newSessionConfiguration();
         ChatSessionModel session = newSession(current.project, configuration);
         session.pendingInputText = pendingInputText;
+        session.initialPrompt = initialPrompt;
         session.statusText = "Connecting to " + session.provider.name() + " in " + current.project.getLocation() + "…";
         boolean reusable = current.provider.equals(session.provider)
                 && current.reviewFileChanges == session.reviewFileChanges;
@@ -179,22 +189,35 @@ final class AcpSessionService {
 
     void restore(SessionInfo selected) {
         ChatSessionModel current = activeSession;
-        if (current == null || !current.isConnected() || current.isBusy()) return;
+        if (current == null || current.isBusy() || selected == null) return;
         ChatSessionModel restored = new ChatSessionModel(current.project, current.label,
                 current.provider, current.reviewFileChanges, current.hideAgentCommands);
         restored.savedSessions = current.savedSessions;
         restored.sessionId = selected.id();
         restored.sessionName = selected.title().isBlank() ? selected.id() : selected.title();
         // session/load may replay messages before its response completes.
-        restored.acceptingRestoredTranscript = current.client.capabilities().loadSession();
+        restored.loadsSessionTranscript = current.loadsSessionTranscript;
+        restored.acceptingRestoredTranscript = current.loadsSessionTranscript;
+        restored.sessionTransitioning = true;
         restored.statusText = "Restoring session with " + current.provider.name() + "…";
+        AgentClient previousClient = current.client;
+        current.client = null;
         replace(restored);
-        connect(restored, selected.id());
+        if (previousClient == null) {
+            connect(restored, selected.id());
+        } else {
+            // Do not let two agent processes own the same persisted session concurrently.
+            CompletableFuture.runAsync(previousClient::close)
+                    .whenComplete((ignored, failure) -> ui.accept(() -> {
+                        if (contains(restored)) connect(restored, selected.id());
+                    }));
+        }
     }
 
     private void connected(ChatSessionModel session) {
         String connectedSessionId = session.client.sessionId();
         if (connectedSessionId != null && !connectedSessionId.isBlank()) session.sessionId = connectedSessionId;
+        session.loadsSessionTranscript = session.client.capabilities().loadSession();
         changed(session);
         if (session.canListSessions()) loadAgentSessions(session);
         presentation.inputReady(session, session.initialPrompt);

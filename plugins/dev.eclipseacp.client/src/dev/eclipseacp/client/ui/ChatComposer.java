@@ -1,6 +1,8 @@
 package dev.eclipseacp.client.ui;
 
 import java.util.ArrayList;
+import java.util.function.BooleanSupplier;
+import java.util.function.Consumer;
 import java.util.function.Function;
 
 import org.eclipse.swt.SWT;
@@ -10,7 +12,6 @@ import org.eclipse.swt.graphics.Font;
 import org.eclipse.swt.graphics.Image;
 import org.eclipse.swt.layout.GridData;
 import org.eclipse.swt.layout.GridLayout;
-import org.eclipse.swt.widgets.Button;
 import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Control;
 import org.eclipse.swt.widgets.Text;
@@ -24,37 +25,49 @@ final class ChatComposer {
     private final AcpSessionService sessions;
     private final AcpChatDialogs dialogs;
     private final IWorkbenchPage page;
+    private final BooleanSupplier chatPageVisible;
+    private final Consumer<String> sendInNewSession;
     private final Composite composer;
     private Text prompt;
-    private Button sendButton;
-    private Button stopButton;
-    private Button attachButton;
+    private IconButton sendButton;
+    private IconButton stopButton;
+    private IconButton attachButton;
     private CCombo modelSelector;
     private CCombo collaborationModeSelector;
     private ChatSessionModel activeSession;
 
     ChatComposer(Composite parent, Font font, IWorkbenchPage page, AcpSessionService sessions,
-            AcpChatDialogs dialogs, Function<String, Image> icon) {
+            AcpChatDialogs dialogs, BooleanSupplier chatPageVisible, Consumer<String> sendInNewSession,
+            Function<String, Image> icon) {
         this.sessions = sessions;
         this.dialogs = dialogs;
         this.page = page;
+        this.chatPageVisible = chatPageVisible;
+        this.sendInNewSession = sendInNewSession;
         composer = new Composite(parent, SWT.DOUBLE_BUFFERED);
         composer.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
-        composer.setBackground(parent.getDisplay().getSystemColor(SWT.COLOR_LIST_BACKGROUND));
-        composer.setBackgroundMode(SWT.INHERIT_FORCE);
+        var inputBackground = parent.getDisplay().getSystemColor(SWT.COLOR_LIST_BACKGROUND);
+        var borderBackground = parent.getDisplay().getSystemColor(SWT.COLOR_WIDGET_NORMAL_SHADOW);
+        composer.setBackground(parent.getBackground());
         GridLayout composerLayout = new GridLayout(1, false);
-        composerLayout.marginWidth = 14;
-        composerLayout.marginHeight = 12;
+        composerLayout.marginWidth = composerLayout.marginHeight = 0;
+        composerLayout.marginLeft = 14;
+        composerLayout.marginRight = 14;
+        composerLayout.marginTop = 12;
+        composerLayout.marginBottom = 14;
         composerLayout.verticalSpacing = 8;
         composer.setLayout(composerLayout);
         composer.addPaintListener(event -> {
             var bounds = composer.getClientArea();
             event.gc.setAntialias(SWT.ON);
-            event.gc.setForeground(composer.getDisplay().getSystemColor(SWT.COLOR_WIDGET_NORMAL_SHADOW));
+            event.gc.setBackground(inputBackground);
+            event.gc.fillRoundRectangle(0, 0, bounds.width - 1, bounds.height - 1, 22, 22);
+            event.gc.setForeground(borderBackground);
             event.gc.drawRoundRectangle(0, 0, bounds.width - 1, bounds.height - 1, 22, 22);
         });
 
         prompt = new Text(composer, SWT.MULTI | SWT.WRAP);
+        prompt.setBackground(inputBackground);
         GridData promptData = new GridData(SWT.FILL, SWT.FILL, true, false);
         promptData.heightHint = 64;
         prompt.setLayoutData(promptData);
@@ -80,46 +93,46 @@ final class ChatComposer {
         });
 
         Composite footer = new Composite(composer, SWT.NONE);
+        footer.setBackground(inputBackground);
         footer.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
         GridLayout footerLayout = new GridLayout(5, false);
         footerLayout.marginWidth = footerLayout.marginHeight = 0;
         footerLayout.horizontalSpacing = 6;
         footer.setLayout(footerLayout);
 
-        attachButton = new Button(footer, SWT.FLAT);
-        attachButton.setImage(icon.apply("plus"));
-        attachButton.setToolTipText("Attach (not available yet)");
+        attachButton = new IconButton(footer, icon.apply("plus"), "Attach (not available yet)", () -> { });
         attachButton.setEnabled(false);
 
         collaborationModeSelector = new CCombo(footer, SWT.READ_ONLY | SWT.FLAT);
+        collaborationModeSelector.setBackground(inputBackground);
         collaborationModeSelector.setToolTipText("Session mode for the active ACP session");
         collaborationModeSelector.setEnabled(false);
         collaborationModeSelector.addListener(SWT.Selection, ignored -> changeConfigOption(collaborationModeSelector,
                 AgentConfigOptions.sessionMode(activeSession), "Session mode"));
 
         Composite spacer = new Composite(footer, SWT.NONE);
+        spacer.setBackground(inputBackground);
         spacer.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
 
         modelSelector = new CCombo(footer, SWT.READ_ONLY | SWT.FLAT);
+        modelSelector.setBackground(inputBackground);
         modelSelector.setToolTipText("Model for the active ACP session");
         modelSelector.setEnabled(false);
         modelSelector.addListener(SWT.Selection, ignored -> changeConfigOption(modelSelector,
                 AgentConfigOptions.model(activeSession), "Model"));
 
         Composite submit = new Composite(footer, SWT.NONE);
-        submit.setLayout(new GridLayout(1, false));
-        sendButton = new Button(submit, SWT.FLAT);
-        sendButton.setToolTipText("Send message (Cmd/Ctrl+Enter)");
+        submit.setBackground(inputBackground);
+        GridLayout submitLayout = new GridLayout(1, false);
+        submitLayout.marginWidth = submitLayout.marginHeight = 0;
+        submit.setLayout(submitLayout);
+        sendButton = new IconButton(submit, icon.apply("circle-arrow-up"), "Send message (Cmd/Ctrl+Enter)",
+                this::sendPrompt);
         sendButton.setEnabled(false);
-        sendButton.addListener(SWT.Selection, ignored -> sendPrompt());
 
-        stopButton = new Button(submit, SWT.FLAT);
-        stopButton.setToolTipText("Stop generating the response");
+        stopButton = new IconButton(submit, icon.apply("square"), "Stop generating the response",
+                sessions::cancel);
         stopButton.setEnabled(false);
-        stopButton.addListener(SWT.Selection, ignored -> sessions.cancel());
-
-        sendButton.setImage(icon.apply("arrow-up"));
-        stopButton.setImage(icon.apply("square"));
     }
 
     void update() {
@@ -144,7 +157,8 @@ final class ChatComposer {
         String text = prompt.getText().trim();
         if (text.isEmpty() || activeSession == null || !activeSession.isConnected() || activeSession.isBusy()) return;
         prompt.setText("");
-        sendPrompt(activeSession, text);
+        if (chatPageVisible.getAsBoolean()) sendPrompt(activeSession, text);
+        else sendInNewSession.accept(text);
     }
 
     private void sendPrompt(ChatSessionModel session, String text) {

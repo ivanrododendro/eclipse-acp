@@ -29,6 +29,7 @@ final class ChatSessionModel {
     AgentClient client;
     boolean agentMessageOpen;
     boolean sessionTransitioning;
+    boolean loadsSessionTranscript;
     boolean acceptingRestoredTranscript;
     boolean restoredAgentMessageOpen;
     final Map<String, ToolCall> toolCalls = new LinkedHashMap<>();
@@ -87,6 +88,10 @@ final class ChatSessionModel {
                 && (client.capabilities().sessionResume() || client.capabilities().loadSession());
     }
 
+    boolean canRestoreSavedSessions() {
+        return !savedSessions.isEmpty() && (!isConnected() || canListSessions());
+    }
+
     boolean isConnected() { return client != null; }
-    boolean isBusy() { return isConnected() && (agentMessageOpen || sessionTransitioning); }
+    boolean isBusy() { return agentMessageOpen || sessionTransitioning; }
 }

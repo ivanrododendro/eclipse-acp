@@ -25,6 +25,7 @@ final class ChatTranscript {
     private final Supplier<ChatSessionModel> activeSession;
     private final String chatFontFamily;
     private final int chatFontSizePoints;
+    private final String chatBackgroundColor;
     private String transcriptSelection = "";
 
     ChatTranscript(Composite parent, IWorkbenchPage page, Supplier<ChatSessionModel> activeSession,
@@ -32,6 +33,9 @@ final class ChatTranscript {
         this.activeSession = activeSession;
         this.chatFontFamily = fontFamily;
         this.chatFontSizePoints = fontSizePoints;
+        var backgroundRgb = parent.getBackground().getRGB();
+        this.chatBackgroundColor = "#%02x%02x%02x".formatted(
+                backgroundRgb.red, backgroundRgb.green, backgroundRgb.blue);
         transcript = new Browser(parent, SWT.NONE);
         transcript.setLayoutData(new GridData(SWT.FILL, SWT.FILL, true, true));
         transcriptSelectionBridge = new BrowserFunction(transcript, "__acpRecordTranscriptSelection") {
@@ -102,7 +106,8 @@ final class ChatTranscript {
     private String chatDocument() {
         ChatSessionModel session = activeSession.get();
         return GfmRenderer.document(session == null ? "" : session.transcriptMarkdown.toString(),
-                chatFontFamily, chatFontSizePoints, session == null ? null : session.fileLinks::hrefFor);
+                chatFontFamily, chatFontSizePoints, session == null ? null : session.fileLinks::hrefFor,
+                chatBackgroundColor);
     }
 
     private void installTranscriptSelectionTracking() {
