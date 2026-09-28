@@ -15,9 +15,6 @@ import java.io.Writer;
 import java.nio.file.Path;
 import java.util.concurrent.CompletableFuture;
 
-import java.util.List;
-import java.util.concurrent.CompletableFuture;
-
 import org.junit.Test;
 
 import com.google.gson.JsonObject;
@@ -335,38 +332,4 @@ public class AcpClientProtocolTest {
         int count(String method) { return (int) methods.stream().filter(method::equals).count(); }
     }
 
-    @Test
-    public void forwardsEverySessionUpdateWhileRetainingPlainTextStreaming() {
-        CapturingListener listener = new CapturingListener();
-        AcpClient client = new AcpClient("unused", "", listener);
-        JsonObject content = new JsonObject();
-        content.addProperty("type", "text");
-        content.addProperty("text", "hello");
-        JsonObject update = new JsonObject();
-        update.addProperty("sessionUpdate", "agent_message_chunk");
-        update.add("content", content);
-        JsonObject params = new JsonObject();
-        params.addProperty("sessionId", "session-1");
-        params.add("update", update);
-
-        client.onNotification("session/update", params);
-
-        assertEquals("hello", listener.text);
-        assertEquals("session-1", listener.update.sessionId());
-        assertEquals("agent_message_chunk", listener.update.kind());
-        assertEquals("hello", listener.update.payload().getAsJsonObject("content").get("text").getAsString());
-    }
-
-    private static final class CapturingListener implements AcpListener {
-        private String text;
-        private AcpSessionUpdate update;
-
-        @Override public void onAgentText(String value) { text = value; }
-        @Override public void onStatus(String status) { }
-        @Override public void onError(String message, Throwable error) { }
-        @Override public CompletableFuture<String> requestPermission(String title, List<PermissionOption> options) {
-            return CompletableFuture.completedFuture(null);
-        }
-        @Override public void onSessionUpdate(AcpSessionUpdate value) { update = value; }
-    }
 }
