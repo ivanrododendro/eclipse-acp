@@ -71,6 +71,8 @@ final class GfmRenderer {
                 + ".conversation{display:flex;flex-direction:column;gap:18px}.conversation-preamble{align-self:flex-start;width:100%}"
                 + ".message{min-width:0}.message-user{align-self:flex-end;width:fit-content;max-width:82%;text-align:left}"
                 + ".message-agent{align-self:flex-start;width:100%;text-align:left}"
+                + ".message-agent> :first-child{margin-top:0}.message-agent> :last-child{margin-bottom:0}"
+                + "ul,ol{margin:10px 0;padding-inline-start:1.5em}"
                 + "p{margin:10px 0}pre{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:14px;overflow:auto;overflow-wrap:normal;}"
                 + "code{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:.92em;background:var(--surface);padding:2px 5px;border-radius:4px}pre code{padding:0}"
                 + "pre.diff{padding:8px 0}.diff code{display:block}.diff-line{display:block;padding:0 14px;min-height:1.65em}.diff-remove{background:#fde2e1;color:#852d2b}.diff-add{background:#dff3e4;color:#1f6b3b}"

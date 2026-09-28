@@ -46,6 +46,7 @@ public final class AcpChatView extends ViewPart {
     private Composite sessionsPage;
     private Composite chatPage;
     private IconButton backButton;
+    private Label headerTitle;
     private Combo projectSelector;
     private IconButton newSessionButton;
     private IconButton optionsButton;
@@ -107,10 +108,10 @@ public final class AcpChatView extends ViewPart {
         });
         showControl(backButton, false);
 
-        Label title = new Label(header, SWT.NONE);
-        title.setText("Chats");
-        title.setFont(JFaceResources.getFontRegistry().getBold(JFaceResources.DEFAULT_FONT));
-        title.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
+        headerTitle = new Label(header, SWT.NONE);
+        headerTitle.setText("Chats");
+        headerTitle.setFont(JFaceResources.getFontRegistry().getBold(JFaceResources.DEFAULT_FONT));
+        headerTitle.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
 
         optionsButton = new IconButton(header, lucideIcon("settings"), "Agent options",
                 () -> composer.editConfigOption());
@@ -156,7 +157,7 @@ public final class AcpChatView extends ViewPart {
                 this::showAllSessions);
         viewAllButton.setToolTipText("Show all available chats");
 
-        var fontData = title.getFont().getFontData();
+        var fontData = headerTitle.getFont().getFontData();
         String fontFamily = fontData.length == 0 ? "sans-serif" : fontData[0].getName();
         int fontSize = fontData.length == 0 ? 10 : Math.max(8, fontData[0].getHeight() - 1);
         chatPage = new Composite(pageHost, SWT.NONE);
@@ -354,6 +355,7 @@ public final class AcpChatView extends ViewPart {
         if (chatPageVisible == showChat && (showChat ? chatPage.getVisible() : sessionsPage.getVisible())) return;
 
         chatPageVisible = showChat;
+        updateHeaderTitle();
         int generation = ++pageAnimationGeneration;
         var area = pageHost.getClientArea();
         int width = area.width;
@@ -462,6 +464,7 @@ public final class AcpChatView extends ViewPart {
 
     private void updateControls() {
         if (status == null || status.isDisposed()) return;
+        updateHeaderTitle();
         boolean connected = activeSession != null && activeSession.isConnected();
         boolean busy = activeSession != null && activeSession.isBusy();
         newSessionButton.setEnabled(connected && !busy && activeSession.project.isOpen());
@@ -480,6 +483,19 @@ public final class AcpChatView extends ViewPart {
         renderStatus();
         composer.update();
         optionsButton.setEnabled(composer.canEditConfigOption());
+    }
+
+    private void updateHeaderTitle() {
+        if (headerTitle == null || headerTitle.isDisposed()) return;
+        String text = "Chats";
+        if (chatPageVisible && activeSession != null && activeSession.sessionName != null
+                && !activeSession.sessionName.isBlank()) {
+            text = activeSession.sessionName;
+        }
+        if (!text.equals(headerTitle.getText())) {
+            headerTitle.setText(text);
+            headerTitle.getParent().layout(true, true);
+        }
     }
 
     private void renderStatus() {

@@ -55,6 +55,8 @@ public class GfmRendererTest {
         assertFalse(html.contains("<h2>Agent</h2>"));
         assertFalse(html.contains("border-top:1px"));
         assertTrue(html.contains("body{background:var(--bg)"));
+        assertTrue(html.contains(".message-agent> :first-child{margin-top:0}"));
+        assertTrue(html.contains("ul,ol{margin:10px 0;padding-inline-start:1.5em}"));
     }
 
     @Test

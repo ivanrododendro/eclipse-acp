@@ -40,6 +40,14 @@ final class AcpChatSessionListener implements AgentListener {
         });
     }
 
+    private void dispatchAfterQueuedAgentText(Runnable action) {
+        AgentTextBatch batch = takeQueuedAgentText();
+        dispatch(() -> {
+            renderAgentText(batch);
+            action.run();
+        });
+    }
+
     private void append(String text) { sessions.append(session, text); }
 
     @Override public void onAgentText(String text) {
@@ -63,33 +71,36 @@ final class AcpChatSessionListener implements AgentListener {
 
     /** Runs on the UI thread after the batching interval or at prompt completion. */
     private void flushQueuedAgentText() {
-        String text;
-        long sentAt;
-        long receivedAt;
+        renderAgentText(takeQueuedAgentText());
+    }
+
+    private AgentTextBatch takeQueuedAgentText() {
         synchronized (session) {
-            text = session.pendingAgentText.toString();
+            AgentTextBatch batch = new AgentTextBatch(session.pendingAgentText.toString(),
+                    session.firstAgentChunkSentAtNanos, session.firstAgentChunkReceivedAtNanos);
             session.pendingAgentText.setLength(0);
             session.agentRenderScheduled = false;
-            sentAt = session.firstAgentChunkSentAtNanos;
-            receivedAt = session.firstAgentChunkReceivedAtNanos;
             session.firstAgentChunkSentAtNanos = 0;
             session.firstAgentChunkReceivedAtNanos = 0;
+            return batch;
         }
-        if (!text.isEmpty()) {
-            session.appendAgentText(text);
+    }
+
+    private void renderAgentText(AgentTextBatch batch) {
+        if (!batch.text().isEmpty()) {
+            session.appendAgentText(batch.text());
             sessions.transcriptChanged(session);
         }
-        if (receivedAt != 0) {
+        if (batch.receivedAt() != 0) {
             long uiAt = System.nanoTime();
             AcpLog.info("ACP first agent chunk rendered on SWT UI thread: session='" + session.label
-                    + "', receiveToUiMs=" + elapsedMillis(receivedAt, uiAt)
-                    + ", sendToUiMs=" + elapsedMillis(sentAt, uiAt));
+                    + "', receiveToUiMs=" + elapsedMillis(batch.receivedAt(), uiAt)
+                    + ", sendToUiMs=" + elapsedMillis(batch.sentAt(), uiAt));
         }
     }
 
     @Override public void onPromptCompleted(long sent, long completed) {
-        dispatch(() -> {
-            flushQueuedAgentText();
+        dispatchAfterQueuedAgentText(() -> {
             append("\n> **Timing:** session/prompt completed in " + elapsedMillis(sent, completed) + " ms\n\n");
             session.agentMessageOpen = false;
             sessions.changed(session);
@@ -97,7 +108,7 @@ final class AcpChatSessionListener implements AgentListener {
     }
 
     @Override public void onUserText(String text) {
-        dispatch(() -> {
+        dispatchAfterQueuedAgentText(() -> {
             session.appendRestoredUserText(text);
             sessions.transcriptChanged(session);
         });
@@ -108,11 +119,11 @@ final class AcpChatSessionListener implements AgentListener {
     }
 
     @Override public void onError(String message, Throwable error) {
-        dispatch(() -> sessions.error(session, message, error));
+        dispatchAfterQueuedAgentText(() -> sessions.error(session, message, error));
     }
 
     @Override public void onToolCall(ToolCall toolCall) {
-        dispatch(() -> {
+        dispatchAfterQueuedAgentText(() -> {
             session.toolCalls.put(toolCall.id(), toolCall);
             if (session.reviewFileChanges) session.changes.stageAll(toolCall.diffs());
             if (session.hideAgentCommands) {
@@ -161,13 +172,13 @@ final class AcpChatSessionListener implements AgentListener {
     }
 
     @Override public void onUsage(Usage usage) {
-        dispatch(() -> {
+        dispatchAfterQueuedAgentText(() -> {
             if (!session.hideAgentCommands) append("> **Usage:** " + ChatMessageFormatter.usage(usage) + "\n\n");
         });
     }
 
     @Override public void onTerminalOutput(String output) {
-        dispatch(() -> {
+        dispatchAfterQueuedAgentText(() -> {
             if (!session.hideAgentCommands) append(ChatMessageFormatter.terminalOutput(output));
         });
     }
@@ -207,4 +218,6 @@ final class AcpChatSessionListener implements AgentListener {
     private static long elapsedMillis(long startedAt, long completedAt) {
         return java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(completedAt - startedAt);
     }
+
+    private record AgentTextBatch(String text, long sentAt, long receivedAt) { }
 }

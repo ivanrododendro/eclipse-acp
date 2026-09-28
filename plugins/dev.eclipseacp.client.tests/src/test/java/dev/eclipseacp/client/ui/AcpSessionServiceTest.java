@@ -254,6 +254,97 @@ public class AcpSessionServiceTest {
     }
 
     @Test
+    public void preservesReplayOrderAcrossAgentToolAndUserUpdates() {
+        Harness h = new Harness();
+        ChatSessionModel session = h.open(project("first"));
+        session.acceptingRestoredTranscript = true;
+        AgentListener listener = h.client().listener;
+        ToolCall tool = new ToolCall("search", "Search files", "search", "completed", List.of(),
+                List.of(), "", "", "", "");
+
+        listener.onUserText("First question");
+        listener.onAgentText("Before tool");
+        listener.onToolCall(tool);
+        listener.onAgentText("After tool");
+        listener.onUserText("Second question");
+        h.drainUi();
+        while (!h.timers.isEmpty()) h.timers.remove().run();
+
+        String transcript = session.transcriptMarkdown.toString();
+        int firstUser = transcript.indexOf("First question");
+        int beforeTool = transcript.indexOf("Before tool");
+        int toolCall = transcript.indexOf("**Tool search:** Search files");
+        int afterTool = transcript.indexOf("After tool");
+        int secondUser = transcript.indexOf("Second question");
+        assertTrue(firstUser >= 0);
+        assertTrue(firstUser < beforeTool);
+        assertTrue(beforeTool < toolCall);
+        assertTrue(toolCall < afterTool);
+        assertTrue(afterTool < secondUser);
+        assertEquals(afterTool, transcript.lastIndexOf("After tool"));
+    }
+
+    @Test
+    public void preservesReplayOrderAcrossAgentToolAndUserUpdates() {
+        Harness h = new Harness();
+        ChatSessionModel session = h.open(project("first"));
+        session.acceptingRestoredTranscript = true;
+        AgentListener listener = h.client().listener;
+        ToolCall tool = new ToolCall("search", "Search files", "search", "completed", List.of(),
+                List.of(), "", "", "", "");
+
+        listener.onUserText("First question");
+        listener.onAgentText("Before tool");
+        listener.onToolCall(tool);
+        listener.onAgentText("After tool");
+        listener.onUserText("Second question");
+        h.drainUi();
+        while (!h.timers.isEmpty()) h.timers.remove().run();
+
+        String transcript = session.transcriptMarkdown.toString();
+        int firstUser = transcript.indexOf("First question");
+        int beforeTool = transcript.indexOf("Before tool");
+        int toolCall = transcript.indexOf("**Tool search:** Search files");
+        int afterTool = transcript.indexOf("After tool");
+        int secondUser = transcript.indexOf("Second question");
+        assertTrue(firstUser < beforeTool);
+        assertTrue(beforeTool < toolCall);
+        assertTrue(toolCall < afterTool);
+        assertTrue(afterTool < secondUser);
+        assertEquals(afterTool, transcript.lastIndexOf("After tool"));
+    }
+
+    @Test
+    public void preservesReplayOrderAcrossAgentToolAndUserUpdates() {
+        Harness h = new Harness();
+        ChatSessionModel session = h.open(project("first"));
+        session.acceptingRestoredTranscript = true;
+        AgentListener listener = h.client().listener;
+        ToolCall tool = new ToolCall("search", "Search files", "search", "completed", List.of(),
+                List.of(), "", "", "", "");
+
+        listener.onUserText("First question");
+        listener.onAgentText("Before tool");
+        listener.onToolCall(tool);
+        listener.onAgentText("After tool");
+        listener.onUserText("Second question");
+        h.drainUi();
+        while (!h.timers.isEmpty()) h.timers.remove().run();
+
+        String transcript = session.transcriptMarkdown.toString();
+        int firstUser = transcript.indexOf("First question");
+        int beforeTool = transcript.indexOf("Before tool");
+        int toolCall = transcript.indexOf("**Tool search:** Search files");
+        int afterTool = transcript.indexOf("After tool");
+        int secondUser = transcript.indexOf("Second question");
+        assertTrue(firstUser < beforeTool);
+        assertTrue(beforeTool < toolCall);
+        assertTrue(toolCall < afterTool);
+        assertTrue(afterTool < secondUser);
+        assertEquals(afterTool, transcript.lastIndexOf("After tool"));
+    }
+
+    @Test
     public void ignoresQueuedEventsForAReplacedChat() {
         Harness h = new Harness();
         ChatSessionModel old = h.open(project("first"));

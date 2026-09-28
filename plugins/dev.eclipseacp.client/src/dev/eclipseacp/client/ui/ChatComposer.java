@@ -54,7 +54,7 @@ final class ChatComposer {
         composerLayout.marginLeft = 14;
         composerLayout.marginRight = 14;
         composerLayout.marginTop = 12;
-        composerLayout.marginBottom = 14;
+        composerLayout.marginBottom = 5;
         composerLayout.verticalSpacing = 8;
         composer.setLayout(composerLayout);
         composer.addPaintListener(event -> {
@@ -68,15 +68,16 @@ final class ChatComposer {
 
         prompt = new Text(composer, SWT.MULTI | SWT.WRAP);
         prompt.setBackground(inputBackground);
-        GridData promptData = new GridData(SWT.FILL, SWT.FILL, true, false);
-        promptData.heightHint = 64;
-        prompt.setLayoutData(promptData);
         prompt.setFont(font);
+        int minimumPromptHeight = 2 * prompt.getLineHeight();
+        GridData promptData = new GridData(SWT.FILL, SWT.FILL, true, false);
+        promptData.heightHint = minimumPromptHeight;
+        prompt.setLayoutData(promptData);
         prompt.setMessage("Do anything");
         prompt.addModifyListener(event -> {
             int lines = Math.max(prompt.getLineCount(), prompt.getText().length()
                     / Math.max(20, prompt.getClientArea().width / 8) + 1);
-            int height = Math.max(64, Math.min(160, lines * prompt.getLineHeight()));
+            int height = Math.max(minimumPromptHeight, Math.min(160, lines * prompt.getLineHeight()));
             if (promptData.heightHint != height) {
                 promptData.heightHint = height;
                 composer.getParent().layout(true, true);
@@ -97,6 +98,7 @@ final class ChatComposer {
         footer.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
         GridLayout footerLayout = new GridLayout(5, false);
         footerLayout.marginWidth = footerLayout.marginHeight = 0;
+        footerLayout.marginTop = 2;
         footerLayout.horizontalSpacing = 6;
         footer.setLayout(footerLayout);
 
