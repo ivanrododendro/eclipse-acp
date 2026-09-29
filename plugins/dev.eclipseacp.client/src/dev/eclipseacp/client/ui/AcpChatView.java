@@ -28,6 +28,7 @@ import org.eclipse.swt.widgets.Combo;
 import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Control;
 import org.eclipse.swt.widgets.Display;
+import org.eclipse.swt.graphics.GC;
 import org.eclipse.swt.widgets.Label;
 import org.eclipse.swt.widgets.Menu;
 import org.eclipse.swt.widgets.MenuItem;
@@ -256,12 +257,12 @@ public final class AcpChatView extends ViewPart {
             boolean activeIsSaved = activeSession.sessionId != null
                     && saved.stream().anyMatch(info -> activeSession.sessionId.equals(info.id()));
             if (!activeIsSaved && !"New session".equals(activeSession.sessionName)) {
-                entries.add(new RecentSession(activeSession.sessionName, activeSession, null));
+                entries.add(new RecentSession(chatTitle(activeSession.sessionName), activeSession, null));
             }
             for (SessionInfo info : saved) {
                 boolean active = info.id().equals(activeSession.sessionId);
                 if (active && info.title().isBlank()) continue;
-                entries.add(new RecentSession(info.title().isBlank() ? info.id() : info.title(),
+                entries.add(new RecentSession(chatTitle(info.title().isBlank() ? info.id() : info.title()),
                         active && activeSession.isConnected() ? activeSession : null,
                         active && activeSession.isConnected() ? null : info));
             }
@@ -275,7 +276,7 @@ public final class AcpChatView extends ViewPart {
             if (visible) {
                 RecentSession entry = entries.get(i);
                 button.setEnabled(entry.open() != null || canRestore);
-                button.setToolTipText(entry.open() == null ? "Restore chat" : "Open chat");
+                button.setToolTipText((entry.open() == null ? "Restore chat: " : "Open chat: ") + entry.label());
             }
             showControl(button, visible);
             button.redraw();
@@ -298,8 +299,9 @@ public final class AcpChatView extends ViewPart {
             String text = label.get();
             event.gc.setForeground(control.getEnabled() ? control.getForeground()
                     : control.getDisplay().getSystemColor(SWT.COLOR_WIDGET_DISABLED_FOREGROUND));
-            int textHeight = event.gc.textExtent(text).y;
-            event.gc.drawText(text, 5, Math.max(0, (control.getClientArea().height - textHeight) / 2), true);
+            String visibleText = ellipsize(event.gc, chatTitle(text), Math.max(0, control.getClientArea().width - 10));
+            int textHeight = event.gc.textExtent(visibleText).y;
+            event.gc.drawText(visibleText, 5, Math.max(0, (control.getClientArea().height - textHeight) / 2), true);
         });
         control.addListener(SWT.MouseDown, event -> { if (event.button == 1) control.setFocus(); });
         control.addListener(SWT.MouseUp, event -> {
@@ -317,6 +319,24 @@ public final class AcpChatView extends ViewPart {
             @Override public void getRole(AccessibleControlEvent event) { event.detail = ACC.ROLE_PUSHBUTTON; }
         });
         return control;
+    }
+
+    /** Normalizes agent-provided titles so SWT never lays out a recent-chat row on multiple lines. */
+    private static String chatTitle(String title) {
+        return title == null ? "" : title.replaceAll("\\R", " ").replaceAll("\\s+", " ").trim();
+    }
+
+    /** Fits a single-line label to its Canvas using the active platform font metrics. */
+    private static String ellipsize(GC gc, String text, int availableWidth) {
+        if (availableWidth <= 0 || text.isEmpty() || gc.textExtent(text).x <= availableWidth) return text;
+        String ellipsis = "…";
+        int ellipsisWidth = gc.textExtent(ellipsis).x;
+        if (ellipsisWidth > availableWidth) return "";
+        int end = text.length();
+        while (end > 0 && gc.textExtent(text.substring(0, end)).x + ellipsisWidth > availableWidth) {
+            end = text.offsetByCodePoints(end, -1);
+        }
+        return text.substring(0, end) + ellipsis;
     }
 
     private void openRecent(int index) {
