@@ -5,15 +5,18 @@ import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 import java.util.function.Function;
 
+import org.eclipse.jface.bindings.keys.SWTKeySupport;
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.events.KeyAdapter;
 import org.eclipse.swt.events.KeyEvent;
+import org.eclipse.swt.graphics.Color;
 import org.eclipse.swt.graphics.Font;
 import org.eclipse.swt.graphics.Image;
 import org.eclipse.swt.layout.GridData;
 import org.eclipse.swt.layout.GridLayout;
 import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Control;
+import org.eclipse.swt.widgets.Label;
 import org.eclipse.swt.widgets.Text;
 import org.eclipse.swt.custom.CCombo;
 import org.eclipse.ui.IWorkbenchPage;
@@ -22,6 +25,10 @@ import dev.eclipseacp.client.agent.ConfigOption;
 
 /** SWT prompt editor and agent option selectors. Session actions belong to AcpSessionService. */
 final class ChatComposer {
+    private static final int SEND_SHORTCUT = SWT.MOD1 | SWT.CR;
+    private static final String SEND_TOOLTIP = "Send message ("
+            + SWTKeySupport.convertAcceleratorToKeyStroke(SEND_SHORTCUT).format() + ")";
+
     private final AcpSessionService sessions;
     private final AcpChatDialogs dialogs;
     private final IWorkbenchPage page;
@@ -47,14 +54,16 @@ final class ChatComposer {
         composer = new Composite(parent, SWT.DOUBLE_BUFFERED);
         composer.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
         var inputBackground = parent.getDisplay().getSystemColor(SWT.COLOR_LIST_BACKGROUND);
+        var footerBackground = new Color(parent.getDisplay(), 255, 255, 255);
+        composer.addDisposeListener(event -> footerBackground.dispose());
         var borderBackground = parent.getDisplay().getSystemColor(SWT.COLOR_WIDGET_NORMAL_SHADOW);
         composer.setBackground(parent.getBackground());
         GridLayout composerLayout = new GridLayout(1, false);
         composerLayout.marginWidth = composerLayout.marginHeight = 0;
         composerLayout.marginLeft = 14;
         composerLayout.marginRight = 14;
-        composerLayout.marginTop = 12;
-        composerLayout.marginBottom = 5;
+        composerLayout.marginTop = 3;
+        composerLayout.marginBottom = 2;
         composerLayout.verticalSpacing = 8;
         composer.setLayout(composerLayout);
         composer.addPaintListener(event -> {
@@ -94,7 +103,8 @@ final class ChatComposer {
         });
 
         Composite footer = new Composite(composer, SWT.NONE);
-        footer.setBackground(inputBackground);
+        footer.setBackground(footerBackground);
+        footer.setBackgroundMode(SWT.INHERIT_FORCE);
         footer.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
         GridLayout footerLayout = new GridLayout(5, false);
         footerLayout.marginWidth = footerLayout.marginHeight = 0;
@@ -106,35 +116,51 @@ final class ChatComposer {
         attachButton.setEnabled(false);
 
         collaborationModeSelector = new CCombo(footer, SWT.READ_ONLY | SWT.FLAT);
-        collaborationModeSelector.setBackground(inputBackground);
+        collaborationModeSelector.setBackground(footerBackground);
         collaborationModeSelector.setToolTipText("Session mode for the active ACP session");
         collaborationModeSelector.setEnabled(false);
         collaborationModeSelector.addListener(SWT.Selection, ignored -> changeConfigOption(collaborationModeSelector,
                 AgentConfigOptions.sessionMode(activeSession), "Session mode"));
 
-        Composite spacer = new Composite(footer, SWT.NONE);
-        spacer.setBackground(inputBackground);
-        spacer.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
+        Label spacer = new Label(footer, SWT.NONE);
+        spacer.setBackground(footerBackground);
+        GridData spacerData = new GridData(SWT.FILL, SWT.CENTER, true, false);
+        spacerData.widthHint = 0;
+        spacerData.heightHint = 0;
+        spacer.setLayoutData(spacerData);
 
         modelSelector = new CCombo(footer, SWT.READ_ONLY | SWT.FLAT);
-        modelSelector.setBackground(inputBackground);
+        modelSelector.setBackground(footerBackground);
         modelSelector.setToolTipText("Model for the active ACP session");
         modelSelector.setEnabled(false);
         modelSelector.addListener(SWT.Selection, ignored -> changeConfigOption(modelSelector,
                 AgentConfigOptions.model(activeSession), "Model"));
 
         Composite submit = new Composite(footer, SWT.NONE);
-        submit.setBackground(inputBackground);
+        submit.setBackground(footerBackground);
         GridLayout submitLayout = new GridLayout(1, false);
         submitLayout.marginWidth = submitLayout.marginHeight = 0;
         submit.setLayout(submitLayout);
-        sendButton = new IconButton(submit, icon.apply("circle-arrow-up"), "Send message (Cmd/Ctrl+Enter)",
+        sendButton = new IconButton(submit, icon.apply("circle-arrow-up"), SEND_TOOLTIP,
                 this::sendPrompt);
         sendButton.setEnabled(false);
 
         stopButton = new IconButton(submit, icon.apply("square"), "Stop generating the response",
                 sessions::cancel);
         stopButton.setEnabled(false);
+        applyFooterBackground(footer, footerBackground);
+    }
+
+    private static void applyFooterBackground(Control control, Color background) {
+        // This custom white surface must not be recolored by the workbench CSS theme.
+        control.setData("org.eclipse.e4.ui.css.disabled", Boolean.TRUE);
+        control.setBackground(background);
+        control.setForeground(control.getDisplay().getSystemColor(SWT.COLOR_BLACK));
+        if (control instanceof Composite composite) {
+            for (Control child : composite.getChildren()) {
+                applyFooterBackground(child, background);
+            }
+        }
     }
 
     void update() {
