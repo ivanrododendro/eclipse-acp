@@ -66,8 +66,10 @@ final class WorkspaceFileLinks {
             String candidate = value.trim().replace('\\', '/');
             Integer line = null;
             int separator = candidate.lastIndexOf(':');
-            if (separator > 0 && candidate.substring(separator + 1).matches("[1-9][0-9]*")) {
-                line = Integer.valueOf(candidate.substring(separator + 1));
+            if (separator > 0 && candidate.substring(separator + 1).matches("[1-9][0-9]*(?:-[1-9][0-9]*)?")) {
+                String location = candidate.substring(separator + 1);
+                int rangeSeparator = location.indexOf('-');
+                line = Integer.valueOf(rangeSeparator < 0 ? location : location.substring(0, rangeSeparator));
                 candidate = candidate.substring(0, separator);
             }
             while (candidate.startsWith("./")) candidate = candidate.substring(2);

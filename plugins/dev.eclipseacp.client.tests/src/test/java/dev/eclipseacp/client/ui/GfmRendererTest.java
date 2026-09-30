@@ -20,14 +20,17 @@ public class GfmRendererTest {
 
     @Test
     public void linksResolvedFileReferencesButLeavesCodeBlocksAndUnknownNamesAlone() {
-        String html = GfmRenderer.document("See src/Foo.java:7 and `pom.xml`.\n\n```java\nsrc/Foo.java:7\n```\n\nUnknown.java",
+        String html = GfmRenderer.document("See src/Foo.java:7, src/ContratPrestataireService.java:63-70 and `pom.xml`.\n\n```java\nsrc/Foo.java:7\n```\n\nUnknown.java",
                 "sans-serif", 10, reference -> switch (reference) {
                 case "src/Foo.java:7", "src/Foo.java" -> "eclipse-acp://open?path=src%2FFoo.java&line=7";
+                case "src/ContratPrestataireService.java:63-70" ->
+                        "eclipse-acp://open?path=src%2FContratPrestataireService.java&line=63";
                 case "pom.xml" -> "eclipse-acp://open?path=pom.xml";
                 default -> null;
                 });
 
         assertTrue(html, html.contains("href=\"eclipse-acp://open?path=src%2FFoo.java&amp;line=7\""));
+        assertTrue(html, html.contains("href=\"eclipse-acp://open?path=src%2FContratPrestataireService.java&amp;line=63\""));
         assertTrue(html.contains("href=\"eclipse-acp://open?path=pom.xml\""));
         assertTrue(html.contains("<pre><code class=\"language-java\">src/Foo.java:7"));
         assertFalse(html.contains("href=\"eclipse-acp://open?path=Unknown.java\""));

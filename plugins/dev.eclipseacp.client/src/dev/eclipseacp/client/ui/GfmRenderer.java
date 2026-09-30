@@ -137,7 +137,7 @@ final class GfmRenderer {
         // The resolver performs the authoritative workspace validation. Keeping this lexical
         // match permissive also accommodates paths with Unicode or generated-file characters.
         private static final Pattern FILE_REFERENCE = Pattern.compile(
-                "(?<!\\S)([^\\s]+?\\.[A-Za-z0-9]{1,12}(?::[1-9][0-9]*)?)");
+                "(?<!\\S)([^\\s]+?\\.[A-Za-z0-9]{1,12}(?::[1-9][0-9]*(?:-[1-9][0-9]*)?)?)");
         private final HtmlNodeRendererContext context;
         private final HtmlWriter writer;
         private final Function<String, String> resolver;
