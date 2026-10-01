@@ -173,7 +173,9 @@ final class AcpChatSessionListener implements AgentListener {
 
     @Override public void onUsage(Usage usage) {
         dispatchAfterQueuedAgentText(() -> {
+            session.usage = usage;
             if (!session.hideAgentCommands) append("> **Usage:** " + ChatMessageFormatter.usage(usage) + "\n\n");
+            sessions.changed(session);
         });
     }
 

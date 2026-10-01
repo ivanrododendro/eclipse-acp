@@ -20,6 +20,12 @@ public class ChatMessageFormatterTest {
     }
 
     @Test
+    public void formatsContextWindowUsageFromAcp() {
+        assertEquals("contextUsed=64000, contextSize=200000",
+                ChatMessageFormatter.usage(new Usage(null, null, null, null, 64_000L, 200_000L)));
+    }
+
+    @Test
     public void limitsEachSideOfDiffPreview() {
         String manyLines = String.join("\n", java.util.Collections.nCopies(42, "line"));
         String preview = ChatMessageFormatter.diffPreview(List.of(new FileDiff("src/A.java", manyLines, manyLines)));

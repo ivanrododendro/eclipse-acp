@@ -20,6 +20,8 @@ final class ChatMessageFormatter {
 
     static String usage(Usage usage) {
         List<String> entries = new ArrayList<>();
+        if (usage.used() != null) entries.add("contextUsed=" + usage.used());
+        if (usage.size() != null) entries.add("contextSize=" + usage.size());
         if (usage.inputTokens() != null) entries.add("inputTokens=" + usage.inputTokens());
         if (usage.outputTokens() != null) entries.add("outputTokens=" + usage.outputTokens());
         if (usage.totalTokens() != null) entries.add("totalTokens=" + usage.totalTokens());

@@ -818,7 +818,8 @@ public final class AcpClient implements AgentClient, JsonRpcHandler {
 
     private static Usage usage(JsonObject update) {
         return new Usage(longValue(update, "inputTokens"), longValue(update, "outputTokens"),
-                longValue(update, "totalTokens"), string(update, "cost"));
+                longValue(update, "totalTokens"), string(update, "cost"),
+                longValue(update, "used"), longValue(update, "size"));
     }
 
     private static Long longValue(JsonObject object, String name) {

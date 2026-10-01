@@ -13,6 +13,7 @@ import dev.eclipseacp.client.agent.ConfigOption;
 import dev.eclipseacp.client.agent.PromptAttachment;
 import dev.eclipseacp.client.agent.SessionInfo;
 import dev.eclipseacp.client.agent.ToolCall;
+import dev.eclipseacp.client.agent.Usage;
 
 /** Mutable state and transcript transitions for one project chat, independent of SWT widgets. */
 final class ChatSessionModel {
@@ -45,6 +46,7 @@ final class ChatSessionModel {
     String pendingInputText;
     String initialPrompt;
     String statusText = "Not connected";
+    Usage usage;
 
     ChatSessionModel(IProject project, String label, AgentProvider provider, boolean reviewFileChanges,
             boolean hideAgentCommands) {

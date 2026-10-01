@@ -9,11 +9,19 @@ import org.eclipse.jface.bindings.keys.SWTKeySupport;
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.events.KeyAdapter;
 import org.eclipse.swt.events.KeyEvent;
+import org.eclipse.swt.accessibility.ACC;
+import org.eclipse.swt.accessibility.AccessibleAdapter;
+import org.eclipse.swt.accessibility.AccessibleControlAdapter;
+import org.eclipse.swt.accessibility.AccessibleControlEvent;
+import org.eclipse.swt.accessibility.AccessibleEvent;
 import org.eclipse.swt.graphics.Color;
 import org.eclipse.swt.graphics.Font;
 import org.eclipse.swt.graphics.Image;
+import org.eclipse.swt.graphics.GC;
+import org.eclipse.swt.graphics.Point;
 import org.eclipse.swt.layout.GridData;
 import org.eclipse.swt.layout.GridLayout;
+import org.eclipse.swt.widgets.Canvas;
 import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Control;
 import org.eclipse.swt.widgets.Label;
@@ -22,6 +30,7 @@ import org.eclipse.swt.custom.CCombo;
 import org.eclipse.ui.IWorkbenchPage;
 
 import dev.eclipseacp.client.agent.ConfigOption;
+import dev.eclipseacp.client.agent.Usage;
 
 /** SWT prompt editor and agent option selectors. Session actions belong to AcpSessionService. */
 final class ChatComposer {
@@ -39,6 +48,7 @@ final class ChatComposer {
     private IconButton sendButton;
     private IconButton stopButton;
     private IconButton attachButton;
+    private ContextUsageIndicator contextUsage;
     private CCombo modelSelector;
     private CCombo collaborationModeSelector;
     private ChatSessionModel activeSession;
@@ -106,7 +116,7 @@ final class ChatComposer {
         footer.setBackground(footerBackground);
         footer.setBackgroundMode(SWT.INHERIT_FORCE);
         footer.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
-        GridLayout footerLayout = new GridLayout(5, false);
+        GridLayout footerLayout = new GridLayout(6, false);
         footerLayout.marginWidth = footerLayout.marginHeight = 0;
         footerLayout.marginTop = 2;
         footerLayout.horizontalSpacing = 6;
@@ -121,6 +131,12 @@ final class ChatComposer {
         collaborationModeSelector.setEnabled(false);
         collaborationModeSelector.addListener(SWT.Selection, ignored -> changeConfigOption(collaborationModeSelector,
                 AgentConfigOptions.sessionMode(activeSession), "Session mode"));
+
+        contextUsage = new ContextUsageIndicator(footer, footerBackground);
+        GridData contextUsageData = new GridData(SWT.BEGINNING, SWT.CENTER, false, false);
+        contextUsageData.exclude = true;
+        contextUsage.setLayoutData(contextUsageData);
+        contextUsage.setVisible(false);
 
         Label spacer = new Label(footer, SWT.NONE);
         spacer.setBackground(footerBackground);
@@ -168,6 +184,8 @@ final class ChatComposer {
         activeSession = sessions.activeSession();
         boolean connected = activeSession != null && activeSession.isConnected();
         boolean busy = activeSession != null && activeSession.isBusy();
+        contextUsage.setUsage(activeSession == null ? null : activeSession.usage);
+        showControl(contextUsage, contextUsage.isAvailable());
         updateSendButton();
         showControl(sendButton, !busy);
         showControl(stopButton, busy);
@@ -281,5 +299,78 @@ final class ChatComposer {
 
     void setFocus() {
         prompt.setFocus();
+    }
+
+    /** Compact, colour-coded context-window meter for the composer footer. */
+    private static final class ContextUsageIndicator extends Canvas {
+        private static final int WIDTH = 128;
+        private static final int HEIGHT = 24;
+        private Long used;
+        private Long size;
+
+        ContextUsageIndicator(Composite parent, Color background) {
+            super(parent, SWT.DOUBLE_BUFFERED);
+            setBackground(background);
+            setToolTipText("Context window usage");
+            getAccessible().addAccessibleListener(new AccessibleAdapter() {
+                @Override public void getName(AccessibleEvent event) { event.result = accessibleText(); }
+            });
+            getAccessible().addAccessibleControlListener(new AccessibleControlAdapter() {
+                @Override public void getRole(AccessibleControlEvent event) { event.detail = ACC.ROLE_PROGRESSBAR; }
+            });
+            addPaintListener(event -> paint(event.gc));
+        }
+
+        @Override public Point computeSize(int wHint, int hHint, boolean changed) {
+            return new Point(wHint == SWT.DEFAULT ? WIDTH : wHint, hHint == SWT.DEFAULT ? HEIGHT : hHint);
+        }
+
+        void setUsage(Usage usage) {
+            Long nextUsed = usage == null ? null : usage.used();
+            Long nextSize = usage == null ? null : usage.size();
+            if (java.util.Objects.equals(used, nextUsed) && java.util.Objects.equals(size, nextSize)) return;
+            used = nextUsed;
+            size = nextSize;
+            boolean available = isAvailable();
+            setVisible(available);
+            setToolTipText(available ? accessibleText() : "Context window usage is not available from this agent");
+            if (!isDisposed()) redraw();
+        }
+
+        boolean isAvailable() { return used != null && size != null && size > 0; }
+
+        private void paint(GC gc) {
+            if (!isAvailable()) return;
+            var area = getClientArea();
+            int percent = (int) Math.min(100, Math.round(used * 100d / size));
+            Color rail = getDisplay().getSystemColor(SWT.COLOR_WIDGET_LIGHT_SHADOW);
+            Color ink = getDisplay().getSystemColor(SWT.COLOR_DARK_GRAY);
+            Color accent = getDisplay().getSystemColor(percent < 70 ? SWT.COLOR_DARK_CYAN
+                    : percent < 90 ? SWT.COLOR_DARK_YELLOW : SWT.COLOR_DARK_RED);
+            int gaugeWidth = 44;
+            int gaugeHeight = 6;
+            int gaugeY = (area.height - gaugeHeight) / 2;
+            gc.setAntialias(SWT.ON);
+            gc.setBackground(rail);
+            gc.fillRoundRectangle(0, gaugeY, gaugeWidth, gaugeHeight, gaugeHeight, gaugeHeight);
+            int fillWidth = Math.max(percent == 0 ? 0 : 3, gaugeWidth * percent / 100);
+            gc.setBackground(accent);
+            gc.fillRoundRectangle(0, gaugeY, fillWidth, gaugeHeight, gaugeHeight, gaugeHeight);
+            gc.setForeground(ink);
+            gc.drawText(compact(used) + " / " + compact(size), gaugeWidth + 7,
+                    (area.height - gc.getFontMetrics().getHeight()) / 2, true);
+        }
+
+        private String accessibleText() {
+            if (!isAvailable()) return "Context window usage is not available";
+            return "Context window: " + compact(used) + " of " + compact(size) + " tokens ("
+                    + Math.round(used * 100d / size) + "% used)";
+        }
+
+        private static String compact(long value) {
+            if (value < 1_000) return Long.toString(value);
+            if (value < 1_000_000) return Math.round(value / 1_000d) + "k";
+            return String.format(java.util.Locale.ROOT, "%.1fM", value / 1_000_000d);
+        }
     }
 }
