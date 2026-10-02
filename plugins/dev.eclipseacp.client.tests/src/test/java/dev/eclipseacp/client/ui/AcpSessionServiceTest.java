@@ -8,6 +8,7 @@ import java.nio.file.Path;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Queue;
@@ -31,6 +32,19 @@ import dev.eclipseacp.client.agent.ToolCall;
 import dev.eclipseacp.client.preferences.AcpPreferences;
 
 public class AcpSessionServiceTest {
+    @Test
+    public void ranksSlashCommandsByExactPrefixAndSubstringMatch() {
+        Map<String, String> commands = new LinkedHashMap<>();
+        commands.put("review", "");
+        commands.put("review-all", "");
+        commands.put("pre-review", "");
+
+        assertEquals(List.of("review", "review-all", "pre-review"),
+                ChatComposer.slashCommandMatches(commands, "review"));
+        assertEquals(List.of("review", "review-all", "pre-review"),
+                ChatComposer.slashCommandMatches(commands, "REV"));
+    }
+
     @Test
     public void readsTheActiveProviderAgainForEachNewSession() {
         Harness h = new Harness();
