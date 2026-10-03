@@ -22,6 +22,7 @@ import com.google.gson.Gson;
 final class ChatTranscript {
     private final Browser transcript;
     private final BrowserFunction transcriptSelectionBridge;
+    private final BrowserFunction transcriptZoomBridge;
     private final Supplier<ChatSessionModel> activeSession;
     private final String chatFontFamily;
     private final int chatFontSizePoints;
@@ -54,10 +55,25 @@ final class ChatTranscript {
             }
             clearTranscriptSelection();
         });
+        new MenuItem(menu, SWT.SEPARATOR);
+        MenuItem zoomIn = new MenuItem(menu, SWT.PUSH);
+        zoomIn.setText("Zoom in\tCtrl/Cmd+");
+        zoomIn.addListener(SWT.Selection, ignored -> changeZoom(10));
+        MenuItem zoomOut = new MenuItem(menu, SWT.PUSH);
+        zoomOut.setText("Zoom out\tCtrl/Cmd-");
+        zoomOut.addListener(SWT.Selection, ignored -> changeZoom(-10));
+        MenuItem resetZoom = new MenuItem(menu, SWT.PUSH);
+        resetZoom.setText("Reset zoom\tCtrl/Cmd0");
+        resetZoom.addListener(SWT.Selection, ignored -> setZoom(ProjectChatZoom.DEFAULT));
         menu.addListener(SWT.Show, ignored -> {
             ChatSessionModel session = activeSession.get();
             copy.setEnabled(!transcriptSelection.isBlank() && session != null
                     && session.isConnected() && !session.isBusy());
+            boolean canZoom = session != null;
+            int zoom = canZoom ? ProjectChatZoom.load(session.project) : ProjectChatZoom.DEFAULT;
+            zoomIn.setEnabled(canZoom && zoom < ProjectChatZoom.MAXIMUM);
+            zoomOut.setEnabled(canZoom && zoom > ProjectChatZoom.MINIMUM);
+            resetZoom.setEnabled(canZoom && zoom != ProjectChatZoom.DEFAULT);
         });
         transcript.setMenu(menu);
         transcript.addLocationListener(new LocationAdapter() {
@@ -72,9 +88,19 @@ final class ChatTranscript {
             @Override public void completed(ProgressEvent event) {
                 replaceContent();
                 installTranscriptSelectionTracking();
+                installZoomShortcuts();
                 scrollTranscriptToBottom();
             }
         });
+        transcriptZoomBridge = new BrowserFunction(transcript, "__acpSetTranscriptZoom") {
+            @Override public Object function(Object[] arguments) {
+                if (arguments.length == 1 && arguments[0] instanceof Number value) {
+                    if (value.intValue() == 0) setZoom(ProjectChatZoom.DEFAULT);
+                    else changeZoom(value.intValue());
+                }
+                return null;
+            }
+        };
         render();
     }
 
@@ -106,8 +132,13 @@ final class ChatTranscript {
     private String chatDocument() {
         ChatSessionModel session = activeSession.get();
         return GfmRenderer.document(session == null ? "" : session.transcriptMarkdown.toString(),
-                chatFontFamily, chatFontSizePoints, session == null ? null : session.fileLinks::hrefFor,
+                chatFontFamily, scaledFontSize(session), session == null ? null : session.fileLinks::hrefFor,
                 chatBackgroundColor);
+    }
+
+    private int scaledFontSize(ChatSessionModel session) {
+        int zoom = session == null ? ProjectChatZoom.DEFAULT : ProjectChatZoom.load(session.project);
+        return Math.round(chatFontSizePoints * zoom / 100f);
     }
 
     private void installTranscriptSelectionTracking() {
@@ -141,6 +172,38 @@ final class ChatTranscript {
         transcript.execute("if (window.getSelection) window.getSelection().removeAllRanges();");
     }
 
+    private void installZoomShortcuts() {
+        if (transcript == null || transcript.isDisposed()) return;
+        transcript.execute("(() => {"
+                + "if (window.__acpZoomShortcutsInstalled) return;"
+                + "window.__acpZoomShortcutsInstalled = true;"
+                + "document.addEventListener('keydown', event => {"
+                + "if ((!event.ctrlKey && !event.metaKey) || event.altKey) return;"
+                + "let zoom = null;"
+                + "if (event.key === '+' || event.key === '=' || event.code === 'NumpadAdd') zoom = 10;"
+                + "if (event.key === '-' || event.code === 'NumpadSubtract') zoom = -10;"
+                + "if (event.key === '0' || event.code === 'Numpad0') zoom = 0;"
+                + "if (zoom === null) return;"
+                + "event.preventDefault();"
+                + "if (typeof window.__acpSetTranscriptZoom === 'function') window.__acpSetTranscriptZoom(zoom);"
+                + "}, true);"
+                + "})()");
+    }
+
+    private void changeZoom(int delta) {
+        ChatSessionModel session = activeSession.get();
+        if (session != null) setZoom(ProjectChatZoom.load(session.project) + delta);
+    }
+
+    private void setZoom(int requestedZoom) {
+        ChatSessionModel session = activeSession.get();
+        if (session == null) return;
+        int zoom = requestedZoom == 0 ? ProjectChatZoom.DEFAULT : ProjectChatZoom.normalize(requestedZoom);
+        if (zoom == ProjectChatZoom.load(session.project)) return;
+        ProjectChatZoom.save(session.project, zoom);
+        render();
+    }
+
     private void scrollTranscriptToBottom() {
         if (transcript == null || transcript.isDisposed()) {
             return;
@@ -150,5 +213,6 @@ final class ChatTranscript {
 
     void dispose() {
         transcriptSelectionBridge.dispose();
+        transcriptZoomBridge.dispose();
     }
 }
