@@ -1,5 +1,7 @@
 package dev.eclipseacp.client.preferences;
 
+import java.io.IOException;
+
 import org.eclipse.core.runtime.preferences.InstanceScope;
 import org.eclipse.jface.preference.IPreferenceStore;
 import org.eclipse.ui.preferences.ScopedPreferenceStore;
@@ -26,7 +28,7 @@ public final class AcpPreferences {
     /** JSON array of MCP server declarations; secrets should use environment-variable expansion, not literals. */
     public static final String MCP_SERVERS_JSON = "mcpServersJson";
 
-    private static final IPreferenceStore STORE =
+    private static final ScopedPreferenceStore STORE =
             new ScopedPreferenceStore(InstanceScope.INSTANCE, PluginIds.PLUGIN_ID);
 
     private AcpPreferences() {
@@ -34,6 +36,11 @@ public final class AcpPreferences {
 
     public static IPreferenceStore store() {
         return STORE;
+    }
+
+    /** Flushes instance-scope preferences so they survive an Eclipse restart. */
+    public static void save() throws IOException {
+        STORE.save();
     }
 
     /** Returns a safe UI value even if the stored preference was edited manually. */

@@ -1,5 +1,7 @@
 package dev.eclipseacp.client.preferences;
 
+import java.io.IOException;
+
 import org.eclipse.jface.preference.PreferencePage;
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.layout.GridData;
@@ -16,6 +18,9 @@ import dev.eclipseacp.client.agent.AgentProvider;
 
 public final class AcpPreferencePage extends PreferencePage implements IWorkbenchPreferencePage {
     private List providerList; private Text name; private Text command; private Text arguments; private Button reviewFileChanges; private Button hideAgentCommandsInChat; private Button debugAcpMessages; private Spinner visibleRecentSessions; private AgentProviderRegistry registry;
+    public AcpPreferencePage() {
+        setPreferenceStore(AcpPreferences.store());
+    }
     @Override protected Composite createContents(Composite parent) {
         registry = new AgentProviderRegistry(AcpPreferences.store());
         Composite root = new Composite(parent, SWT.NONE); root.setLayout(new GridLayout(2, false));
@@ -56,10 +61,22 @@ public final class AcpPreferencePage extends PreferencePage implements IWorkbenc
     private void loadSelected() { int i = providerList.getSelectionIndex(); if (i >= 0) { AgentProvider p = registry.list().get(i); name.setText(p.name()); command.setText(p.command()); arguments.setText(p.arguments()); } }
     private void saveProvider() { int i = providerList.getSelectionIndex(); String id = i >= 0 ? registry.list().get(i).id() : name.getText().trim().toLowerCase().replaceAll("[^a-z0-9]+", "-"); AgentProvider p = new AgentProvider(id, name.getText(), command.getText(), arguments.getText()); if (i >= 0) registry.update(p); else registry.add(p); refresh(); }
     @Override public boolean performOk() {
-        AcpPreferences.store().setValue(AcpPreferences.REVIEW_FILE_CHANGES, reviewFileChanges.getSelection());
-        AcpPreferences.store().setValue(AcpPreferences.HIDE_AGENT_COMMANDS_IN_CHAT, hideAgentCommandsInChat.getSelection());
-        AcpPreferences.store().setValue(AcpPreferences.DEBUG_ACP_MESSAGES, debugAcpMessages.getSelection());
-        AcpPreferences.store().setValue(AcpPreferences.VISIBLE_RECENT_SESSIONS, visibleRecentSessions.getSelection()); return true;
+        getPreferenceStore().setValue(AcpPreferences.REVIEW_FILE_CHANGES, reviewFileChanges.getSelection());
+        getPreferenceStore().setValue(AcpPreferences.HIDE_AGENT_COMMANDS_IN_CHAT, hideAgentCommandsInChat.getSelection());
+        getPreferenceStore().setValue(AcpPreferences.DEBUG_ACP_MESSAGES, debugAcpMessages.getSelection());
+        getPreferenceStore().setValue(AcpPreferences.VISIBLE_RECENT_SESSIONS, visibleRecentSessions.getSelection());
+        try {
+            AcpPreferences.save();
+            setErrorMessage(null);
+            return true;
+        } catch (IOException error) {
+            setErrorMessage("Could not save ACP preferences: " + error.getMessage());
+            return false;
+        }
+    }
+    @Override protected void performDefaults() {
+        visibleRecentSessions.setSelection(AcpPreferences.DEFAULT_VISIBLE_RECENT_SESSIONS);
+        super.performDefaults();
     }
     @Override public void init(IWorkbench workbench) { }
 }
