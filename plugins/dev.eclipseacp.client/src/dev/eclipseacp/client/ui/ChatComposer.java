@@ -193,6 +193,12 @@ final class ChatComposer {
     void update() {
         if (composer.isDisposed()) return;
         activeSession = sessions.activeSession();
+        composer.setEnabled(activeSession != null);
+        if (activeSession == null) {
+            resetWithoutSession();
+            composer.getParent().layout(true, true);
+            return;
+        }
         boolean connected = activeSession != null && activeSession.isConnected();
         boolean busy = activeSession != null && activeSession.isBusy();
         contextUsage.setUsage(activeSession == null ? null : activeSession.usage);
@@ -208,6 +214,28 @@ final class ChatComposer {
         showControl(collaborationModeSelector, collaborationModeSelector.getItemCount() > 0);
         prompt.setEnabled(connected);
         composer.getParent().layout(true, true);
+    }
+
+    private void resetWithoutSession() {
+        if (!prompt.getText().isEmpty()) prompt.setText("");
+        prompt.setEnabled(false);
+        slashCommands.close();
+        resetSelector(modelSelector, "Model for the active ACP session");
+        resetSelector(collaborationModeSelector, "Session mode for the active ACP session");
+        showControl(modelSelector, false);
+        showControl(collaborationModeSelector, false);
+        contextUsage.setUsage(null);
+        showControl(contextUsage, false);
+        sendButton.setEnabled(false);
+        stopButton.setEnabled(false);
+        showControl(sendButton, true);
+        showControl(stopButton, false);
+    }
+
+    private static void resetSelector(CCombo selector, String tooltip) {
+        selector.setEnabled(false);
+        selector.removeAll();
+        selector.setToolTipText(tooltip);
     }
 
     private void sendPrompt() {
