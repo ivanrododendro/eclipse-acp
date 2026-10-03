@@ -327,7 +327,16 @@ final class ChatComposer {
                 @Override public void keyPressed(KeyEvent event) { handleKey(event); }
             });
             prompt.addModifyListener(event -> refresh());
+            prompt.addListener(SWT.FocusOut, event -> closeAfterFocusChange());
             prompt.addDisposeListener(event -> close());
+        }
+
+        private void closeAfterFocusChange() {
+            prompt.getDisplay().asyncExec(() -> {
+                if (prompt.isDisposed() || !isOpen()) return;
+                Control focus = prompt.getDisplay().getFocusControl();
+                if (focus != prompt && focus != results) close();
+            });
         }
 
         private void handleKey(KeyEvent event) {
@@ -350,7 +359,7 @@ final class ChatComposer {
             String selected = results.getSelectionCount() == 0 ? null
                     : (String) results.getSelection()[0].getData("command");
             results.removeAll();
-            for (String name : matches.stream().limit(MAX_RESULTS).toList()) {
+            for (String name : matches) {
                 TableItem item = new TableItem(results, SWT.NONE);
                 String description = commands.get().getOrDefault(name, "");
                 item.setText("/" + name + (description.isBlank() ? "" : "   " + description));
@@ -375,7 +384,8 @@ final class ChatComposer {
             if (isOpen()) return;
             popup = new Shell(prompt.getShell(), SWT.ON_TOP | SWT.TOOL | SWT.NO_FOCUS);
             popup.setLayout(new FillLayout());
-            results = new Table(popup, SWT.SINGLE | SWT.FULL_SELECTION | SWT.BORDER);
+            results = new Table(popup, SWT.SINGLE | SWT.FULL_SELECTION | SWT.BORDER | SWT.V_SCROLL);
+            results.addListener(SWT.FocusOut, event -> closeAfterFocusChange());
             results.addListener(SWT.MouseDoubleClick, event -> accept());
             results.addListener(SWT.Selection, event -> { if (event.detail == SWT.DEFAULT) accept(); });
         }
