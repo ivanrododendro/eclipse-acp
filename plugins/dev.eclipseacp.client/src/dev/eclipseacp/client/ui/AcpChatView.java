@@ -37,6 +37,7 @@ import org.eclipse.ui.PlatformUI;
 import org.eclipse.ui.part.ViewPart;
 
 import dev.eclipseacp.client.agent.SessionInfo;
+import dev.eclipseacp.client.preferences.AcpPreferences;
 
 /** Composes the chat controls and presents the selected project's session. */
 public final class AcpChatView extends ViewPart {
@@ -51,7 +52,7 @@ public final class AcpChatView extends ViewPart {
     private Combo projectSelector;
     private IconButton newSessionButton;
     private IconButton optionsButton;
-    private final Canvas[] recentButtons = new Canvas[3];
+    private List<Canvas> recentButtons = List.of();
     private Canvas viewAllButton;
     private List<RecentSession> recentSessions = List.of();
     private Button applyButton;
@@ -135,7 +136,8 @@ public final class AcpChatView extends ViewPart {
         recentLayout.marginWidth = recentLayout.marginHeight = 0;
         recentLayout.verticalSpacing = 1;
         sessionsPage.setLayout(recentLayout);
-        for (int i = 0; i < recentButtons.length; i++) {
+        List<Canvas> buttons = new ArrayList<>();
+        for (int i = 0; i < AcpPreferences.visibleRecentSessions(AcpPreferences.store()); i++) {
             final int index = i;
             Canvas row = createTextAction(sessionsPage,
                     () -> index < recentSessions.size() ? recentSessions.get(index).label() : "",
@@ -152,8 +154,9 @@ public final class AcpChatView extends ViewPart {
             menu.addListener(SWT.Show, ignored -> close.setEnabled(index < recentSessions.size()
                     && recentSessions.get(index).open() != null));
             row.setMenu(menu);
-            recentButtons[i] = row;
+            buttons.add(row);
         }
+        recentButtons = List.copyOf(buttons);
         viewAllButton = createTextAction(sessionsPage, () -> "View all (" + recentSessions.size() + ")",
                 this::showAllSessions);
         viewAllButton.setToolTipText("Show all available chats");
@@ -270,9 +273,9 @@ public final class AcpChatView extends ViewPart {
         recentSessions = List.copyOf(entries);
         boolean canRestore = activeSession != null && !activeSession.isBusy()
                 && activeSession.canRestoreSavedSessions();
-        for (int i = 0; i < recentButtons.length; i++) {
+        for (int i = 0; i < recentButtons.size(); i++) {
             boolean visible = i < entries.size();
-            Canvas button = recentButtons[i];
+            Canvas button = recentButtons.get(i);
             if (visible) {
                 RecentSession entry = entries.get(i);
                 button.setEnabled(entry.open() != null || canRestore);

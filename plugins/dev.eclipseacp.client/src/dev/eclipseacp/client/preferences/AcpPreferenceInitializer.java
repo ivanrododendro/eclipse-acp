@@ -16,5 +16,6 @@ public final class AcpPreferenceInitializer extends AbstractPreferenceInitialize
         preferences.putBoolean(AcpPreferences.REVIEW_FILE_CHANGES, false);
         preferences.putBoolean(AcpPreferences.HIDE_AGENT_COMMANDS_IN_CHAT, true);
         preferences.putBoolean(AcpPreferences.DEBUG_ACP_MESSAGES, false);
+        preferences.putInt(AcpPreferences.VISIBLE_RECENT_SESSIONS, AcpPreferences.DEFAULT_VISIBLE_RECENT_SESSIONS);
     }
 }

@@ -18,6 +18,11 @@ public final class AcpPreferences {
     public static final String HIDE_AGENT_COMMANDS_IN_CHAT = "hideAgentCommandsInChat";
     /** When enabled, logs every ACP JSON-RPC payload at DEBUG level. Disabled by default. */
     public static final String DEBUG_ACP_MESSAGES = "debugAcpMessages";
+    /** Number of recent chats shown directly in the chat picker. */
+    public static final String VISIBLE_RECENT_SESSIONS = "visibleRecentSessions";
+    public static final int DEFAULT_VISIBLE_RECENT_SESSIONS = 3;
+    public static final int MIN_VISIBLE_RECENT_SESSIONS = 1;
+    public static final int MAX_VISIBLE_RECENT_SESSIONS = 20;
     /** JSON array of MCP server declarations; secrets should use environment-variable expansion, not literals. */
     public static final String MCP_SERVERS_JSON = "mcpServersJson";
 
@@ -29,5 +34,11 @@ public final class AcpPreferences {
 
     public static IPreferenceStore store() {
         return STORE;
+    }
+
+    /** Returns a safe UI value even if the stored preference was edited manually. */
+    public static int visibleRecentSessions(IPreferenceStore preferences) {
+        int value = preferences.getInt(VISIBLE_RECENT_SESSIONS);
+        return Math.clamp(value, MIN_VISIBLE_RECENT_SESSIONS, MAX_VISIBLE_RECENT_SESSIONS);
     }
 }

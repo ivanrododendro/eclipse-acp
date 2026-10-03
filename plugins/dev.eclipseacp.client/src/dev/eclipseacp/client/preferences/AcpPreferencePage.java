@@ -8,13 +8,14 @@ import org.eclipse.swt.widgets.Button;
 import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Label;
 import org.eclipse.swt.widgets.List;
+import org.eclipse.swt.widgets.Spinner;
 import org.eclipse.swt.widgets.Text;
 import org.eclipse.ui.IWorkbench;
 import org.eclipse.ui.IWorkbenchPreferencePage;
 import dev.eclipseacp.client.agent.AgentProvider;
 
 public final class AcpPreferencePage extends PreferencePage implements IWorkbenchPreferencePage {
-    private List providerList; private Text name; private Text command; private Text arguments; private Button reviewFileChanges; private Button hideAgentCommandsInChat; private Button debugAcpMessages; private AgentProviderRegistry registry;
+    private List providerList; private Text name; private Text command; private Text arguments; private Button reviewFileChanges; private Button hideAgentCommandsInChat; private Button debugAcpMessages; private Spinner visibleRecentSessions; private AgentProviderRegistry registry;
     @Override protected Composite createContents(Composite parent) {
         registry = new AgentProviderRegistry(AcpPreferences.store());
         Composite root = new Composite(parent, SWT.NONE); root.setLayout(new GridLayout(2, false));
@@ -43,6 +44,11 @@ public final class AcpPreferencePage extends PreferencePage implements IWorkbenc
         GridData debugData = new GridData(SWT.FILL, SWT.CENTER, true, false);
         debugData.horizontalSpan = 2;
         debugAcpMessages.setLayoutData(debugData);
+        new Label(root, SWT.NONE).setText("Recent chats shown in the chat picker:");
+        visibleRecentSessions = new Spinner(root, SWT.BORDER);
+        visibleRecentSessions.setMinimum(AcpPreferences.MIN_VISIBLE_RECENT_SESSIONS);
+        visibleRecentSessions.setMaximum(AcpPreferences.MAX_VISIBLE_RECENT_SESSIONS);
+        visibleRecentSessions.setSelection(AcpPreferences.visibleRecentSessions(AcpPreferences.store()));
         providerList.addListener(SWT.Selection, e -> loadSelected()); refresh(); return root;
     }
     private Text field(Composite parent) { Text t = new Text(parent, SWT.BORDER); t.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false)); return t; }
@@ -52,7 +58,8 @@ public final class AcpPreferencePage extends PreferencePage implements IWorkbenc
     @Override public boolean performOk() {
         AcpPreferences.store().setValue(AcpPreferences.REVIEW_FILE_CHANGES, reviewFileChanges.getSelection());
         AcpPreferences.store().setValue(AcpPreferences.HIDE_AGENT_COMMANDS_IN_CHAT, hideAgentCommandsInChat.getSelection());
-        AcpPreferences.store().setValue(AcpPreferences.DEBUG_ACP_MESSAGES, debugAcpMessages.getSelection()); return true;
+        AcpPreferences.store().setValue(AcpPreferences.DEBUG_ACP_MESSAGES, debugAcpMessages.getSelection());
+        AcpPreferences.store().setValue(AcpPreferences.VISIBLE_RECENT_SESSIONS, visibleRecentSessions.getSelection()); return true;
     }
     @Override public void init(IWorkbench workbench) { }
 }
