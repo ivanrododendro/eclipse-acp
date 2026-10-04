@@ -19,7 +19,7 @@ import org.eclipse.ui.IWorkbenchPart;
 
 /** Builds explicitly requested Eclipse context; no editor or workspace data is sent implicitly. */
 final class EclipseContext {
-    private static final Pattern REFERENCE = Pattern.compile("(?<![\\w@])@(selection|file|problems|console|java|folder)(?::([^\\s]+))?");
+    private static final Pattern REFERENCE = Pattern.compile("(?<![\\w@])@(selection|file|problems|console|folder)(?::([^\\s]+))?");
 
     private EclipseContext() { }
 
@@ -34,7 +34,6 @@ final class EclipseContext {
                 case "file" -> activeFile(page);
                 case "problems" -> problems(project);
                 case "console" -> console(page);
-                case "java" -> javaElement(page);
                 case "folder" -> folder(project, matcher.group(2));
                 default -> "";
             };
@@ -46,7 +45,7 @@ final class EclipseContext {
     }
 
     static String actionPrompt(String action, IProject project, IWorkbenchPage page) {
-        String context = "@file\n@selection\n@java\n@problems\n@console";
+        String context = "@file\n@selection\n@problems\n@console";
         return switch (action) {
             case "explain" -> "Explain the selected code and its role.\n\n" + context;
             case "fix" -> "Diagnose and fix the relevant errors. Explain the proposed change before applying it.\n\n" + context;
@@ -71,41 +70,6 @@ final class EclipseContext {
         if (file == null) return "[No workspace file is active]";
         return "<eclipse-file path=\"" + file.getProjectRelativePath() + "\" project=\"" + file.getProject().getName()
                 + "\"/>";
-    }
-
-    private static String javaElement(IWorkbenchPage page) {
-        IEditorPart editor = editor(page);
-        IFile file = file(editor);
-        if (editor == null || file == null) return "[No Java element is active]";
-        Object element;
-        try {
-            Class<?> javaCore = Class.forName("org.eclipse.jdt.core.JavaCore");
-            element = javaCore.getMethod("create", IResource.class).invoke(null, file);
-            if (element == null || !(Boolean) element.getClass().getMethod("exists").invoke(element)) {
-                return "[Active file is not a Java source element]";
-            }
-        } catch (ReflectiveOperationException | LinkageError exception) {
-            return "[Java model is not installed in this Eclipse distribution]";
-        }
-        int offset = 0;
-        ISelection current = editor.getSite().getSelectionProvider().getSelection();
-        TextInfo selected = text(current);
-        if (selected != null) offset = selected.offset();
-        try {
-            try {
-                Object atOffset = element.getClass().getMethod("getElementAt", int.class).invoke(element, offset);
-                if (atOffset != null) element = atOffset;
-            } catch (NoSuchMethodException ignored) {
-                // The active Java element is not a compilation unit.
-            }
-            Object project = element.getClass().getMethod("getJavaProject").invoke(element);
-            String projectName = project == null ? "" : (String) project.getClass().getMethod("getElementName").invoke(project);
-            return "<java-model element=\"" + element.getClass().getMethod("getElementName").invoke(element)
-                    + "\" kind=\"" + element.getClass().getMethod("getElementType").invoke(element)
-                    + "\" project=\"" + projectName + "\"/>";
-        } catch (ReflectiveOperationException | LinkageError exception) {
-            return "[Java model unavailable: " + exception.getMessage() + "]";
-        }
     }
 
     private static String problems(IProject project) {
