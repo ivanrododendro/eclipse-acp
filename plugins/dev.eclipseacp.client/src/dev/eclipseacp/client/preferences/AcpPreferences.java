@@ -13,6 +13,8 @@ public final class AcpPreferences {
     public static final String AGENT_COMMAND = "agentCommand";
     public static final String AGENT_ARGUMENTS = "agentArguments";
     public static final String PROVIDERS_JSON = "providersJson";
+    /** Original invalid provider JSON retained before a repaired configuration replaces it. */
+    public static final String PROVIDERS_JSON_RECOVERY = "providersJsonRecovery";
     public static final String ACTIVE_PROVIDER = "activeProvider";
     /** When enabled, agent tool calls are kept out of the chat transcript. Enabled by default. */
     public static final String HIDE_AGENT_COMMANDS_IN_CHAT = "hideAgentCommandsInChat";
@@ -21,6 +23,8 @@ public final class AcpPreferences {
     /** Number of recent chats shown directly in the chat picker. */
     public static final String VISIBLE_RECENT_SESSIONS = "visibleRecentSessions";
     public static final int DEFAULT_VISIBLE_RECENT_SESSIONS = 3;
+    public static final boolean DEFAULT_HIDE_AGENT_COMMANDS_IN_CHAT = true;
+    public static final boolean DEFAULT_DEBUG_ACP_MESSAGES = false;
     public static final int MIN_VISIBLE_RECENT_SESSIONS = 1;
     public static final int MAX_VISIBLE_RECENT_SESSIONS = 20;
     /** JSON array of MCP server declarations; secrets should use environment-variable expansion, not literals. */

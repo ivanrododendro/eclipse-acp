@@ -13,8 +13,10 @@ public final class AcpPreferenceInitializer extends AbstractPreferenceInitialize
         preferences.put(AcpPreferences.AGENT_NAME, "Mistral Vibe");
         preferences.put(AcpPreferences.AGENT_COMMAND, "vibe-acp");
         preferences.put(AcpPreferences.AGENT_ARGUMENTS, "");
-        preferences.putBoolean(AcpPreferences.HIDE_AGENT_COMMANDS_IN_CHAT, true);
-        preferences.putBoolean(AcpPreferences.DEBUG_ACP_MESSAGES, false);
+        preferences.putBoolean(AcpPreferences.HIDE_AGENT_COMMANDS_IN_CHAT,
+                AcpPreferences.DEFAULT_HIDE_AGENT_COMMANDS_IN_CHAT);
+        preferences.putBoolean(AcpPreferences.DEBUG_ACP_MESSAGES,
+                AcpPreferences.DEFAULT_DEBUG_ACP_MESSAGES);
         preferences.putInt(AcpPreferences.VISIBLE_RECENT_SESSIONS, AcpPreferences.DEFAULT_VISIBLE_RECENT_SESSIONS);
     }
 }
