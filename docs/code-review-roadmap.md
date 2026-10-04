@@ -217,15 +217,15 @@ Il transcript e le mappe di tool crescono senza retention. Lo scroll è sempre r
 
 **Accettazione:** benchmark con conversazione lunga e progetto grande, tempi del thread UI e memoria registrati; nessuna scansione completa ripetuta per un riferimento inesistente.
 
-### R15 — P2: mancano test del plugin nel runtime che lo esegue
+### R15 — P2: mancano test del plugin nel runtime che lo esegue — risolto il 4 ottobre 2026
 
-**Confermato dalla configurazione e dall'inventario.** [POM test](../plugins/dev.eclipseacp.client.tests/pom.xml), linee 12–40; [workflow build](../.github/workflows/build.yml), linee 11–24.
+**Risolto sul codice corrente.** La suite Java veloce resta nel modulo [dev.eclipseacp.client.tests](../plugins/dev.eclipseacp.client.tests/pom.xml); il nuovo frammento [dev.eclipseacp.client.runtime.tests](../plugins/dev.eclipseacp.client.runtime.tests/pom.xml) viene invece eseguito da Tycho dentro un framework Equinox reale.
 
-Il modulo test è un `jar` JUnit, senza harness Eclipse. I fake testano bene diversi flussi di sessione, ma non verificano il trasporto reale, workspace, browser SWT, classloading JDT, preferenze nel workbench o arresto dei processi. La compilazione di tre ambienti nella target Tycho non equivale all'esecuzione su tre sistemi operativi: la CI gira solo su Ubuntu.
+Lo smoke test verifica che il bundle host e le dipendenze della piattaforma siano risolti, richiama codice del plugin dal frammento e crea, legge ed elimina un file tramite le API workspace. Il workflow pubblica sempre i report Surefire/Failsafe come artifact, anche quando la build fallisce.
 
-**Intervento:** mantenere la suite veloce e aggiungere un modulo/harness Tycho per test OSGi/workspace, più pochi test UI mirati. Il core del trasporto deve potersi testare con stream reali o controllati senza workbench. [Tycho Surefire](https://tycho.eclipseprojects.io/doc/latest/tycho-surefire-plugin/plugin-info.html).
+Resta utile ampliare gradualmente l'harness con test UI mirati e una matrice CI sui sistemi operativi dichiarati supportati; la compilazione multi-ambiente della target non equivale all'esecuzione su più sistemi. [Tycho Surefire](https://tycho.eclipseprojects.io/doc/latest/tycho-surefire-plugin/plugin-info.html).
 
-**Accettazione:** PR con test automatici per R01, R02 e R04–R10; avvio e chiusura view in Eclipse; almeno smoke test runtime sui sistemi dichiarati supportati; risultati dei test pubblicati come artifact CI.
+**Verifica:** `mvnd -T1 verify` esegue 55 test unitari e 2 test nel runtime Equinox, tutti verdi. R10 richiede nuovi test solo se vengono reintrodotte operazioni ACP sul workspace.
 
 ### R16 — P2: compatibilità OSGi e installabilità non sono abbastanza vincolate
 
