@@ -148,6 +148,21 @@ public class AcpSessionServiceTest {
     }
 
     @Test
+    public void disconnectsAnIdleSessionWhenItsTransportCloses() throws Exception {
+        Harness h = new Harness();
+        ChatSessionModel session = h.open(project("first"));
+        FakeClient client = h.client();
+
+        client.listener.onConnectionClosed("ACP connection failed", new IOException("Agent exited"));
+        h.drainUi();
+
+        assertNull(session.client);
+        assertEquals("Error", session.statusText);
+        assertTrue(session.transcriptMarkdown.toString().contains("Agent exited"));
+        client.closed.get(2, TimeUnit.SECONDS);
+    }
+
+    @Test
     public void cachesPaginatedHistoryForItsProjectWhileAnotherProjectIsSelected() throws Exception {
         Harness h = new Harness();
         h.service.openSessionFor(project("first"), null);

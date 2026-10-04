@@ -11,6 +11,10 @@ public interface AgentListener {
     default void onUserText(String text) { }
     void onStatus(String status);
     void onError(String message, Throwable error);
+    /** Called once when the ACP transport can no longer exchange messages. */
+    default void onConnectionClosed(String message, Throwable error) {
+        onError(message, error);
+    }
     CompletableFuture<String> requestPermission(String title, List<PermissionOption> options);
     default CompletableFuture<String> requestPermission(PermissionRequest request) {
         return requestPermission(request.title(), request.options());

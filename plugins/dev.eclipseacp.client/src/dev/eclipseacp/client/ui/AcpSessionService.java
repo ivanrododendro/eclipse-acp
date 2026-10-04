@@ -361,6 +361,13 @@ final class AcpSessionService {
         changed(session);
     }
 
+    /** The terminal transport callback invalidates the client so the chat can be explicitly retried. */
+    void connectionClosed(ChatSessionModel session, String message, Throwable error) {
+        if (session == null || session.client == null) return;
+        retire(session);
+        error(session, message, error);
+    }
+
     void close(ChatSessionModel session) {
         int index = sessions.indexOf(session);
         if (index < 0) return;

@@ -120,6 +120,10 @@ final class AcpChatSessionListener implements AgentListener {
         dispatchAfterQueuedAgentText(() -> sessions.error(session, message, error));
     }
 
+    @Override public void onConnectionClosed(String message, Throwable error) {
+        dispatchAfterQueuedAgentText(() -> sessions.connectionClosed(session, message, error));
+    }
+
     @Override public void onToolCall(ToolCall toolCall) {
         dispatchAfterQueuedAgentText(() -> {
             session.toolCalls.put(toolCall.id(), toolCall);

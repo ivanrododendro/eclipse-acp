@@ -130,7 +130,7 @@ public final class AcpClient implements AgentClient, JsonRpcHandler {
                     error -> listener.onError("Cannot read ACP agent diagnostics", error));
             connection = transportFactory.create(process.standardOutput(), process.standardInput(),
                     this,
-                    error -> listener.onError("ACP connection failed", error));
+                    error -> listener.onConnectionClosed("ACP connection failed", error));
             connection.start();
         } catch (IOException exception) {
             AcpLog.error("Could not start ACP agent process", exception);

@@ -34,6 +34,8 @@ final class JsonRpcConnection implements JsonRpcTransport {
     private final AtomicLong nextId = new AtomicLong();
     private final Map<String, CompletableFuture<JsonObject>> pending = new ConcurrentHashMap<>();
     private final Object writeLock = new Object();
+    /** Serializes adding pending requests with the terminal state transition. */
+    private final Object stateLock = new Object();
     /** A bounded, single-writer queue keeps pipe backpressure away from SWT and the reader. */
     private final ExecutorService writerExecutor = newWriterExecutor();
     private volatile boolean closed;
@@ -62,7 +64,10 @@ final class JsonRpcConnection implements JsonRpcTransport {
         message.addProperty("id", id);
 
         CompletableFuture<JsonObject> future = new CompletableFuture<>();
-        pending.put(Long.toString(id), future);
+        synchronized (stateLock) {
+            if (closed) return CompletableFuture.failedFuture(new IOException("ACP connection is closed"));
+            pending.put(Long.toString(id), future);
+        }
         try {
             enqueue(message);
             AcpLog.info("JSON-RPC request queued: id=" + id + ", method='" + method
@@ -100,13 +105,12 @@ final class JsonRpcConnection implements JsonRpcTransport {
             }
             if (!closed) {
                 AcpLog.warn("ACP agent closed its output stream", null);
-                failPending(new IOException("ACP agent closed its output stream"));
+                failTransport(new IOException("ACP agent closed its output stream"));
             }
         } catch (Exception exception) {
             if (!closed) {
                 AcpLog.error("ACP JSON-RPC reader failed", exception);
-                failPending(exception);
-                errorHandler.accept(exception);
+                failTransport(exception);
             }
         }
     }
@@ -213,12 +217,23 @@ final class JsonRpcConnection implements JsonRpcTransport {
         }
     }
 
-    private void failTransport(IOException exception) {
-        if (closed) return;
-        closed = true;
-        failPending(exception);
+    private void failTransport(Throwable exception) {
+        if (!transitionToClosed(exception)) return;
         writerExecutor.shutdownNow();
         errorHandler.accept(exception);
+    }
+
+    /**
+     * Moves the connection to its terminal state exactly once.  In particular, no request can be
+     * added to {@code pending} after the existing requests have been failed.
+     */
+    private boolean transitionToClosed(Throwable error) {
+        synchronized (stateLock) {
+            if (closed) return false;
+            closed = true;
+            failPending(error);
+            return true;
+        }
     }
 
     private static ExecutorService newWriterExecutor() {
@@ -260,8 +275,7 @@ final class JsonRpcConnection implements JsonRpcTransport {
     @Override
     public void close() throws IOException {
         AcpLog.info("Closing ACP JSON-RPC connection");
-        closed = true;
-        failPending(new IOException("ACP connection closed"));
+        transitionToClosed(new IOException("ACP connection closed"));
         writerExecutor.shutdownNow();
         reader.close();
         writer.close();
