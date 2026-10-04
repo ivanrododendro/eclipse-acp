@@ -4,10 +4,10 @@
   <locations>
     <location includeAllPlatforms="true" includeConfigurePhase="true" includeMode="planner" includeSource="true" type="InstallableUnit">
       <repository location="https://download.eclipse.org/releases/2026-06/"/>
-      <unit id="org.eclipse.platform.ide" version="0.0.0"/>
-      <unit id="com.google.gson" version="0.0.0"/>
-      <unit id="org.commonmark" version="0.0.0"/>
-      <unit id="org.commonmark.ext-gfm-tables" version="0.0.0"/>
+      <unit id="org.eclipse.platform.ide" version="4.40.0.I20260601-0713"/>
+      <unit id="com.google.gson" version="2.14.0"/>
+      <unit id="org.commonmark" version="0.28.0"/>
+      <unit id="org.commonmark.ext-gfm-tables" version="0.28.0"/>
     </location>
   </locations>
 </target>

@@ -32,7 +32,7 @@ Requires JDK 21 and Maven 3.9 or newer. The Tycho build uses Eclipse 2026-06 as 
 mvn clean verify
 ```
 
-The generated p2 repository is in `releng/dev.eclipseacp.repository/target/repository`. To run the plugin from Eclipse, import the repository as **Existing Maven Projects**, activate `releng/dev.eclipseacp.target/dev.eclipseacp.target.target` as the target platform, and launch an **Eclipse Application** configuration that includes `dev.eclipseacp.client`.
+The generated p2 repository is in `releng/dev.eclipseacp.repository/target/repository`. To run the plugin from Eclipse, import the repository as **Existing Maven Projects**, activate `releng/dev.eclipseacp.target/dev.eclipseacp.target.target` as the target platform, and launch an **Eclipse Application** configuration that includes `dev.eclipseacp.client`. The target pins the exact 2026-06 baseline used for compilation; CI additionally provisions and removes the feature on clean 2026-06 and 2026-09 platform profiles.
 
 The [release workflow](.github/workflows/release.yml) builds and checks the p2 repository, attaches a ZIP and SHA-256 checksum to the GitHub Release, and publishes the update site to GitHub Pages. The repository contains only the Eclipse ACP feature and bundle; the host Eclipse installation supplies its platform dependencies.
 

@@ -36,3 +36,24 @@ jobs:
         with:
           name: eclipse-acp-p2
           path: releng/dev.eclipseacp.repository/target/repository
+
+  p2-compatibility:
+    needs: build
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        eclipse-release: [2026-06, 2026-09]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+      - uses: actions/download-artifact@v4
+        with:
+          name: eclipse-acp-p2
+          path: releng/dev.eclipseacp.repository/target/repository
+      - name: Verify install and uninstall on Eclipse ${{ matrix.eclipse-release }}
+        run: bash scripts/verify-p2-installation.sh releng/dev.eclipseacp.repository/target/repository "https://download.eclipse.org/releases/${{ matrix.eclipse-release }}/"

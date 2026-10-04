@@ -227,17 +227,17 @@ Resta utile ampliare gradualmente l'harness con test UI mirati e una matrice CI 
 
 **Verifica:** `mvnd -T1 verify` esegue 55 test unitari e 2 test nel runtime Equinox, tutti verdi. R10 richiede nuovi test solo se vengono reintrodotte operazioni ACP sul workspace.
 
-### R16 — P2: compatibilità OSGi e installabilità non sono abbastanza vincolate
+### R16 — P2: compatibilità OSGi e installabilità non sono abbastanza vincolate — risolto il 4 ottobre 2026
 
-**Evidenza di configurazione, non installazione fallita dimostrata.** [MANIFEST.MF](../plugins/dev.eclipseacp.client/META-INF/MANIFEST.MF), linee 8–19; [target](../releng/dev.eclipseacp.target/dev.eclipseacp.target.target), linee 5–10; [repository POM](../releng/dev.eclipseacp.repository/pom.xml); [script p2](../scripts/verify-p2-isolation.sh).
+**Risolto sul codice corrente.** La [target](../releng/dev.eclipseacp.target/dev.eclipseacp.target.target) fissa ora le IU effettivamente risolte dalla baseline 2026-06: Eclipse Platform 4.40, Gson 2.14.0 e CommonMark 0.28.0. Il build non cambia più dipendenze quando il repository composito viene aggiornato.
 
-Tutti i `Require-Bundle` sono privi di intervalli di versione. La target usa versioni `0.0.0` e quindi delega la selezione al repository di release. I test dichiarano Gson 2.14.0 separatamente: un aggiornamento target può divergere dal classpath test. Inoltre il repository p2 esclude le dipendenze, assumendo che l'IDE ospite fornisca anche CommonMark e Gson.
+Il [manifest](../plugins/dev.eclipseacp.client/META-INF/MANIFEST.MF) dichiara per ogni bundle l'intervallo dalla versione verificata nella baseline fino alla major successiva esclusa. La versione Gson dei test deriva dalla stessa proprietà del reactor. Questi limiti corrispondono a versioni realmente provate e al confine di compatibilità major OSGi, non a numeri presunti.
 
-L'isolamento p2 è intenzionale e utile, ma il relativo script non dimostra l'installabilità su tutte le distribuzioni supportate. Il README suggerisce anche di disabilitare il contatto con altri update site, rendendo particolarmente importante verificare questa assunzione.
+L'isolamento del repository resta intenzionale: le librerie non-platform sono prerequisiti già forniti dalle release Eclipse supportate. [verify-p2-installation.sh](../scripts/verify-p2-installation.sh) crea un profilo pulito con p2 director, installa Eclipse Platform e la feature ACP, verifica la root installata, la disinstalla e controlla che il profilo host resti integro.
 
-**Intervento:** matrice esplicita di distribuzioni/versioni supportate, limiti di compatibilità giustificati, target risolta riproducibile e test p2 director su IDE puliti. Scegliere se le librerie non-platform vadano distribuite o rese prerequisiti documentati. Valutare `Import-Package` per librerie dove riduce l'accoppiamento. [OSGi — Module Layer](https://docs.osgi.org/specification/osgi.core/8.0.0/framework.module.html).
+La CI esegue questa prova sia sulla baseline 2026-06 sia sulla release recente 2026-09. Un update fra due versioni ACP pubblicate resta un gate di release da aggiungere quando saranno disponibili due repository con versioni crescenti; i metadati p2 di aggiornamento vengono comunque validati dal build del repository. [OSGi — Module Layer](https://docs.osgi.org/specification/osgi.core/8.0.0/framework.module.html).
 
-**Accettazione:** install/update/uninstall su target minima e una più recente; assenza di bundle irrisolti; dipendenze test/runtime allineate. Nessun intervallo di versione inventato senza prova.
+**Verifica:** `mvnd -T1 clean verify` è verde con 55 test unitari e 2 test Equinox. Le prove p2 install/uninstall sono verdi su Eclipse Platform 4.40 (2026-06) e 4.41 (2026-09), senza bundle irrisolti.
 
 ### R18 — P2: logging troppo accoppiato al workbench e contenuti diagnostici non filtrati
 
