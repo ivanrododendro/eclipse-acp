@@ -3,30 +3,58 @@ package dev.eclipseacp.client.ui;
 import java.net.URI;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
-import java.util.HashMap;
 import java.util.Map;
+import java.util.Optional;
+import java.util.concurrent.ConcurrentHashMap;
 
 import org.eclipse.core.resources.IFile;
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.resources.IResource;
+import org.eclipse.core.resources.IResourceChangeEvent;
+import org.eclipse.core.resources.IResourceChangeListener;
+import org.eclipse.core.resources.IResourceDelta;
+import org.eclipse.core.resources.IWorkspace;
 import org.eclipse.core.runtime.CoreException;
 import org.eclipse.core.runtime.IPath;
 import org.eclipse.core.runtime.Path;
 
 /** Resolves file references from chat text without ever escaping the session project. */
-final class WorkspaceFileLinks {
+final class WorkspaceFileLinks implements AutoCloseable {
     private final IProject project;
-    private final Map<String, String> resolvedPaths = new HashMap<>();
+    private final Map<String, Optional<String>> resolvedPaths = new ConcurrentHashMap<>();
+    private final IWorkspace workspace;
+    private final IResourceChangeListener resourceChanges = this::resourcesChanged;
 
-    WorkspaceFileLinks(IProject project) { this.project = project; }
+    WorkspaceFileLinks(IProject project) {
+        this.project = project;
+        IWorkspace owner = null;
+        try {
+            owner = project.getWorkspace();
+            owner.addResourceChangeListener(resourceChanges, IResourceChangeEvent.POST_CHANGE);
+        } catch (RuntimeException exception) {
+            // Some headless model tests use a minimal project proxy without a workspace.
+        }
+        workspace = owner;
+    }
 
     String hrefFor(String reference) {
         Reference parsed = Reference.parse(reference);
         if (parsed == null) return null;
-        String path = resolvedPaths.computeIfAbsent(parsed.path(), this::findProjectPath);
+        String path = resolvedPaths.computeIfAbsent(parsed.path(), value -> Optional.ofNullable(findProjectPath(value)))
+                .orElse(null);
         if (path == null) return null;
         String href = "eclipse-acp://open?path=" + URLEncoder.encode(path, StandardCharsets.UTF_8);
         return parsed.line() == null ? href : href + "&line=" + parsed.line();
+    }
+
+    private void resourcesChanged(IResourceChangeEvent event) {
+        IResourceDelta delta = event.getDelta();
+        if (delta != null && delta.findMember(project.getFullPath()) != null) resolvedPaths.clear();
+    }
+
+    @Override public void close() {
+        if (workspace != null) workspace.removeResourceChangeListener(resourceChanges);
+        resolvedPaths.clear();
     }
 
     private String findProjectPath(String value) {

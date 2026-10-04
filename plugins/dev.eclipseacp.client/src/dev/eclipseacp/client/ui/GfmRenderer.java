@@ -47,18 +47,24 @@ final class GfmRenderer {
 
     static String document(String markdown, String fontFamily, int fontSizePoints,
             Function<String, String> fileLinkResolver, String backgroundColor) {
+        return document("", markdown, fontFamily, fontSizePoints, fileLinkResolver, backgroundColor);
+    }
+
+    static String document(String stableMarkdown, String liveMarkdown, String fontFamily, int fontSizePoints,
+            Function<String, String> fileLinkResolver, String backgroundColor) {
         String cssFontFamily = fontFamily == null ? "sans-serif" : fontFamily.replace("\\", "\\\\").replace("'", "\\'");
         String systemBackground = backgroundColor != null && backgroundColor.matches("#[0-9a-fA-F]{6}")
                 ? backgroundColor : null;
         String lightBackground = systemBackground == null ? "#dce1e8" : systemBackground;
         String darkBackground = systemBackground == null ? "#414550" : systemBackground;
-        String content = markdown.isBlank()
+        String content = stableMarkdown.isBlank() && liveMarkdown.isBlank()
                 ? "<section class='welcome'><div class='mark'>✦</div><h1>Build something great</h1>"
                     + "<p>Explore your code, solve a problem, or plan your next change.</p>"
                     + "<div class='hint'>To start, right-click a project and open an ACP session.</div></section>"
-                : "<section class='conversation'><section class='conversation-preamble'>"
-                    + (fileLinkResolver == null ? RENDERER : renderer(fileLinkResolver)).render(PARSER.parse(markdown))
-                    + "</section></section>";
+                : "<section class='conversation'><div id='transcript-stable' class='transcript-parts'>"
+                    + conversationPart(stableMarkdown, fileLinkResolver)
+                    + "</div><div id='transcript-live' class='transcript-part'>"
+                    + conversationPart(liveMarkdown, fileLinkResolver) + "</div></section>";
         return "<!doctype html><html><head><meta charset=\"utf-8\"><meta name='viewport' content='width=device-width,initial-scale=1'><style>"
                 + ":root{color-scheme:light dark;--bg:" + lightBackground + ";--fg:#24292f;--muted:#626b78;--surface:#f5f6f8;--line:"
                 + lightBackground + ";--accent:#6254c7;}"
@@ -68,7 +74,7 @@ final class GfmRenderer {
                 + "',sans-serif;font-size:" + fontSizePoints + "pt;margin:0;padding:20px;line-height:1.65;overflow-wrap:anywhere;}"
                 + "main{max-width:900px;margin:auto}h1{font-size:1.5em;letter-spacing:-.03em;line-height:1.3}"
                 + "h2{font-size:1.15em;color:var(--fg);margin:18px 0 10px}"
-                + ".conversation{display:flex;flex-direction:column;gap:18px}.conversation-preamble{align-self:flex-start;width:100%}"
+                + ".conversation{display:flex;flex-direction:column;gap:18px}.transcript-parts,.transcript-part{display:contents}.conversation-preamble{align-self:flex-start;width:100%}"
                 + ".message{min-width:0}.message-user{align-self:flex-end;width:fit-content;max-width:82%;text-align:left}"
                 + ".message-agent{align-self:flex-start;width:100%;text-align:left}"
                 + ".message-agent> :first-child{margin-top:0}.message-agent> :last-child{margin-bottom:0}"
@@ -84,6 +90,12 @@ final class GfmRenderer {
                 + ".welcome p,.hint{color:var(--muted)}.hint{font-size:.9em;margin-top:24px}"
                 + "@media(max-width:360px){body{padding:12px}}"
                 + "</style></head><body><main>" + content + "</main></body></html>";
+    }
+
+    static String conversationPart(String markdown, Function<String, String> fileLinkResolver) {
+        if (markdown == null || markdown.isBlank()) return "";
+        HtmlRenderer activeRenderer = fileLinkResolver == null ? RENDERER : renderer(fileLinkResolver);
+        return "<section class='conversation-preamble'>" + activeRenderer.render(PARSER.parse(markdown)) + "</section>";
     }
 
     private static HtmlRenderer renderer(Function<String, String> fileLinkResolver) {

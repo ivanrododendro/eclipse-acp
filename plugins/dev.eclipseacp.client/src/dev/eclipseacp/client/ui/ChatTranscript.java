@@ -28,6 +28,9 @@ final class ChatTranscript {
     private final int chatFontSizePoints;
     private final String chatBackgroundColor;
     private String transcriptSelection = "";
+    private ChatSessionModel renderedSession;
+    private String renderedMarkdown = "";
+    private int renderedBoundary;
 
     ChatTranscript(Composite parent, IWorkbenchPage page, Supplier<ChatSessionModel> activeSession,
             Consumer<String> newSession, String fontFamily, int fontSizePoints) {
@@ -86,7 +89,6 @@ final class ChatTranscript {
         });
         transcript.addProgressListener(new ProgressAdapter() {
             @Override public void completed(ProgressEvent event) {
-                replaceContent();
                 installTranscriptSelectionTracking();
                 installZoomShortcuts();
                 scrollTranscriptToBottom();
@@ -116,29 +118,80 @@ final class ChatTranscript {
             // Clear the currently displayed DOM before the asynchronous page load completes.
             transcript.execute("if(document.body) document.body.replaceChildren();");
         }
-        transcript.setText(chatDocument());
+        TranscriptSnapshot snapshot = snapshot();
+        renderedSession = snapshot.session();
+        renderedMarkdown = snapshot.markdown();
+        renderedBoundary = snapshot.boundary();
+        transcript.setText(chatDocument(snapshot));
         scrollTranscriptToBottom();
     }
 
     void update() {
         if (isDisposed()) return;
-        if (!replaceContent()) render();
+        TranscriptSnapshot next = snapshot();
+        if (next.session() != renderedSession || !next.markdown().startsWith(renderedMarkdown)) {
+            render();
+            return;
+        }
+        if (next.markdown().equals(renderedMarkdown)) return;
+        boolean updated;
+        if (next.boundary() == renderedBoundary) {
+            updated = replaceLive(next.liveMarkdown());
+        } else if (next.boundary() >= renderedMarkdown.length()) {
+            String stableDelta = next.markdown().substring(renderedMarkdown.length(), next.boundary());
+            updated = advanceLive(stableDelta, next.liveMarkdown());
+        } else {
+            updated = false;
+        }
+        if (!updated) {
+            render();
+            return;
+        }
+        renderedMarkdown = next.markdown();
+        renderedBoundary = next.boundary();
     }
 
-    private boolean replaceContent() {
-        String document = new Gson().toJson(chatDocument());
-        // Keep the document alive during streaming and follow each agent chunk.
-        return transcript.execute("if(document.querySelector('main')){"
-                + "var next=new DOMParser().parseFromString(" + document + ", 'text/html');"
-                + "document.querySelector('main').innerHTML=next.querySelector('main').innerHTML;"
-                + "window.scrollTo(0,Math.max(document.body.scrollHeight,document.documentElement.scrollHeight));}");
+    private boolean replaceLive(String markdown) {
+        String html = new Gson().toJson(conversationPart(markdown));
+        return transcript.execute("(() => {const live=document.getElementById('transcript-live');if(!live)return false;"
+                + "const follow=window.innerHeight+window.scrollY>=document.documentElement.scrollHeight-24;"
+                + "live.innerHTML=" + html + ";"
+                + "if(follow)window.scrollTo(0,Math.max(document.body.scrollHeight,document.documentElement.scrollHeight));"
+                + "return true})()");
     }
 
-    private String chatDocument() {
+    private boolean advanceLive(String stableDelta, String liveMarkdown) {
+        String stableHtml = new Gson().toJson(conversationPart(stableDelta));
+        String liveHtml = new Gson().toJson(conversationPart(liveMarkdown));
+        return transcript.execute("(() => {const stable=document.getElementById('transcript-stable');"
+                + "const live=document.getElementById('transcript-live');if(!stable||!live)return false;"
+                + "const follow=window.innerHeight+window.scrollY>=document.documentElement.scrollHeight-24;"
+                + "live.removeAttribute('id');stable.appendChild(live);"
+                + "const delta=document.createElement('div');delta.className='transcript-part';delta.innerHTML="
+                + stableHtml + ";stable.appendChild(delta);"
+                + "const next=document.createElement('div');next.id='transcript-live';next.className='transcript-part';"
+                + "next.innerHTML=" + liveHtml + ";stable.after(next);"
+                + "if(follow)window.scrollTo(0,Math.max(document.body.scrollHeight,document.documentElement.scrollHeight));"
+                + "return true})()");
+    }
+
+    private String conversationPart(String markdown) {
         ChatSessionModel session = activeSession.get();
-        return GfmRenderer.document(session == null ? "" : session.transcriptMarkdown.toString(),
+        return GfmRenderer.conversationPart(markdown, session == null ? null : session.fileLinks::hrefFor);
+    }
+
+    private String chatDocument(TranscriptSnapshot snapshot) {
+        ChatSessionModel session = snapshot.session();
+        return GfmRenderer.document(snapshot.stableMarkdown(), snapshot.liveMarkdown(),
                 chatFontFamily, scaledFontSize(session), session == null ? null : session.fileLinks::hrefFor,
                 chatBackgroundColor);
+    }
+
+    private TranscriptSnapshot snapshot() {
+        ChatSessionModel session = activeSession.get();
+        String markdown = session == null ? "" : session.transcriptMarkdown.toString();
+        int boundary = session == null ? 0 : Math.max(0, Math.min(session.liveMessageStart, markdown.length()));
+        return new TranscriptSnapshot(session, markdown, boundary);
     }
 
     private int scaledFontSize(ChatSessionModel session) {
@@ -219,5 +272,10 @@ final class ChatTranscript {
     void dispose() {
         transcriptSelectionBridge.dispose();
         transcriptZoomBridge.dispose();
+    }
+
+    private record TranscriptSnapshot(ChatSessionModel session, String markdown, int boundary) {
+        String stableMarkdown() { return markdown.substring(0, boundary); }
+        String liveMarkdown() { return markdown.substring(boundary); }
     }
 }

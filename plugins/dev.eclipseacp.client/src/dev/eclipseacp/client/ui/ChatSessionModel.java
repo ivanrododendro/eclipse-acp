@@ -22,6 +22,8 @@ final class ChatSessionModel {
     final AgentProvider provider;
     final boolean hideAgentCommands;
     final StringBuilder transcriptMarkdown = new StringBuilder();
+    /** Start of the message that may still change while agent text is streaming. */
+    int liveMessageStart;
     final StringBuilder pendingAgentText = new StringBuilder();
     boolean agentRenderScheduled;
     long firstAgentChunkSentAtNanos;
@@ -60,6 +62,7 @@ final class ChatSessionModel {
 
     void appendRestoredUserText(String text) {
         if (!acceptingRestoredTranscript || text.isEmpty()) return;
+        liveMessageStart = transcriptMarkdown.length();
         append("## You\n\n" + text + "\n\n");
         restoredAgentMessageOpen = false;
     }
@@ -67,6 +70,7 @@ final class ChatSessionModel {
     void appendAgentText(String text) {
         if (text.isEmpty()) return;
         if (acceptingRestoredTranscript && !restoredAgentMessageOpen) {
+            liveMessageStart = transcriptMarkdown.length();
             append("## Agent\n\n");
             restoredAgentMessageOpen = true;
         }
@@ -76,7 +80,9 @@ final class ChatSessionModel {
     void beginPrompt(String text) {
         acceptingRestoredTranscript = false;
         restoredAgentMessageOpen = false;
-        append("## You\n\n" + text + "\n\n## Agent\n\n");
+        append("## You\n\n" + text + "\n\n");
+        liveMessageStart = transcriptMarkdown.length();
+        append("## Agent\n\n");
         agentMessageOpen = true;
     }
 

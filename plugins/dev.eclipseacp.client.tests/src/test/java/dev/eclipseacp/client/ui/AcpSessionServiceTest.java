@@ -387,8 +387,10 @@ public class AcpSessionServiceTest {
         session.appendAgentText("answer");
         assertEquals("## You\n\nEarlier question\n\n## Agent\n\nEarlier answer",
                 session.transcriptMarkdown.toString());
+        assertEquals(session.transcriptMarkdown.indexOf("## Agent"), session.liveMessageStart);
 
         session.beginPrompt("New question");
+        assertEquals(session.transcriptMarkdown.lastIndexOf("## Agent"), session.liveMessageStart);
         session.appendRestoredUserText("Late replay");
         session.appendAgentText("New answer");
         assertFalse(session.transcriptMarkdown.toString().contains("Late replay"));

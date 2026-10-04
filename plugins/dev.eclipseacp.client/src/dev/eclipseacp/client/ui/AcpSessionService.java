@@ -394,6 +394,7 @@ final class AcpSessionService {
         AgentClient client = session.client;
         session.client = null;
         session.sessionTransitioning = false;
+        session.fileLinks.close();
         if (client != null) runIo(client::close);
     }
 

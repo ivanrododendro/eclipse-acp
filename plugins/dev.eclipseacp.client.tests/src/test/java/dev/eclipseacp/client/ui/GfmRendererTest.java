@@ -70,4 +70,15 @@ public class GfmRendererTest {
         assertTrue(html.contains("--line:#a1b2c3"));
     }
 
+    @Test
+    public void separatesStableAndLiveConversationMarkupForIncrementalUpdates() {
+        String html = GfmRenderer.document("## You\n\nQuestion\n\n", "## Agent\n\nPartial", "sans-serif", 10,
+                null, null);
+
+        assertTrue(html.contains("id='transcript-stable'"));
+        assertTrue(html.contains("id='transcript-live'"));
+        assertTrue(html.contains("Question"));
+        assertTrue(html.contains("Partial"));
+    }
+
 }
