@@ -5,9 +5,15 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executor;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.ThreadFactory;
 import java.util.function.BiFunction;
 import java.util.function.Consumer;
 import java.util.function.Function;
+import java.util.function.Supplier;
 
 import org.eclipse.core.resources.IProject;
 import org.eclipse.jface.preference.IPreferenceStore;
@@ -40,6 +46,9 @@ final class AcpSessionService {
     private final Presentation presentation;
     private final Function<ChatSessionModel, AgentListener> listeners;
     private final BiFunction<ChatSessionModel, AgentListener, AgentClient> clients;
+    /** Owns calls that can start a process, access files, or enqueue ACP output. */
+    private final Executor io;
+    private final ExecutorService shutdownableIo;
     private final List<ChatSessionModel> sessions = new ArrayList<>();
     private ChatSessionModel activeSession;
 
@@ -53,11 +62,19 @@ final class AcpSessionService {
     AcpSessionService(IPreferenceStore preferences, Consumer<Runnable> ui, Presentation presentation,
             Function<ChatSessionModel, AgentListener> listeners,
             BiFunction<ChatSessionModel, AgentListener, AgentClient> clients) {
+        this(preferences, ui, presentation, listeners, clients, newIoExecutor());
+    }
+
+    AcpSessionService(IPreferenceStore preferences, Consumer<Runnable> ui, Presentation presentation,
+            Function<ChatSessionModel, AgentListener> listeners,
+            BiFunction<ChatSessionModel, AgentListener, AgentClient> clients, Executor io) {
         this.preferences = preferences;
         this.ui = ui;
         this.presentation = presentation;
         this.listeners = listeners;
         this.clients = clients;
+        this.io = io;
+        this.shutdownableIo = io instanceof ExecutorService service ? service : null;
     }
 
     SessionConfiguration newSessionConfiguration() {
@@ -128,8 +145,8 @@ final class AcpSessionService {
         session.client = client;
         session.sessionTransitioning = true;
         changed(session);
-        CompletableFuture<Void> connection = restoredSessionId == null
-                ? client.connect(directory(session)) : client.restoreSession(restoredSessionId, directory(session));
+        CompletableFuture<Void> connection = io(() -> restoredSessionId == null
+                ? client.connect(directory(session)) : client.restoreSession(restoredSessionId, directory(session)));
         connection.whenComplete((ignored, failure) -> ui.accept(() -> {
             if (session.client != client) return;
             session.sessionTransitioning = false;
@@ -172,7 +189,7 @@ final class AcpSessionService {
         session.client = client;
         session.sessionTransitioning = true;
         replace(session);
-        client.startNewSession(directory(session), listeners.apply(session)).whenComplete((ignored, failure) -> ui.accept(() -> {
+        io(() -> client.startNewSession(directory(session), listeners.apply(session))).whenComplete((ignored, failure) -> ui.accept(() -> {
             if (session.client != client) return;
             session.sessionTransitioning = false;
             if (failure != null) {
@@ -205,7 +222,7 @@ final class AcpSessionService {
             connect(restored, selected.id());
         } else {
             // Do not let two agent processes own the same persisted session concurrently.
-            CompletableFuture.runAsync(previousClient::close)
+            runIo(previousClient::close)
                     .whenComplete((ignored, failure) -> ui.accept(() -> {
                         if (contains(restored)) connect(restored, selected.id());
                     }));
@@ -234,7 +251,7 @@ final class AcpSessionService {
         transcriptChanged(session);
         changed(session);
         AgentClient client = session.client;
-        client.prompt(expanded, attachments).whenComplete((ignored, failure) -> ui.accept(() -> {
+        io(() -> client.prompt(expanded, attachments)).whenComplete((ignored, failure) -> ui.accept(() -> {
             if (session.client != client) return;
             if (failure != null) {
                 session.attachments.addAll(attachments);
@@ -250,17 +267,25 @@ final class AcpSessionService {
 
     void cancel() {
         if (activeSession == null || !activeSession.isConnected()) return;
-        try {
-            activeSession.client.cancel();
-        } catch (IOException exception) {
-            error(activeSession, "Could not cancel the current prompt", exception);
-        }
+        ChatSessionModel session = activeSession;
+        AgentClient client = session.client;
+        runIo(() -> {
+            try {
+                client.cancel();
+            } catch (IOException exception) {
+                throw new IoOperationException(exception);
+            }
+        }).whenComplete((ignored, failure) -> ui.accept(() -> {
+            if (session.client == client && failure != null) {
+                error(session, "Could not cancel the current prompt", unwrap(failure));
+            }
+        }));
     }
 
     void changeConfigOption(ChatSessionModel session, ConfigOption option, Object value, String success, String failure) {
         if (session == null || !session.isConnected()) return;
         AgentClient client = session.client;
-        client.setConfigOption(option.id(), ConfigValue.of(value)).whenComplete((ignored, cause) -> ui.accept(() -> {
+        io(() -> client.setConfigOption(option.id(), ConfigValue.of(value))).whenComplete((ignored, cause) -> ui.accept(() -> {
             if (session.client != client) return;
             if (cause != null) {
                 error(session, failure, unwrap(cause));
@@ -275,7 +300,7 @@ final class AcpSessionService {
 
     private void loadAgentSessions(ChatSessionModel session) {
         AgentClient client = session.client;
-        listSessions(client, directory(session)).whenComplete((available, failure) -> ui.accept(() -> {
+        io(() -> listSessions(client, directory(session))).whenComplete((available, failure) -> ui.accept(() -> {
             if (session.client != client) return;
             if (failure != null) {
                 error(session, "Could not list agent sessions", unwrap(failure));
@@ -302,7 +327,7 @@ final class AcpSessionService {
             collected.addAll(page.sessions());
             return page.nextCursor() == null || page.nextCursor().isBlank()
                     ? CompletableFuture.completedFuture(List.copyOf(collected))
-                    : listSessions(client, workingDirectory, page.nextCursor(), collected);
+                    : io(() -> listSessions(client, workingDirectory, page.nextCursor(), collected));
         });
     }
 
@@ -351,13 +376,59 @@ final class AcpSessionService {
         AgentClient client = session.client;
         session.client = null;
         session.sessionTransitioning = false;
-        if (client != null) CompletableFuture.runAsync(client::close);
+        if (client != null) runIo(client::close);
     }
 
     void disconnect() {
         sessions.forEach(this::retire);
         sessions.clear();
         activeSession = null;
+        if (shutdownableIo != null) shutdownableIo.shutdown();
+    }
+
+    private <T> CompletableFuture<T> io(Supplier<CompletableFuture<T>> operation) {
+        CompletableFuture<T> result = new CompletableFuture<>();
+        try {
+            io.execute(() -> {
+                try {
+                    CompletableFuture<T> operationResult = operation.get();
+                    if (operationResult == null) {
+                        result.completeExceptionally(new IllegalStateException("ACP I/O operation returned no future"));
+                    } else {
+                        operationResult.whenComplete((value, failure) -> {
+                            if (failure == null) result.complete(value);
+                            else result.completeExceptionally(failure);
+                        });
+                    }
+                } catch (RuntimeException exception) {
+                    result.completeExceptionally(exception);
+                }
+            });
+        } catch (RejectedExecutionException exception) {
+            result.completeExceptionally(new IllegalStateException("ACP I/O executor is shut down", exception));
+        }
+        return result;
+    }
+
+    private CompletableFuture<Void> runIo(Runnable operation) {
+        return io(() -> {
+            operation.run();
+            return CompletableFuture.completedFuture(null);
+        });
+    }
+
+    private static ExecutorService newIoExecutor() {
+        ThreadFactory threads = runnable -> {
+            Thread thread = new Thread(runnable, "eclipse-acp-io");
+            thread.setDaemon(true);
+            return thread;
+        };
+        return Executors.newSingleThreadExecutor(threads);
+    }
+
+    private static final class IoOperationException extends RuntimeException {
+        private static final long serialVersionUID = 1L;
+        IoOperationException(IOException cause) { super(cause); }
     }
 
     private static Path directory(ChatSessionModel session) {

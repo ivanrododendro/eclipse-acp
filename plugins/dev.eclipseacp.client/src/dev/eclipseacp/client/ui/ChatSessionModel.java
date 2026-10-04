@@ -35,7 +35,6 @@ final class ChatSessionModel {
     final Map<String, ToolCall> toolCalls = new LinkedHashMap<>();
     final Map<String, List<dev.eclipseacp.client.agent.FileDiff>> renderedToolDiffs = new LinkedHashMap<>();
     final WorkspaceFileLinks fileLinks;
-    final WorkspaceFileService changes;
     List<SessionInfo> savedSessions = List.of();
     final List<PromptAttachment> attachments = new ArrayList<>();
     final Map<String, String> commands = new LinkedHashMap<>();
@@ -53,7 +52,6 @@ final class ChatSessionModel {
         this.provider = provider;
         this.hideAgentCommands = hideAgentCommands;
         this.fileLinks = new WorkspaceFileLinks(project);
-        this.changes = new WorkspaceFileService(project);
     }
 
     void append(String text) {

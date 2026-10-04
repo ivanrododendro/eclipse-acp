@@ -23,11 +23,9 @@ plusieurs frontières de responsabilité ne sont pas respectées dans le code.
 
    La vue conserve intentionnellement les contrôles SWT, le rendu et les dialogues.
    Les callbacks sont désormais portés par `AcpChatSessionListener`, qui est le seul
-   adaptateur UI à implémenter `AgentListener`. La médiation de lecture, staging,
-   application, rejet et annulation des changements est extraite dans
-   `ChangeReviewService`, un service créé par session autour de
-   `WorkspaceDiffApplier`. L'orchestration globale des sessions reste dans la vue
-   et constitue le prochain périmètre d'extraction vers un contrôleur dédié.
+   adaptateur UI à implémenter `AgentListener`. L'orchestration globale des sessions
+   reste dans la vue et constitue le prochain périmètre d'extraction vers un
+   contrôleur dédié.
 
 2. **L'abstraction `AgentClient` dépend de l'adaptateur ACP. — Traité**
 
@@ -90,7 +88,7 @@ plusieurs frontières de responsabilité ne sont pas respectées dans le code.
 ## Points conformes
 
 - `JsonRpcConnection` est correctement isolé comme transport JSON-RPC.
-- `WorkspaceDiffApplier` concentre bien la médiation, l'application et l'annulation
-  des modifications du workspace.
+- Eclipse ne publie pas de capability ACP d'accès aux fichiers et n'applique pas les
+  diffs signalés par l'agent.
 - La séparation entre l'interface `AgentClient` et l'implémentation `AcpClient` est
   amorcée, mais elle est affaiblie par les dépendances et types ACP décrits ci-dessus.

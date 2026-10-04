@@ -16,12 +16,6 @@ public interface AgentListener {
         return requestPermission(request.title(), request.options());
     }
     default void onToolCall(ToolCall toolCall) { }
-    default CompletableFuture<String> readTextFile(FileReadRequest request) {
-        return CompletableFuture.failedFuture(new UnsupportedOperationException("Client file reading is not supported"));
-    }
-    default CompletableFuture<Void> writeTextFile(FileWriteRequest request) {
-        return CompletableFuture.failedFuture(new UnsupportedOperationException("Client file writing is not supported"));
-    }
     default void onAvailableCommands(List<AgentCommand> commands) { }
     default void onConfigOptions(List<ConfigOption> options) { }
     default void onUsage(Usage usage) { }

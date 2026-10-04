@@ -10,8 +10,6 @@ import dev.eclipseacp.client.agent.AgentListener;
 import dev.eclipseacp.client.agent.AuthMethod;
 import dev.eclipseacp.client.agent.ConfigOption;
 import dev.eclipseacp.client.agent.ElicitationRequest;
-import dev.eclipseacp.client.agent.FileReadRequest;
-import dev.eclipseacp.client.agent.FileWriteRequest;
 import dev.eclipseacp.client.agent.PermissionOption;
 import dev.eclipseacp.client.agent.PermissionRequest;
 import dev.eclipseacp.client.agent.ToolCall;
@@ -137,12 +135,6 @@ final class AcpChatSessionListener implements AgentListener {
                 }
             }
             sessions.changed(session);
-            if (toolCall.hasDiffs()) {
-                session.changes.applyAsync(toolCall.diffs()).whenComplete((count, error) -> dispatch(() -> {
-                    if (error != null) sessions.error(session, "Could not apply agent changes", error.getCause());
-                    else sessions.setStatus(session, "Changes applied");
-                }));
-            }
         });
     }
 
@@ -198,22 +190,6 @@ final class AcpChatSessionListener implements AgentListener {
 
     @Override public CompletableFuture<String> requestElicitation(ElicitationRequest request) {
         return dialogs.requestElicitation(session.label, request);
-    }
-
-    @Override public CompletableFuture<String> readTextFile(FileReadRequest request) {
-        return session.changes.readAsync(request);
-    }
-
-    @Override public CompletableFuture<Void> writeTextFile(FileWriteRequest request) {
-        return session.changes.writeAsync(request).thenAccept(diff -> dispatch(() -> {
-            String action = "File write applied";
-            if (session.hideAgentCommands) {
-                sessions.setStatus(session, action + ": " + diff.path());
-            } else {
-                append("> **" + action + ":** `" + diff.path() + "`\n\n");
-            }
-            sessions.changed(session);
-        }));
     }
 
     private static long elapsedMillis(long startedAt, long completedAt) {

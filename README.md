@@ -39,12 +39,11 @@ The [release workflow](.github/workflows/release.yml) builds and checks the p2 r
 ## Architecture
 
 ```text
-Eclipse commands / AcpChatView (SWT composition and change-review controls)
+Eclipse commands / AcpChatView (SWT composition)
                   │
                   ├─ ChatComposer / ChatTranscript → SWT editor / browser
                   ├─ AcpChatDialogs → modal interactions
                   ├─ AcpSessionService → AgentProviderRegistry → Eclipse preferences
-                  ├─ ChangeReviewService → WorkspaceDiffApplier → Eclipse project
                   └─ AcpChatSessionListener → ChatSessionModel
                          │
                     AgentClient / AgentListener (protocol-neutral interfaces and models)
@@ -54,7 +53,7 @@ Eclipse commands / AcpChatView (SWT composition and change-review controls)
                     JsonRpcConnection → stdio → ACP agent process
 ```
 
-`plugins/dev.eclipseacp.client` contains the UI, session services, agent model, and ACP adapter. `AgentClient` and `AgentListener` keep protocol messages out of the UI; `AcpClient` negotiates capabilities, manages sessions, and translates ACP events. Process launch and JSON-RPC 2.0 transport are separate and injectable. `ChangeReviewService` and `WorkspaceDiffApplier` mediate project file operations. `features/` defines the installable feature, `releng/` the target platform and p2 repository, and `plugins/dev.eclipseacp.client.tests` the tests. See the [detailed component diagram](docs/architecture-plugin.puml).
+`plugins/dev.eclipseacp.client` contains the UI, session services, agent model, and ACP adapter. `AgentClient` and `AgentListener` keep protocol messages out of the UI; `AcpClient` negotiates capabilities, manages sessions, and translates ACP events. Process launch and JSON-RPC 2.0 transport are separate and injectable. Eclipse does not expose client-side file access through ACP. `features/` defines the installable feature, `releng/` the target platform and p2 repository, and `plugins/dev.eclipseacp.client.tests` the tests. See the [detailed component diagram](docs/architecture-plugin.puml).
 
 `AcpChatView` composes the UI and presents the selected project. `ChatComposer` owns prompt editing and option selectors; `ChatTranscript` owns HTML rendering, file navigation, and text selection. `AcpSessionService` owns open chats, connection reuse, restoration, prompts, and configuration changes. `AcpChatSessionListener` batches agent events and updates `ChatSessionModel`; dialogs and asynchronous workspace operations stay in their dedicated services.
 

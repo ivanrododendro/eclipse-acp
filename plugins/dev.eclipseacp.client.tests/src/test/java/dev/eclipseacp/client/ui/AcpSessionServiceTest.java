@@ -13,6 +13,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Queue;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executor;
 import java.util.concurrent.TimeUnit;
 
 import org.eclipse.core.resources.IProject;
@@ -223,6 +224,37 @@ public class AcpSessionServiceTest {
     }
 
     @Test
+    public void invokesBlockingAgentOperationsOnlyFromTheIoExecutor() {
+        Queue<Runnable> io = new ArrayDeque<>();
+        Harness h = new Harness(io::add);
+
+        h.service.openSessionFor(project("first"), null);
+        FakeClient client = h.client();
+        assertEquals(0, client.connectCount);
+        assertEquals(1, io.size());
+
+        io.remove().run();
+        assertEquals(1, client.connectCount);
+        client.connection.complete(null);
+        h.drainUi();
+
+        ChatSessionModel session = h.service.activeSession();
+        h.service.sendPrompt(session, "Hello");
+        h.service.changeConfigOption(session, new ConfigOption("model", "Model", "", "", ConfigValue.of("a"), List.of()),
+                "a", "Updated", "Failed");
+        h.service.cancel();
+        assertEquals(0, client.promptCount);
+        assertNull(client.configValue);
+        assertEquals(0, client.cancelCount);
+        assertEquals(3, io.size());
+
+        while (!io.isEmpty()) io.remove().run();
+        assertEquals(1, client.promptCount);
+        assertEquals("a", client.configValue.value());
+        assertEquals(1, client.cancelCount);
+    }
+
+    @Test
     public void preservesTypedConfigValuesAndIgnoresRetiredConnectionUpdates() {
         Harness h = new Harness();
         ChatSessionModel session = h.open(project("first"));
@@ -362,7 +394,9 @@ public class AcpSessionServiceTest {
         String initialPrompt;
         int renders;
 
-        Harness() {
+        Harness() { this(Runnable::run); }
+
+        Harness(Executor io) {
             preferences.setValue(AcpPreferences.PROVIDERS_JSON,
                     "[{\"id\":\"codex\",\"name\":\"Codex\",\"command\":\"codex-acp\",\"arguments\":\"\"},"
                     + "{\"id\":\"other\",\"name\":\"Other\",\"command\":\"other-acp\",\"arguments\":\"\"}]");
@@ -371,7 +405,7 @@ public class AcpSessionServiceTest {
                 FakeClient client = new FakeClient(listener);
                 clients.add(client);
                 return client;
-            });
+            }, io);
         }
 
         private AgentListener listener(ChatSessionModel session) {
@@ -420,9 +454,11 @@ public class AcpSessionServiceTest {
         String restoredId;
         String activeSessionId;
         int promptCount;
+        int connectCount;
+        int cancelCount;
 
         FakeClient(AgentListener listener) { this.listener = listener; }
-        @Override public CompletableFuture<Void> connect(Path directory) { return connection; }
+        @Override public CompletableFuture<Void> connect(Path directory) { connectCount++; return connection; }
         @Override public CompletableFuture<Void> restoreSession(String id, Path directory) {
             restoredId = id;
             return connection;
@@ -447,7 +483,7 @@ public class AcpSessionServiceTest {
             return CompletableFuture.completedFuture(pages.getOrDefault(cursor == null ? "" : cursor,
                     new SessionPage(List.of(), null)));
         }
-        @Override public void cancel() { }
+        @Override public void cancel() { cancelCount++; }
         @Override public String sessionId() { return activeSessionId; }
         @Override public AgentCapabilities capabilities() { return capabilities; }
         @Override public void close() { closed.complete(null); }

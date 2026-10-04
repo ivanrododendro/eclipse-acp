@@ -23,7 +23,6 @@ rectangle "Eclipse IDE" as eclipse #EDF2F7 {
   component "Dialogs\nAcpChatDialogs" as dialogs #FFFFFF
   component "Rendu et integration workspace\nChatTranscript · GfmRenderer\nWorkspaceFileLinks · WorkspaceFileOpener" as presentation #FFFFFF
   component "Etat d'une conversation\nChatSessionModel" as chatModel #FFFFFF
-  component "Gestion des changements\nChangeReviewService · WorkspaceDiffApplier" as changes #FFFFFF
   database "Workspace Eclipse\nIProject · IFile" as workspace #FFFFFF
 
   package "Configuration" #FFF8E6 {
@@ -65,9 +64,6 @@ composer --> sessionService : prompts et options
 composer --> dialogs : commandes et fichiers joints
 presentation --> workspace : liens et ouverture
 
-chat --> changes : revue des diffs
-changes --> workspace : lire / appliquer / annuler
-
 prefPage --> registries : configure
 registries --> preferenceStore : persiste
 chat --> sessionService : actions de session
@@ -78,7 +74,7 @@ factory --> agentClient
 factory --> acpClient : implementation
 acpClient ..|> agentClient
 
-acpClient --> acpEvents : statut, texte, permissions\nlectures/ecritures de fichiers
+acpClient --> acpEvents : statut, texte et permissions
 acpClient --> agentListener : evenements convertis\nvers les modeles agent
 agentListener <|.. sessionListener
 sessionService --> chatModel : cycle de vie des sessions
@@ -86,7 +82,6 @@ sessionService --> chat : notifications de presentation
 sessionListener --> chatModel : texte, outils et options
 sessionListener --> sessionService : notifications de presentation
 sessionListener --> dialogs : interactions de l'agent
-sessionListener --> changes : operations de fichiers
 acpClient --> processLauncher : demarre l'agent
 processLauncher --> process : stdio / diagnostics
 acpClient --> transportFactory : cree le transport
@@ -101,8 +96,4 @@ note right of agentClient
   des versions et details du protocole ACP.
 end note
 
-note right of changes
-  Les modifications de fichiers sont mediees
-  par Eclipse et soumises a revue utilisateur.
-end note
 @enduml

@@ -3,8 +3,6 @@ package dev.eclipseacp.client.acp;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNull;
-import static org.junit.Assert.assertSame;
-import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
 
 import java.util.List;
@@ -16,13 +14,11 @@ import java.io.StringWriter;
 import java.io.Writer;
 import java.nio.file.Path;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionException;
 
 import org.junit.Test;
 
 import com.google.gson.JsonObject;
 import dev.eclipseacp.client.agent.AgentListener;
-import dev.eclipseacp.client.agent.FileWriteRequest;
 import dev.eclipseacp.client.agent.PermissionOption;
 import dev.eclipseacp.client.agent.ToolCall;
 
@@ -86,50 +82,16 @@ public class AcpClientProtocolTest {
     }
 
     @Test
-    public void acknowledgesFileWriteOnlyAfterTheListenerCompletes() {
-        CapturingListener listener = new CapturingListener();
-        AcpClient client = connectedClient(listener);
-        JsonObject params = fileWriteParams(client.sessionId());
-
-        var response = client.onRequest("fs/write_text_file", params);
-
-        assertEquals(new FileWriteRequest(client.sessionId(), "/workspace/project/file.txt", "new content"),
-                listener.fileWrite);
-        assertFalse(response.isDone());
-        listener.fileWriteResult.complete(null);
-        assertEquals(new JsonObject(), response.join());
-        client.close();
-    }
-
-    @Test
-    public void propagatesFileWriteFailureToTheAgent() {
-        CapturingListener listener = new CapturingListener();
-        AcpClient client = connectedClient(listener);
-        var response = client.onRequest("fs/write_text_file", fileWriteParams(client.sessionId()));
-        IOException failure = new IOException("File could not be written");
-
-        listener.fileWriteResult.completeExceptionally(failure);
-
-        CompletionException actual = assertThrows(CompletionException.class, response::join);
-        assertSame(failure, actual.getCause());
-        client.close();
-    }
-
-    private static AcpClient connectedClient(AgentListener listener) {
+    public void doesNotAdvertiseClientMediatedFileAccess() {
         FakeTransport transport = new FakeTransport();
-        AcpClient client = new AcpClient("agent", "", listener, List.of(),
+        AcpClient client = new AcpClient("agent", "", new CapturingListener(), List.of(),
                 (command, arguments, workingDirectory, diagnosticConsumer, diagnosticErrorConsumer) -> new FakeProcess(),
                 (reader, writer, handler, errorHandler) -> transport);
-        client.connect(Path.of("/workspace/project")).join();
-        return client;
-    }
 
-    private static JsonObject fileWriteParams(String sessionId) {
-        JsonObject params = new JsonObject();
-        params.addProperty("sessionId", sessionId);
-        params.addProperty("path", "/workspace/project/file.txt");
-        params.addProperty("content", "new content");
-        return params;
+        client.connect(Path.of("/workspace/project")).join();
+
+        assertFalse(transport.initializeParams.getAsJsonObject("clientCapabilities").has("fs"));
+        client.close();
     }
 
     @Test
@@ -318,13 +280,6 @@ public class AcpClientProtocolTest {
 
     private static final class CapturingListener implements AgentListener {
         private String text;
-        private FileWriteRequest fileWrite;
-        private final CompletableFuture<Void> fileWriteResult = new CompletableFuture<>();
-
-        @Override public CompletableFuture<Void> writeTextFile(FileWriteRequest request) {
-            fileWrite = request;
-            return fileWriteResult;
-        }
 
         @Override public void onAgentText(String value) { text = value; }
         @Override public void onStatus(String status) { }
@@ -344,6 +299,7 @@ public class AcpClientProtocolTest {
         private final List<String> methods = new ArrayList<>();
         private int sessionNumber;
         private JsonRpcHandler handler;
+        private JsonObject initializeParams;
         private boolean sendUpdateBeforeSecondSessionResponse;
         private boolean sendOldUpdateBeforeSecondSessionResponse;
 
@@ -353,6 +309,7 @@ public class AcpClientProtocolTest {
             methods.add(method);
             JsonObject result = new JsonObject();
             if ("initialize".equals(method)) {
+                initializeParams = params;
                 result.addProperty("protocolVersion", 1);
                 JsonObject capabilities = new JsonObject();
                 JsonObject session = new JsonObject();

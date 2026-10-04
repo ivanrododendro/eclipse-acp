@@ -26,7 +26,9 @@ public final class AcpLog {
      * severity, so DEBUG is explicitly included in the message while using INFO severity.
      */
     public static void debug(String message) {
-        if (AcpPreferences.store().getBoolean(AcpPreferences.DEBUG_ACP_MESSAGES)) {
+        // Outside OSGi (notably in protocol tests), preference scopes have no configuration
+        // location. There is no Eclipse log to receive this diagnostic in that case either.
+        if (BUNDLE != null && AcpPreferences.store().getBoolean(AcpPreferences.DEBUG_ACP_MESSAGES)) {
             log(IStatus.INFO, "DEBUG " + message, null);
         }
     }

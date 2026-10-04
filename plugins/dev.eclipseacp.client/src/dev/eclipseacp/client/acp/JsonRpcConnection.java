@@ -6,10 +6,16 @@ import java.io.Closeable;
 import java.io.IOException;
 import java.io.Reader;
 import java.io.Writer;
+import java.util.concurrent.ArrayBlockingQueue;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
 
@@ -28,6 +34,8 @@ final class JsonRpcConnection implements JsonRpcTransport {
     private final AtomicLong nextId = new AtomicLong();
     private final Map<String, CompletableFuture<JsonObject>> pending = new ConcurrentHashMap<>();
     private final Object writeLock = new Object();
+    /** A bounded, single-writer queue keeps pipe backpressure away from SWT and the reader. */
+    private final ExecutorService writerExecutor = newWriterExecutor();
     private volatile boolean closed;
 
     JsonRpcConnection(Reader reader, Writer writer, JsonRpcHandler handler, Consumer<Throwable> errorHandler) {
@@ -56,11 +64,11 @@ final class JsonRpcConnection implements JsonRpcTransport {
         CompletableFuture<JsonObject> future = new CompletableFuture<>();
         pending.put(Long.toString(id), future);
         try {
-            send(message);
-            AcpLog.info("JSON-RPC request flushed: id=" + id + ", method='" + method
-                    + "', writeMs=" + elapsedMillis(startedAt, System.nanoTime()));
+            enqueue(message);
+            AcpLog.info("JSON-RPC request queued: id=" + id + ", method='" + method
+                    + "', queueMs=" + elapsedMillis(startedAt, System.nanoTime()));
         } catch (IOException exception) {
-            AcpLog.error("JSON-RPC request could not be written: id=" + id + ", method='" + method + "'", exception);
+            AcpLog.error("JSON-RPC request could not be queued: id=" + id + ", method='" + method + "'", exception);
             pending.remove(Long.toString(id));
             future.completeExceptionally(exception);
         }
@@ -70,7 +78,7 @@ final class JsonRpcConnection implements JsonRpcTransport {
     @Override
     public void notification(String method, JsonObject params) throws IOException {
         AcpLog.info("JSON-RPC notification sent: method='" + method + "'");
-        send(envelope(method, params));
+        enqueue(envelope(method, params));
     }
 
     private JsonObject envelope(String method, JsonObject params) {
@@ -150,8 +158,8 @@ final class JsonRpcConnection implements JsonRpcTransport {
             message.add("id", id);
             message.add("result", result == null ? new JsonObject() : result);
             try {
-                send(message);
-                AcpLog.info("JSON-RPC response sent: id=" + id);
+                enqueue(message);
+                AcpLog.info("JSON-RPC response queued: id=" + id);
             } catch (IOException exception) {
                 AcpLog.error("Could not send JSON-RPC response: id=" + id, exception);
                 errorHandler.accept(exception);
@@ -169,7 +177,7 @@ final class JsonRpcConnection implements JsonRpcTransport {
         message.add("id", id);
         message.add("error", error);
         try {
-            send(message);
+            enqueue(message);
         } catch (IOException exception) {
             AcpLog.error("Could not send JSON-RPC error response: id=" + id, exception);
             errorHandler.accept(exception);
@@ -187,6 +195,40 @@ final class JsonRpcConnection implements JsonRpcTransport {
             writer.newLine();
             writer.flush();
         }
+    }
+
+    private void enqueue(JsonObject message) throws IOException {
+        if (closed) throw new IOException("ACP connection is closed");
+        try {
+            writerExecutor.execute(() -> {
+                try {
+                    send(message);
+                } catch (IOException exception) {
+                    AcpLog.error("Could not write ACP JSON-RPC message", exception);
+                    failTransport(exception);
+                }
+            });
+        } catch (RejectedExecutionException exception) {
+            throw new IOException("ACP JSON-RPC writer queue is full or closed", exception);
+        }
+    }
+
+    private void failTransport(IOException exception) {
+        if (closed) return;
+        closed = true;
+        failPending(exception);
+        writerExecutor.shutdownNow();
+        errorHandler.accept(exception);
+    }
+
+    private static ExecutorService newWriterExecutor() {
+        ThreadFactory threads = runnable -> {
+            Thread thread = new Thread(runnable, "eclipse-acp-jsonrpc-writer");
+            thread.setDaemon(true);
+            return thread;
+        };
+        return new ThreadPoolExecutor(1, 1, 0L, TimeUnit.MILLISECONDS,
+                new ArrayBlockingQueue<>(128), threads, new ThreadPoolExecutor.AbortPolicy());
     }
 
     private static JsonObject objectOrEmpty(JsonElement element) {
@@ -220,6 +262,7 @@ final class JsonRpcConnection implements JsonRpcTransport {
         AcpLog.info("Closing ACP JSON-RPC connection");
         closed = true;
         failPending(new IOException("ACP connection closed"));
+        writerExecutor.shutdownNow();
         reader.close();
         writer.close();
     }

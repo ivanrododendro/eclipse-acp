@@ -23,8 +23,6 @@ import dev.eclipseacp.client.agent.AgentClient;
 import dev.eclipseacp.client.agent.AgentListener;
 import dev.eclipseacp.client.agent.AuthMethod;
 import dev.eclipseacp.client.agent.ConfigValue;
-import dev.eclipseacp.client.agent.FileReadRequest;
-import dev.eclipseacp.client.agent.FileWriteRequest;
 import dev.eclipseacp.client.agent.PermissionOption;
 import dev.eclipseacp.client.agent.PermissionRequest;
 import dev.eclipseacp.client.agent.SessionInfo;
@@ -346,12 +344,7 @@ public final class AcpClient implements AgentClient, JsonRpcHandler {
 
         JsonObject params = new JsonObject();
         params.addProperty("protocolVersion", PROTOCOL_VERSION);
-        // File requests are mediated by Eclipse.
-        JsonObject fileSystem = new JsonObject();
-        fileSystem.addProperty("readTextFile", true);
-        fileSystem.addProperty("writeTextFile", true);
         JsonObject clientCapabilities = new JsonObject();
-        clientCapabilities.add("fs", fileSystem);
         JsonObject configOptions = new JsonObject();
         configOptions.add("boolean", new JsonObject());
         JsonObject session = new JsonObject();
@@ -642,8 +635,6 @@ public final class AcpClient implements AgentClient, JsonRpcHandler {
             }
             return CompletableFuture.failedFuture(new IllegalStateException("The ACP session is no longer active"));
         }
-        if ("fs/read_text_file".equals(method)) return readTextFile(params);
-        if ("fs/write_text_file".equals(method)) return writeTextFile(params);
         if ("elicitation/create".equals(method)) {
             ElicitationRequest request = new ElicitationRequest(nonBlank(string(params, "title"), "Agent input required"),
                     nonBlank(string(params, "message"), string(params, "title")));
@@ -709,22 +700,6 @@ public final class AcpClient implements AgentClient, JsonRpcHandler {
         JsonObject result = new JsonObject();
         result.addProperty("action", "cancel");
         return result;
-    }
-
-    private CompletableFuture<JsonElement> readTextFile(JsonObject params) {
-        Integer line = integer(params, "line");
-        Integer limit = integer(params, "limit");
-        return listener.readTextFile(new FileReadRequest(string(params, "sessionId"), string(params, "path"), line, limit))
-                .thenApply(content -> {
-                    JsonObject result = new JsonObject();
-                    result.addProperty("content", content);
-                    return result;
-                });
-    }
-
-    private CompletableFuture<JsonElement> writeTextFile(JsonObject params) {
-        return listener.writeTextFile(new FileWriteRequest(string(params, "sessionId"), string(params, "path"), string(params, "content")))
-                .thenApply(ignored -> new JsonObject());
     }
 
     private static String stopReason(JsonObject result) {
