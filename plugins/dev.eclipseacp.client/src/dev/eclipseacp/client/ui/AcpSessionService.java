@@ -25,7 +25,7 @@ import dev.eclipseacp.client.preferences.AgentProviderRegistry;
 
 /** Owns project chats and agent lifecycles. State and presentation callbacks run on the UI executor. */
 final class AcpSessionService {
-    record SessionConfiguration(AgentProvider provider, boolean reviewFileChanges, boolean hideAgentCommands) { }
+    record SessionConfiguration(AgentProvider provider, boolean hideAgentCommands) { }
 
     interface Presentation {
         void selected(ChatSessionModel session);
@@ -47,7 +47,7 @@ final class AcpSessionService {
             Function<ChatSessionModel, AgentListener> listeners) {
         this(AcpPreferences.store(), ui, presentation, listeners,
                 (session, listener) -> AcpClientFactory.create(session.provider, listener,
-                        session.reviewFileChanges, List.of()));
+                        List.of()));
     }
 
     AcpSessionService(IPreferenceStore preferences, Consumer<Runnable> ui, Presentation presentation,
@@ -63,7 +63,7 @@ final class AcpSessionService {
     SessionConfiguration newSessionConfiguration() {
         // Preferences may change while the view is open; read the provider for each new session.
         AgentProvider provider = new AgentProviderRegistry(preferences).active();
-        return new SessionConfiguration(provider, preferences.getBoolean(AcpPreferences.REVIEW_FILE_CHANGES),
+        return new SessionConfiguration(provider,
                 preferences.getBoolean(AcpPreferences.HIDE_AGENT_COMMANDS_IN_CHAT));
     }
 
@@ -91,15 +91,14 @@ final class AcpSessionService {
         }
         ChatSessionModel session = newSession(project, newSessionConfiguration());
         session.initialPrompt = initialPrompt;
-        session.statusText = "Connecting to " + session.provider.name() + " in " + project.getLocation() + "…"
-                + (session.reviewFileChanges ? " Changes will be reviewed before applying." : " Changes apply immediately.");
+        session.statusText = "Connecting to " + session.provider.name() + " in " + project.getLocation() + "…";
         replace(session);
         connect(session, null);
     }
 
     private ChatSessionModel newSession(IProject project, SessionConfiguration configuration) {
         return new ChatSessionModel(project, project.getName(), configuration.provider(),
-                configuration.reviewFileChanges(), configuration.hideAgentCommands());
+                configuration.hideAgentCommands());
     }
 
     private ChatSessionModel sessionFor(IProject project) {
@@ -161,8 +160,7 @@ final class AcpSessionService {
         session.pendingInputText = pendingInputText;
         session.initialPrompt = initialPrompt;
         session.statusText = "Connecting to " + session.provider.name() + " in " + current.project.getLocation() + "…";
-        boolean reusable = current.provider.equals(session.provider)
-                && current.reviewFileChanges == session.reviewFileChanges;
+        boolean reusable = current.provider.equals(session.provider);
         if (reusable) session.savedSessions = current.savedSessions;
         if (!reusable) {
             replace(session);
@@ -191,7 +189,7 @@ final class AcpSessionService {
         ChatSessionModel current = activeSession;
         if (current == null || current.isBusy() || selected == null) return;
         ChatSessionModel restored = new ChatSessionModel(current.project, current.label,
-                current.provider, current.reviewFileChanges, current.hideAgentCommands);
+                current.provider, current.hideAgentCommands);
         restored.savedSessions = current.savedSessions;
         restored.sessionId = selected.id();
         restored.sessionName = selected.title().isBlank() ? selected.id() : selected.title();

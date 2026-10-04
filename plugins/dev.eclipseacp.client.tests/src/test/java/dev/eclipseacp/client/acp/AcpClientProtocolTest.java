@@ -3,6 +3,8 @@ package dev.eclipseacp.client.acp;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertSame;
+import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
 
 import java.util.List;
@@ -14,11 +16,13 @@ import java.io.StringWriter;
 import java.io.Writer;
 import java.nio.file.Path;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 
 import org.junit.Test;
 
 import com.google.gson.JsonObject;
 import dev.eclipseacp.client.agent.AgentListener;
+import dev.eclipseacp.client.agent.FileWriteRequest;
 import dev.eclipseacp.client.agent.PermissionOption;
 import dev.eclipseacp.client.agent.ToolCall;
 
@@ -28,7 +32,7 @@ public class AcpClientProtocolTest {
         FakeTransport transport = new FakeTransport();
         AgentListener first = new CapturingListener();
         AgentListener second = new CapturingListener();
-        AcpClient client = new AcpClient("agent", "", first, false, List.of(),
+        AcpClient client = new AcpClient("agent", "", first, List.of(),
                 (command, arguments, workingDirectory, diagnosticConsumer, diagnosticErrorConsumer) ->
                         new FakeProcess(),
                 (reader, writer, handler, errorHandler) -> transport);
@@ -45,7 +49,7 @@ public class AcpClientProtocolTest {
     public void deliversUpdateReceivedBeforeNewSessionResponse() {
         FakeTransport transport = new FakeTransport();
         CapturingListener listener = new CapturingListener();
-        AcpClient client = new AcpClient("agent", "", listener, false, List.of(),
+        AcpClient client = new AcpClient("agent", "", listener, List.of(),
                 (command, arguments, workingDirectory, diagnosticConsumer, diagnosticErrorConsumer) ->
                         new FakeProcess(),
                 (reader, writer, handler, errorHandler) -> {
@@ -65,7 +69,7 @@ public class AcpClientProtocolTest {
     public void discardsLateUpdateFromClosedSessionWhileNewSessionIsPending() {
         FakeTransport transport = new FakeTransport();
         CapturingListener listener = new CapturingListener();
-        AcpClient client = new AcpClient("agent", "", listener, false, List.of(),
+        AcpClient client = new AcpClient("agent", "", listener, List.of(),
                 (command, arguments, workingDirectory, diagnosticConsumer, diagnosticErrorConsumer) ->
                         new FakeProcess(),
                 (reader, writer, handler, errorHandler) -> {
@@ -79,6 +83,53 @@ public class AcpClientProtocolTest {
 
         assertEquals("session-2", client.sessionId());
         assertNull(listener.text);
+    }
+
+    @Test
+    public void acknowledgesFileWriteOnlyAfterTheListenerCompletes() {
+        CapturingListener listener = new CapturingListener();
+        AcpClient client = connectedClient(listener);
+        JsonObject params = fileWriteParams(client.sessionId());
+
+        var response = client.onRequest("fs/write_text_file", params);
+
+        assertEquals(new FileWriteRequest(client.sessionId(), "/workspace/project/file.txt", "new content"),
+                listener.fileWrite);
+        assertFalse(response.isDone());
+        listener.fileWriteResult.complete(null);
+        assertEquals(new JsonObject(), response.join());
+        client.close();
+    }
+
+    @Test
+    public void propagatesFileWriteFailureToTheAgent() {
+        CapturingListener listener = new CapturingListener();
+        AcpClient client = connectedClient(listener);
+        var response = client.onRequest("fs/write_text_file", fileWriteParams(client.sessionId()));
+        IOException failure = new IOException("File could not be written");
+
+        listener.fileWriteResult.completeExceptionally(failure);
+
+        CompletionException actual = assertThrows(CompletionException.class, response::join);
+        assertSame(failure, actual.getCause());
+        client.close();
+    }
+
+    private static AcpClient connectedClient(AgentListener listener) {
+        FakeTransport transport = new FakeTransport();
+        AcpClient client = new AcpClient("agent", "", listener, List.of(),
+                (command, arguments, workingDirectory, diagnosticConsumer, diagnosticErrorConsumer) -> new FakeProcess(),
+                (reader, writer, handler, errorHandler) -> transport);
+        client.connect(Path.of("/workspace/project")).join();
+        return client;
+    }
+
+    private static JsonObject fileWriteParams(String sessionId) {
+        JsonObject params = new JsonObject();
+        params.addProperty("sessionId", sessionId);
+        params.addProperty("path", "/workspace/project/file.txt");
+        params.addProperty("content", "new content");
+        return params;
     }
 
     @Test
@@ -267,6 +318,13 @@ public class AcpClientProtocolTest {
 
     private static final class CapturingListener implements AgentListener {
         private String text;
+        private FileWriteRequest fileWrite;
+        private final CompletableFuture<Void> fileWriteResult = new CompletableFuture<>();
+
+        @Override public CompletableFuture<Void> writeTextFile(FileWriteRequest request) {
+            fileWrite = request;
+            return fileWriteResult;
+        }
 
         @Override public void onAgentText(String value) { text = value; }
         @Override public void onStatus(String status) { }

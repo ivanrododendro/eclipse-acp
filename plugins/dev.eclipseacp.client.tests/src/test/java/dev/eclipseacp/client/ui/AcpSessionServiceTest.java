@@ -24,7 +24,6 @@ import dev.eclipseacp.client.agent.AgentClient;
 import dev.eclipseacp.client.agent.AgentListener;
 import dev.eclipseacp.client.agent.ConfigOption;
 import dev.eclipseacp.client.agent.ConfigValue;
-import dev.eclipseacp.client.agent.FileDiff;
 import dev.eclipseacp.client.agent.PromptAttachment;
 import dev.eclipseacp.client.agent.SessionInfo;
 import dev.eclipseacp.client.agent.SessionPage;
@@ -35,14 +34,14 @@ public class AcpSessionServiceTest {
     @Test
     public void ranksSlashCommandsByExactPrefixAndSubstringMatch() {
         Map<String, String> commands = new LinkedHashMap<>();
-        commands.put("review", "");
-        commands.put("review-all", "");
-        commands.put("pre-review", "");
+        commands.put("inspect", "");
+        commands.put("inspect-all", "");
+        commands.put("pre-inspect", "");
 
-        assertEquals(List.of("review", "review-all", "pre-review"),
-                ChatComposer.slashCommandMatches(commands, "review"));
-        assertEquals(List.of("review", "review-all", "pre-review"),
-                ChatComposer.slashCommandMatches(commands, "REV"));
+        assertEquals(List.of("inspect", "inspect-all", "pre-inspect"),
+                ChatComposer.slashCommandMatches(commands, "inspect"));
+        assertEquals(List.of("inspect", "inspect-all", "pre-inspect"),
+                ChatComposer.slashCommandMatches(commands, "INSP"));
     }
 
     @Test
@@ -315,22 +314,6 @@ public class AcpSessionServiceTest {
     }
 
     @Test
-    public void stagesToolDiffsAndRendersEachPreviewOnlyOnce() {
-        Harness h = new Harness();
-        ChatSessionModel session = h.open(project("first"));
-        FileDiff diff = new FileDiff("/workspace/first/A.java", "old", "new");
-        ToolCall tool = new ToolCall("edit", "Edit file", "edit", "completed", List.of(diff),
-                List.of(), "", "", "", "");
-        h.client().listener.onToolCall(tool);
-        h.client().listener.onToolCall(tool);
-        h.drainUi();
-
-        assertEquals(List.of(diff), session.changes.pending());
-        assertEquals(1, session.transcriptMarkdown.toString().split("\\*\\*File changes:\\*\\*", -1).length - 1);
-        assertSame(tool, session.toolCalls.get("edit"));
-    }
-
-    @Test
     public void keepsRestoredMessageBoundariesUntilTheNextPrompt() {
         Harness h = new Harness();
         ChatSessionModel session = h.open(project("first"));
@@ -384,7 +367,6 @@ public class AcpSessionServiceTest {
                     "[{\"id\":\"codex\",\"name\":\"Codex\",\"command\":\"codex-acp\",\"arguments\":\"\"},"
                     + "{\"id\":\"other\",\"name\":\"Other\",\"command\":\"other-acp\",\"arguments\":\"\"}]");
             preferences.setValue(AcpPreferences.ACTIVE_PROVIDER, "codex");
-            preferences.setValue(AcpPreferences.REVIEW_FILE_CHANGES, true);
             service = new AcpSessionService(preferences, ui::add, this, this::listener, (session, listener) -> {
                 FakeClient client = new FakeClient(listener);
                 clients.add(client);

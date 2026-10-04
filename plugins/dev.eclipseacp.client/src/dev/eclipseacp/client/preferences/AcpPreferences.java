@@ -14,8 +14,6 @@ public final class AcpPreferences {
     public static final String AGENT_ARGUMENTS = "agentArguments";
     public static final String PROVIDERS_JSON = "providersJson";
     public static final String ACTIVE_PROVIDER = "activeProvider";
-    /** When enabled, ACP file writes are staged for Apply/Reject review. Disabled by default. */
-    public static final String REVIEW_FILE_CHANGES = "reviewFileChanges";
     /** When enabled, agent tool calls are kept out of the chat transcript. Enabled by default. */
     public static final String HIDE_AGENT_COMMANDS_IN_CHAT = "hideAgentCommandsInChat";
     /** When enabled, logs every ACP JSON-RPC payload at DEBUG level. Disabled by default. */

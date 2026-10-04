@@ -125,20 +125,19 @@ final class AcpChatSessionListener implements AgentListener {
     @Override public void onToolCall(ToolCall toolCall) {
         dispatchAfterQueuedAgentText(() -> {
             session.toolCalls.put(toolCall.id(), toolCall);
-            if (session.reviewFileChanges) session.changes.stageAll(toolCall.diffs());
             if (session.hideAgentCommands) {
                 sessions.setStatus(session, ChatMessageFormatter.toolCallStatus(toolCall));
             } else {
                 appendNewToolDiffs(toolCall);
                 append("\n> **Tool " + toolCall.kind() + ":** " + toolCall.title() + " — " + toolCall.status()
-                        + (toolCall.hasDiffs() ? " (" + toolCall.diffs().size() + " file change(s) ready for review)" : "")
+                        + (toolCall.hasDiffs() ? " (" + toolCall.diffs().size() + " file change(s))" : "")
                         + "\n\n");
                 if (toolCall.kind().toLowerCase(java.util.Locale.ROOT).contains("terminal")) {
                     append(ChatMessageFormatter.terminalOutput(toolCall.terminalOutput()));
                 }
             }
             sessions.changed(session);
-            if (!session.reviewFileChanges && toolCall.hasDiffs()) {
+            if (toolCall.hasDiffs()) {
                 session.changes.applyAsync(toolCall.diffs()).whenComplete((count, error) -> dispatch(() -> {
                     if (error != null) sessions.error(session, "Could not apply agent changes", error.getCause());
                     else sessions.setStatus(session, "Changes applied");
@@ -205,9 +204,9 @@ final class AcpChatSessionListener implements AgentListener {
         return session.changes.readAsync(request);
     }
 
-    @Override public CompletableFuture<Void> stageFileWrite(FileWriteRequest request) {
-        return session.changes.writeAsync(request, session.reviewFileChanges).thenAccept(diff -> dispatch(() -> {
-            String action = session.reviewFileChanges ? "File write staged" : "File write applied";
+    @Override public CompletableFuture<Void> writeTextFile(FileWriteRequest request) {
+        return session.changes.writeAsync(request).thenAccept(diff -> dispatch(() -> {
+            String action = "File write applied";
             if (session.hideAgentCommands) {
                 sessions.setStatus(session, action + ": " + diff.path());
             } else {

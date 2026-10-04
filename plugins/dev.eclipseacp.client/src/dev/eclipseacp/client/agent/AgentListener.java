@@ -19,7 +19,7 @@ public interface AgentListener {
     default CompletableFuture<String> readTextFile(FileReadRequest request) {
         return CompletableFuture.failedFuture(new UnsupportedOperationException("Client file reading is not supported"));
     }
-    default CompletableFuture<Void> stageFileWrite(FileWriteRequest request) {
+    default CompletableFuture<Void> writeTextFile(FileWriteRequest request) {
         return CompletableFuture.failedFuture(new UnsupportedOperationException("Client file writing is not supported"));
     }
     default void onAvailableCommands(List<AgentCommand> commands) { }

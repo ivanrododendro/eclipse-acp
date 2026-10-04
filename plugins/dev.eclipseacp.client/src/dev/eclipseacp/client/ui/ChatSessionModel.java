@@ -20,7 +20,6 @@ final class ChatSessionModel {
     final IProject project;
     final String label;
     final AgentProvider provider;
-    final boolean reviewFileChanges;
     final boolean hideAgentCommands;
     final StringBuilder transcriptMarkdown = new StringBuilder();
     final StringBuilder pendingAgentText = new StringBuilder();
@@ -36,7 +35,7 @@ final class ChatSessionModel {
     final Map<String, ToolCall> toolCalls = new LinkedHashMap<>();
     final Map<String, List<dev.eclipseacp.client.agent.FileDiff>> renderedToolDiffs = new LinkedHashMap<>();
     final WorkspaceFileLinks fileLinks;
-    final ChangeReviewService changes;
+    final WorkspaceFileService changes;
     List<SessionInfo> savedSessions = List.of();
     final List<PromptAttachment> attachments = new ArrayList<>();
     final Map<String, String> commands = new LinkedHashMap<>();
@@ -48,15 +47,13 @@ final class ChatSessionModel {
     String statusText = "Not connected";
     Usage usage;
 
-    ChatSessionModel(IProject project, String label, AgentProvider provider, boolean reviewFileChanges,
-            boolean hideAgentCommands) {
+    ChatSessionModel(IProject project, String label, AgentProvider provider, boolean hideAgentCommands) {
         this.project = project;
         this.label = label;
         this.provider = provider;
-        this.reviewFileChanges = reviewFileChanges;
         this.hideAgentCommands = hideAgentCommands;
         this.fileLinks = new WorkspaceFileLinks(project);
-        this.changes = new ChangeReviewService(project);
+        this.changes = new WorkspaceFileService(project);
     }
 
     void append(String text) {

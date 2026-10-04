@@ -201,6 +201,7 @@ final class ChatComposer {
         }
         boolean connected = activeSession != null && activeSession.isConnected();
         boolean busy = activeSession != null && activeSession.isBusy();
+        if (activeSession == null && !prompt.getText().isEmpty()) prompt.setText("");
         contextUsage.setUsage(activeSession == null ? null : activeSession.usage);
         showControl(contextUsage, contextUsage.isAvailable());
         updateSendButton();

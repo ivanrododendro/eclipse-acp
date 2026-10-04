@@ -17,7 +17,7 @@ import org.eclipse.ui.IWorkbenchPreferencePage;
 import dev.eclipseacp.client.agent.AgentProvider;
 
 public final class AcpPreferencePage extends PreferencePage implements IWorkbenchPreferencePage {
-    private List providerList; private Text name; private Text command; private Text arguments; private Button reviewFileChanges; private Button hideAgentCommandsInChat; private Button debugAcpMessages; private Spinner visibleRecentSessions; private AgentProviderRegistry registry;
+    private List providerList; private Text name; private Text command; private Text arguments; private Button hideAgentCommandsInChat; private Button debugAcpMessages; private Spinner visibleRecentSessions; private AgentProviderRegistry registry;
     public AcpPreferencePage() {
         setPreferenceStore(AcpPreferences.store());
     }
@@ -31,12 +31,6 @@ public final class AcpPreferencePage extends PreferencePage implements IWorkbenc
         Button save = new Button(edit, SWT.PUSH); save.setText("Add / update"); save.addListener(SWT.Selection, e -> saveProvider());
         Button select = new Button(edit, SWT.PUSH); select.setText("Set as default"); select.addListener(SWT.Selection, e -> { int i = providerList.getSelectionIndex(); if (i >= 0) { registry.select(registry.list().get(i).id()); refresh(); } });
         Button remove = new Button(edit, SWT.PUSH); remove.setText("Remove"); remove.addListener(SWT.Selection, e -> { int i = providerList.getSelectionIndex(); if (i >= 0) { registry.remove(registry.list().get(i).id()); refresh(); } });
-        reviewFileChanges = new Button(root, SWT.CHECK);
-        reviewFileChanges.setText("Review ACP file changes before applying them (Apply / Reject / Undo)");
-        reviewFileChanges.setSelection(AcpPreferences.store().getBoolean(AcpPreferences.REVIEW_FILE_CHANGES));
-        GridData reviewData = new GridData(SWT.FILL, SWT.CENTER, true, false);
-        reviewData.horizontalSpan = 2;
-        reviewFileChanges.setLayoutData(reviewData);
         hideAgentCommandsInChat = new Button(root, SWT.CHECK);
         hideAgentCommandsInChat.setText("Hide agent commands from the chat transcript (show them only in the status bar)");
         hideAgentCommandsInChat.setSelection(AcpPreferences.store().getBoolean(AcpPreferences.HIDE_AGENT_COMMANDS_IN_CHAT));
@@ -61,7 +55,6 @@ public final class AcpPreferencePage extends PreferencePage implements IWorkbenc
     private void loadSelected() { int i = providerList.getSelectionIndex(); if (i >= 0) { AgentProvider p = registry.list().get(i); name.setText(p.name()); command.setText(p.command()); arguments.setText(p.arguments()); } }
     private void saveProvider() { int i = providerList.getSelectionIndex(); String id = i >= 0 ? registry.list().get(i).id() : name.getText().trim().toLowerCase().replaceAll("[^a-z0-9]+", "-"); AgentProvider p = new AgentProvider(id, name.getText(), command.getText(), arguments.getText()); if (i >= 0) registry.update(p); else registry.add(p); refresh(); }
     @Override public boolean performOk() {
-        getPreferenceStore().setValue(AcpPreferences.REVIEW_FILE_CHANGES, reviewFileChanges.getSelection());
         getPreferenceStore().setValue(AcpPreferences.HIDE_AGENT_COMMANDS_IN_CHAT, hideAgentCommandsInChat.getSelection());
         getPreferenceStore().setValue(AcpPreferences.DEBUG_ACP_MESSAGES, debugAcpMessages.getSelection());
         getPreferenceStore().setValue(AcpPreferences.VISIBLE_RECENT_SESSIONS, visibleRecentSessions.getSelection());

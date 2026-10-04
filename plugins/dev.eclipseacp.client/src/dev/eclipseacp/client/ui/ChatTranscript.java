@@ -111,6 +111,11 @@ final class ChatTranscript {
     void render() {
         if (isDisposed()) return;
         transcriptSelection = "";
+        transcript.setEnabled(activeSession.get() != null);
+        if (activeSession.get() == null) {
+            // Clear the currently displayed DOM before the asynchronous page load completes.
+            transcript.execute("if(document.body) document.body.replaceChildren();");
+        }
         transcript.setText(chatDocument());
         scrollTranscriptToBottom();
     }

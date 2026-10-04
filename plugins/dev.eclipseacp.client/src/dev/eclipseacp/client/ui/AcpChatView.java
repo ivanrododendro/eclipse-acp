@@ -4,8 +4,6 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
-import java.util.concurrent.CompletableFuture;
-import java.util.function.IntFunction;
 import java.util.function.Supplier;
 
 import org.eclipse.core.resources.IProject;
@@ -33,8 +31,6 @@ import org.eclipse.swt.graphics.GC;
 import org.eclipse.swt.widgets.Label;
 import org.eclipse.swt.widgets.Menu;
 import org.eclipse.swt.widgets.MenuItem;
-import org.eclipse.ui.ISharedImages;
-import org.eclipse.ui.PlatformUI;
 import org.eclipse.ui.part.ViewPart;
 
 import dev.eclipseacp.client.agent.SessionInfo;
@@ -57,11 +53,6 @@ public final class AcpChatView extends ViewPart {
     private List<Canvas> recentButtons = List.of();
     private Canvas viewAllButton;
     private List<RecentSession> recentSessions = List.of();
-    private Button applyButton;
-    private Button rejectButton;
-    private Button undoButton;
-    private Composite reviewBar;
-    private Label reviewSummary;
     private Label status;
     private ChatSessionModel activeSession;
     private boolean chatPageVisible;
@@ -115,7 +106,6 @@ public final class AcpChatView extends ViewPart {
         headerLayout.marginWidth = headerLayout.marginHeight = 0;
         header.setLayout(headerLayout);
 
-        ISharedImages images = PlatformUI.getWorkbench().getSharedImages();
         backButton = new IconButton(header, lucideIcon("arrow-left"), "Back to chats", () -> {
             updateRecentSessions();
             showChatPage(false, true);
@@ -186,34 +176,8 @@ public final class AcpChatView extends ViewPart {
                 sessionService::newSession, fontFamily, fontSize);
         chatPage.setVisible(false);
 
-        reviewBar = new Composite(parent, SWT.NONE);
-        reviewBar.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
-        reviewBar.setLayout(new GridLayout(4, false));
-        reviewSummary = new Label(reviewBar, SWT.NONE);
-        reviewSummary.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
-        applyButton = new Button(reviewBar, SWT.PUSH);
-        applyButton.setText("Apply changes");
-        applyButton.setToolTipText("Apply the reviewed file changes");
-        applyButton.setEnabled(false);
-        applyButton.addListener(SWT.Selection, ignored -> applyChanges());
-
-        rejectButton = new Button(reviewBar, SWT.PUSH);
-        rejectButton.setText("Reject changes");
-        rejectButton.setToolTipText("Reject the reviewed file changes");
-        rejectButton.setEnabled(false);
-        rejectButton.addListener(SWT.Selection, ignored -> rejectChanges());
-
-        undoButton = new Button(reviewBar, SWT.PUSH);
-        undoButton.setText("Undo apply");
-        undoButton.setToolTipText("Undo the last applied file changes");
-        undoButton.setEnabled(false);
-        undoButton.addListener(SWT.Selection, ignored -> undoApply());
-
         composer = new ChatComposer(parent, JFaceResources.getFontRegistry().get(JFaceResources.DEFAULT_FONT), getSite().getPage(),
                 sessionService, dialogs, () -> chatPageVisible, this::sendInNewSession, this::lucideIcon);
-        applyButton.setImage(images.getImage(ISharedImages.IMG_ETOOL_SAVE_EDIT));
-        rejectButton.setImage(images.getImage(ISharedImages.IMG_ETOOL_DELETE));
-        undoButton.setImage(images.getImage(ISharedImages.IMG_TOOL_UNDO));
 
         status = new Label(parent, SWT.NONE);
         status.setText("Not connected");
@@ -480,46 +444,6 @@ public final class AcpChatView extends ViewPart {
         if (backButton != null && !backButton.isDisposed()) backButton.getParent().layout(true, true);
     }
 
-    private void applyChanges() {
-        ChatSessionModel session = activeSession;
-        if (session == null) return;
-        reviewOperation(session, session.changes.applyPendingAsync(),
-                count -> "> Applied " + count + " reviewed file change(s).\n\n",
-                "Changes applied", "Could not apply reviewed changes");
-    }
-
-    private void rejectChanges() {
-        ChatSessionModel session = activeSession;
-        if (session == null) return;
-        int count = session.changes.pending().size();
-        reviewOperation(session, session.changes.rejectPendingAsync(),
-                reverted -> "> Rejected " + count + " reviewed file change(s)"
-                        + (reverted == 0 ? "." : " and reverted " + reverted + " direct write(s).") + "\n\n",
-                "Changes rejected", "Could not reject reviewed changes");
-    }
-
-    private void undoApply() {
-        ChatSessionModel session = activeSession;
-        if (session == null) return;
-        reviewOperation(session, session.changes.undoAsync(),
-                count -> "> Undid " + count + " applied file change(s).\n\n",
-                "Changes undone", "Could not undo applied changes");
-    }
-
-    private void reviewOperation(ChatSessionModel session, CompletableFuture<Integer> operation,
-            IntFunction<String> message, String success, String failure) {
-        operation.whenComplete((count, error) -> ui(() -> {
-            if (!sessionService.contains(session)) return;
-            if (error != null) {
-                sessionService.error(session, failure, error.getCause() == null ? error : error.getCause());
-            } else {
-                sessionService.append(session, message.apply(count));
-                sessionService.setStatus(session, success);
-                sessionService.changed(session);
-            }
-        }));
-    }
-
     private void updateControls() {
         if (status == null || status.isDisposed()) return;
         updateHeaderTitle();
@@ -529,17 +453,6 @@ public final class AcpChatView extends ViewPart {
         newSessionButton.setEnabled(connected && !busy && activeSession.project.isOpen());
         closeProjectButton.setEnabled(activeSession != null);
         updateRecentSessions();
-        boolean review = connected && activeSession.reviewFileChanges;
-        int count = review ? activeSession.changes.pending().size() : 0;
-        boolean hasDiffs = count > 0;
-        applyButton.setEnabled(hasDiffs);
-        rejectButton.setEnabled(hasDiffs);
-        undoButton.setEnabled(review && activeSession.changes.canUndo());
-        showControl(reviewBar, hasDiffs || undoButton.getEnabled());
-        showControl(applyButton, hasDiffs);
-        showControl(rejectButton, hasDiffs);
-        showControl(undoButton, undoButton.getEnabled());
-        reviewSummary.setText(hasDiffs ? count + " changed files" : "Changes applied");
         renderStatus();
         composer.update();
         optionsButton.setEnabled(composer.canEditConfigOption());

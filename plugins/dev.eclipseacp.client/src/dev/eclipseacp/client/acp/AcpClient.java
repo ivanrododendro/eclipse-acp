@@ -43,7 +43,6 @@ public final class AcpClient implements AgentClient, JsonRpcHandler {
     private volatile AgentListener listener;
     private final String command;
     private final String arguments;
-    private final boolean reviewFileChanges;
     private final List<McpServerConfig> mcpServers;
     private final AgentProcessLauncher processLauncher;
     private final JsonRpcTransportFactory transportFactory;
@@ -61,23 +60,19 @@ public final class AcpClient implements AgentClient, JsonRpcHandler {
     private final AtomicBoolean firstAgentChunkReceived = new AtomicBoolean();
 
     public AcpClient(String command, String arguments, AgentListener listener) {
-        this(command, arguments, listener, false);
+        this(command, arguments, listener, List.of());
     }
 
-    public AcpClient(String command, String arguments, AgentListener listener, boolean reviewFileChanges) {
-        this(command, arguments, listener, reviewFileChanges, List.of());
-    }
-    public AcpClient(String command, String arguments, AgentListener listener, boolean reviewFileChanges, List<McpServerConfig> mcpServers) {
-        this(command, arguments, listener, reviewFileChanges, mcpServers,
+    public AcpClient(String command, String arguments, AgentListener listener, List<McpServerConfig> mcpServers) {
+        this(command, arguments, listener, mcpServers,
                 new DefaultAgentProcessLauncher(), new DefaultJsonRpcTransportFactory());
     }
 
-    AcpClient(String command, String arguments, AgentListener listener, boolean reviewFileChanges, List<McpServerConfig> mcpServers,
+    AcpClient(String command, String arguments, AgentListener listener, List<McpServerConfig> mcpServers,
             AgentProcessLauncher processLauncher, JsonRpcTransportFactory transportFactory) {
         this.command = Objects.requireNonNull(command).trim();
         this.arguments = arguments == null ? "" : arguments;
         this.listener = Objects.requireNonNull(listener);
-        this.reviewFileChanges = reviewFileChanges;
         this.mcpServers = List.copyOf(mcpServers);
         this.processLauncher = Objects.requireNonNull(processLauncher);
         this.transportFactory = Objects.requireNonNull(transportFactory);
@@ -119,7 +114,7 @@ public final class AcpClient implements AgentClient, JsonRpcHandler {
 
     private CompletableFuture<Void> connect(Path workingDirectory, String restoredSessionId) {
         AcpLog.info("ACP connection requested: command='" + command + "', workingDirectory='" + workingDirectory
-                + "', reviewFileChanges=" + reviewFileChanges);
+                + "'");
         if (command.isBlank()) {
             AcpLog.warn("ACP connection rejected because the command is empty", null);
             return CompletableFuture.failedFuture(new IllegalArgumentException("The ACP command is empty"));
@@ -351,7 +346,7 @@ public final class AcpClient implements AgentClient, JsonRpcHandler {
 
         JsonObject params = new JsonObject();
         params.addProperty("protocolVersion", PROTOCOL_VERSION);
-        // Files are always mediated by Eclipse; review is a client-side policy selected for this session.
+        // File requests are mediated by Eclipse.
         JsonObject fileSystem = new JsonObject();
         fileSystem.addProperty("readTextFile", true);
         fileSystem.addProperty("writeTextFile", true);
@@ -648,7 +643,7 @@ public final class AcpClient implements AgentClient, JsonRpcHandler {
             return CompletableFuture.failedFuture(new IllegalStateException("The ACP session is no longer active"));
         }
         if ("fs/read_text_file".equals(method)) return readTextFile(params);
-        if ("fs/write_text_file".equals(method)) return stageFileWrite(params);
+        if ("fs/write_text_file".equals(method)) return writeTextFile(params);
         if ("elicitation/create".equals(method)) {
             ElicitationRequest request = new ElicitationRequest(nonBlank(string(params, "title"), "Agent input required"),
                     nonBlank(string(params, "message"), string(params, "title")));
@@ -727,8 +722,8 @@ public final class AcpClient implements AgentClient, JsonRpcHandler {
                 });
     }
 
-    private CompletableFuture<JsonElement> stageFileWrite(JsonObject params) {
-        return listener.stageFileWrite(new FileWriteRequest(string(params, "sessionId"), string(params, "path"), string(params, "content")))
+    private CompletableFuture<JsonElement> writeTextFile(JsonObject params) {
+        return listener.writeTextFile(new FileWriteRequest(string(params, "sessionId"), string(params, "path"), string(params, "content")))
                 .thenApply(ignored -> new JsonObject());
     }
 

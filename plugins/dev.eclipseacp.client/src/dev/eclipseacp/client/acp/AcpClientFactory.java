@@ -12,8 +12,8 @@ public final class AcpClientFactory {
     private AcpClientFactory() {
     }
 
-    public static AgentClient create(AgentProvider provider, AgentListener listener, boolean reviewFileChanges,
+    public static AgentClient create(AgentProvider provider, AgentListener listener,
             List<McpServerConfig> servers) {
-        return new AcpClient(provider.command(), provider.arguments(), listener, reviewFileChanges, servers);
+        return new AcpClient(provider.command(), provider.arguments(), listener, servers);
     }
 }
