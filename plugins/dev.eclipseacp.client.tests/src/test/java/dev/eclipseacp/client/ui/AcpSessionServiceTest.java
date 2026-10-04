@@ -192,6 +192,23 @@ public class AcpSessionServiceTest {
     }
 
     @Test
+    public void rejectsCyclicSessionListCursors() throws Exception {
+        Harness h = new Harness();
+        h.open(project("first"));
+        FakeClient client = h.client();
+        client.pages.put("", new SessionPage(List.of(), "again"));
+        client.pages.put("again", new SessionPage(List.of(), "again"));
+
+        CompletableFuture<List<SessionInfo>> result = h.service.listSessions(client, Path.of("/workspace/first"));
+        try {
+            result.get(2, TimeUnit.SECONDS);
+            throw new AssertionError("expected repeated cursor to fail");
+        } catch (java.util.concurrent.ExecutionException expected) {
+            assertTrue(expected.getCause().getMessage().contains("repeated cursor"));
+        }
+    }
+
+    @Test
     public void refreshesTheSessionTitleAfterTheFirstCompletedConversation() {
         Harness h = new Harness();
         h.service.openSessionFor(project("first"), null);

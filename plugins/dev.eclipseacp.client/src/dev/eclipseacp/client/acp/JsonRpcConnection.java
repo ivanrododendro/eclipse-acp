@@ -12,12 +12,17 @@ import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
+import java.util.function.Function;
 
 import com.google.gson.Gson;
 import com.google.gson.JsonElement;
@@ -26,11 +31,14 @@ import com.google.gson.JsonParser;
 import dev.eclipseacp.client.AcpLog;
 
 final class JsonRpcConnection implements JsonRpcTransport {
+    private static final int MAX_FRAME_CHARACTERS = 1024 * 1024;
+    private static final int MAX_PENDING_REQUESTS = 128;
     private final Gson gson = new Gson();
     private final BufferedReader reader;
     private final BufferedWriter writer;
     private final JsonRpcHandler handler;
     private final Consumer<Throwable> errorHandler;
+    private final Function<String, Long> requestTimeoutMillis;
     private final AtomicLong nextId = new AtomicLong();
     private final Map<String, CompletableFuture<JsonObject>> pending = new ConcurrentHashMap<>();
     private final Object writeLock = new Object();
@@ -38,13 +46,20 @@ final class JsonRpcConnection implements JsonRpcTransport {
     private final Object stateLock = new Object();
     /** A bounded, single-writer queue keeps pipe backpressure away from SWT and the reader. */
     private final ExecutorService writerExecutor = newWriterExecutor();
+    private final ScheduledExecutorService timeoutExecutor = newTimeoutExecutor();
     private volatile boolean closed;
 
     JsonRpcConnection(Reader reader, Writer writer, JsonRpcHandler handler, Consumer<Throwable> errorHandler) {
+        this(reader, writer, handler, errorHandler, JsonRpcConnection::requestTimeoutMillis);
+    }
+
+    JsonRpcConnection(Reader reader, Writer writer, JsonRpcHandler handler, Consumer<Throwable> errorHandler,
+            Function<String, Long> requestTimeoutMillis) {
         this.reader = new BufferedReader(Objects.requireNonNull(reader));
         this.writer = new BufferedWriter(Objects.requireNonNull(writer));
         this.handler = Objects.requireNonNull(handler);
         this.errorHandler = Objects.requireNonNull(errorHandler);
+        this.requestTimeoutMillis = Objects.requireNonNull(requestTimeoutMillis);
     }
 
     @Override
@@ -64,17 +79,39 @@ final class JsonRpcConnection implements JsonRpcTransport {
         message.addProperty("id", id);
 
         CompletableFuture<JsonObject> future = new CompletableFuture<>();
+        String requestKey = Long.toString(id);
         synchronized (stateLock) {
             if (closed) return CompletableFuture.failedFuture(new IOException("ACP connection is closed"));
-            pending.put(Long.toString(id), future);
+            if (pending.size() >= MAX_PENDING_REQUESTS) {
+                return CompletableFuture.failedFuture(new IOException("Too many pending ACP requests"));
+            }
+            pending.put(requestKey, future);
         }
+        long timeoutMillis = Math.max(1L, requestTimeoutMillis.apply(method));
+        ScheduledFuture<?> timeout;
+        try {
+            timeout = timeoutExecutor.schedule(() -> {
+                if (pending.remove(requestKey, future)) {
+                    future.completeExceptionally(new TimeoutException("ACP request timed out after " + timeoutMillis
+                            + " ms: " + method));
+                }
+            }, timeoutMillis, TimeUnit.MILLISECONDS);
+        } catch (RejectedExecutionException exception) {
+            pending.remove(requestKey, future);
+            future.completeExceptionally(new IOException("ACP connection is closed", exception));
+            return future;
+        }
+        future.whenComplete((result, error) -> {
+            pending.remove(requestKey, future);
+            timeout.cancel(false);
+        });
         try {
             enqueue(message);
             AcpLog.info("JSON-RPC request queued: id=" + id + ", method='" + method
                     + "', queueMs=" + elapsedMillis(startedAt, System.nanoTime()));
         } catch (IOException exception) {
             AcpLog.error("JSON-RPC request could not be queued: id=" + id + ", method='" + method + "'", exception);
-            pending.remove(Long.toString(id));
+            pending.remove(requestKey, future);
             future.completeExceptionally(exception);
         }
         return future;
@@ -97,7 +134,7 @@ final class JsonRpcConnection implements JsonRpcTransport {
     private void readLoop() {
         try {
             String line;
-            while (!closed && (line = reader.readLine()) != null) {
+            while (!closed && (line = readFrame()) != null) {
                 if (!line.isBlank()) {
                     AcpLog.debug("ACP JSON-RPC <- agent: " + line);
                     dispatch(JsonParser.parseString(line).getAsJsonObject());
@@ -113,6 +150,20 @@ final class JsonRpcConnection implements JsonRpcTransport {
                 failTransport(exception);
             }
         }
+    }
+
+    /** Reads one newline-delimited JSON-RPC frame without allowing an agent to allocate unbounded memory. */
+    private String readFrame() throws IOException {
+        StringBuilder frame = new StringBuilder();
+        int character;
+        while ((character = reader.read()) != -1) {
+            if (character == '\n') return frame.toString();
+            if (character != '\r') frame.append((char) character);
+            if (frame.length() > MAX_FRAME_CHARACTERS) {
+                throw new IOException("ACP JSON-RPC frame exceeds " + MAX_FRAME_CHARACTERS + " characters");
+            }
+        }
+        return frame.isEmpty() ? null : frame.toString();
     }
 
     private void dispatch(JsonObject message) {
@@ -220,6 +271,7 @@ final class JsonRpcConnection implements JsonRpcTransport {
     private void failTransport(Throwable exception) {
         if (!transitionToClosed(exception)) return;
         writerExecutor.shutdownNow();
+        timeoutExecutor.shutdownNow();
         errorHandler.accept(exception);
     }
 
@@ -244,6 +296,24 @@ final class JsonRpcConnection implements JsonRpcTransport {
         };
         return new ThreadPoolExecutor(1, 1, 0L, TimeUnit.MILLISECONDS,
                 new ArrayBlockingQueue<>(128), threads, new ThreadPoolExecutor.AbortPolicy());
+    }
+
+    private static ScheduledExecutorService newTimeoutExecutor() {
+        ThreadFactory threads = runnable -> {
+            Thread thread = new Thread(runnable, "eclipse-acp-jsonrpc-timeout");
+            thread.setDaemon(true);
+            return thread;
+        };
+        return Executors.newSingleThreadScheduledExecutor(threads);
+    }
+
+    /** Short protocol operations fail promptly; a prompt may legitimately take much longer. */
+    private static long requestTimeoutMillis(String method) {
+        return switch (method) {
+            case "session/prompt" -> TimeUnit.MINUTES.toMillis(15);
+            case "authenticate" -> TimeUnit.MINUTES.toMillis(5);
+            default -> TimeUnit.SECONDS.toMillis(30);
+        };
     }
 
     private static JsonObject objectOrEmpty(JsonElement element) {
@@ -272,11 +342,14 @@ final class JsonRpcConnection implements JsonRpcTransport {
         pending.clear();
     }
 
+    int pendingRequestCount() { return pending.size(); }
+
     @Override
     public void close() throws IOException {
         AcpLog.info("Closing ACP JSON-RPC connection");
         transitionToClosed(new IOException("ACP connection closed"));
         writerExecutor.shutdownNow();
+        timeoutExecutor.shutdownNow();
         reader.close();
         writer.close();
     }

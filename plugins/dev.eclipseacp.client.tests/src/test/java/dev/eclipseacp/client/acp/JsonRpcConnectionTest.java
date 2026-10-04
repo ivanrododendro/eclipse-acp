@@ -88,6 +88,27 @@ public class JsonRpcConnectionTest {
         }
     }
 
+    @Test
+    public void silentAgentTimesOutAndRemovesThePendingRequest() throws Exception {
+        BlockingEofReader reader = new BlockingEofReader();
+        JsonRpcConnection connection = new JsonRpcConnection(reader, new StringWriter(), new JsonRpcHandler() {
+            @Override public void onNotification(String method, JsonObject params) { }
+            @Override public CompletableFuture<JsonElement> onRequest(String method, JsonObject params) {
+                return CompletableFuture.completedFuture(new JsonObject());
+            }
+        }, error -> { }, method -> 20L);
+
+        try {
+            connection.start();
+            CompletableFuture<JsonObject> pending = connection.request("session/list", new JsonObject());
+            assertFails(pending);
+            assertEquals("timed out requests must be removed", 0, connection.pendingRequestCount());
+        } finally {
+            reader.release.countDown();
+            connection.close();
+        }
+    }
+
     private static final class BlockingWriter extends Writer {
         final CountDownLatch writeStarted = new CountDownLatch(1);
         final CountDownLatch release = new CountDownLatch(1);

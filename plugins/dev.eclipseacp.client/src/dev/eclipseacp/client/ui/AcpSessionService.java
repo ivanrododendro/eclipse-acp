@@ -3,7 +3,9 @@ package dev.eclipseacp.client.ui;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorService;
@@ -31,6 +33,7 @@ import dev.eclipseacp.client.preferences.AgentProviderRegistry;
 
 /** Owns project chats and agent lifecycles. State and presentation callbacks run on the UI executor. */
 final class AcpSessionService {
+    private static final int MAX_SESSION_LIST_PAGES = 100;
     record SessionConfiguration(AgentProvider provider, boolean hideAgentCommands) { }
 
     interface Presentation {
@@ -318,16 +321,24 @@ final class AcpSessionService {
     }
 
     CompletableFuture<List<SessionInfo>> listSessions(AgentClient client, Path workingDirectory) {
-        return listSessions(client, workingDirectory, null, new ArrayList<>());
+        return listSessions(client, workingDirectory, null, new ArrayList<>(), new HashSet<>(), 0);
     }
 
     private CompletableFuture<List<SessionInfo>> listSessions(AgentClient client, Path workingDirectory,
-            String cursor, List<SessionInfo> collected) {
+            String cursor, List<SessionInfo> collected, Set<String> seenCursors, int pageCount) {
+        if (pageCount >= MAX_SESSION_LIST_PAGES) {
+            return CompletableFuture.failedFuture(new IllegalStateException("ACP session list exceeded "
+                    + MAX_SESSION_LIST_PAGES + " pages"));
+        }
+        if (cursor != null && !cursor.isBlank() && !seenCursors.add(cursor)) {
+            return CompletableFuture.failedFuture(new IllegalStateException("ACP session list repeated cursor: " + cursor));
+        }
         return client.listSessions(workingDirectory, cursor).thenCompose(page -> {
             collected.addAll(page.sessions());
             return page.nextCursor() == null || page.nextCursor().isBlank()
                     ? CompletableFuture.completedFuture(List.copyOf(collected))
-                    : io(() -> listSessions(client, workingDirectory, page.nextCursor(), collected));
+                    : io(() -> listSessions(client, workingDirectory, page.nextCursor(), collected, seenCursors,
+                            pageCount + 1));
         });
     }
 

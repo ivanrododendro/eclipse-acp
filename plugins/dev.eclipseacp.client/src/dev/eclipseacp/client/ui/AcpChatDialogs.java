@@ -82,6 +82,10 @@ final class AcpChatDialogs {
     CompletableFuture<String> requestElicitation(String sessionLabel, ElicitationRequest request) {
         CompletableFuture<String> result = new CompletableFuture<>();
         ui.accept(() -> {
+            if (result.isDone() || shell.get().isDisposed()) {
+                result.complete(null);
+                return;
+            }
             String title = nonBlank(request.message(), nonBlank(request.title(), "Agent input required"));
             InputDialog dialog = new InputDialog(shell.get(), "ACP input — " + sessionLabel, title, "", null);
             result.complete(dialog.open() == Window.OK ? dialog.getValue() : null);
@@ -93,7 +97,7 @@ final class AcpChatDialogs {
         CompletableFuture<String> result = new CompletableFuture<>();
         ui.accept(() -> {
             List<AuthMethod> available = methods.stream().filter(method -> !method.isTerminal()).toList();
-            if (available.isEmpty() || shell.get().isDisposed()) {
+            if (result.isDone() || available.isEmpty() || shell.get().isDisposed()) {
                 result.complete(null);
                 return;
             }
@@ -115,7 +119,7 @@ final class AcpChatDialogs {
         CompletableFuture<String> result = new CompletableFuture<>();
         ui.accept(() -> {
             List<PermissionOption> options = request.options();
-            if (options.isEmpty() || shell.get().isDisposed()) {
+            if (result.isDone() || options.isEmpty() || shell.get().isDisposed()) {
                 result.complete(null);
                 return;
             }

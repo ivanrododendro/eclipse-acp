@@ -269,6 +269,28 @@ public class AcpClientProtocolTest {
         assertEquals("first", initial.diffs().get(0).newText());
     }
 
+    @Test
+    public void stopCompletesAPendingPermissionAsCancelled() throws Exception {
+        PendingPermissionListener listener = new PendingPermissionListener();
+        AcpClient client = new AcpClient("unused", "", listener);
+        JsonObject params = new JsonObject();
+        JsonObject option = new JsonObject();
+        option.addProperty("optionId", "allow");
+        option.addProperty("name", "Allow");
+        option.addProperty("kind", "allow_once");
+        var options = new com.google.gson.JsonArray();
+        options.add(option);
+        params.add("options", options);
+
+        CompletableFuture<com.google.gson.JsonElement> response = client.onRequest("session/request_permission", params);
+        assertFalse(response.isDone());
+        client.cancel();
+
+        JsonObject result = response.get().getAsJsonObject();
+        assertEquals("cancelled", result.getAsJsonObject("outcome").get("outcome").getAsString());
+        assertTrue(listener.permission.isDone());
+    }
+
     private static JsonObject diff(String path, String oldText, String newText) {
         JsonObject diff = new JsonObject();
         diff.addProperty("type", "diff");
@@ -278,7 +300,7 @@ public class AcpClientProtocolTest {
         return diff;
     }
 
-    private static final class CapturingListener implements AgentListener {
+    private static class CapturingListener implements AgentListener {
         private String text;
 
         @Override public void onAgentText(String value) { text = value; }
@@ -286,6 +308,13 @@ public class AcpClientProtocolTest {
         @Override public void onError(String message, Throwable error) { }
         @Override public CompletableFuture<String> requestPermission(String title, List<PermissionOption> options) {
             return CompletableFuture.completedFuture(null);
+        }
+    }
+
+    private static final class PendingPermissionListener extends CapturingListener {
+        final CompletableFuture<String> permission = new CompletableFuture<>();
+        @Override public CompletableFuture<String> requestPermission(String title, List<PermissionOption> options) {
+            return permission;
         }
     }
 

@@ -9,8 +9,13 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.Set;
 import java.util.function.Supplier;
 
 import com.google.gson.JsonArray;
@@ -38,6 +43,10 @@ import dev.eclipseacp.client.mcp.McpServerConfig;
 /** ACP v1 adapter. The rest of the plug-in talks to AgentClient only. */
 public final class AcpClient implements AgentClient, JsonRpcHandler {
     private static final int PROTOCOL_VERSION = 1;
+    private static final long AUTHENTICATION_TIMEOUT_MINUTES = 15;
+    private static final long PERMISSION_TIMEOUT_MINUTES = 10;
+    private static final long ELICITATION_TIMEOUT_MINUTES = 15;
+    private static final int MAX_PENDING_INTERACTIONS = 16;
     private volatile AgentListener listener;
     private final String command;
     private final String arguments;
@@ -56,6 +65,14 @@ public final class AcpClient implements AgentClient, JsonRpcHandler {
     private final List<String> recentAgentDiagnostics = new ArrayList<>();
     private volatile long promptSentAtNanos;
     private final AtomicBoolean firstAgentChunkReceived = new AtomicBoolean();
+    /** UI interactions are tied to this client/session and must never outlive it. */
+    private final Set<CompletableFuture<String>> pendingInteractions = ConcurrentHashMap.newKeySet();
+    private final Object interactionLock = new Object();
+    private final ScheduledExecutorService interactionTimeouts = Executors.newSingleThreadScheduledExecutor(runnable -> {
+        Thread thread = new Thread(runnable, "eclipse-acp-interaction-timeout");
+        thread.setDaemon(true);
+        return thread;
+    });
 
     public AcpClient(String command, String arguments, AgentListener listener) {
         this(command, arguments, listener, List.of());
@@ -130,7 +147,10 @@ public final class AcpClient implements AgentClient, JsonRpcHandler {
                     error -> listener.onError("Cannot read ACP agent diagnostics", error));
             connection = transportFactory.create(process.standardOutput(), process.standardInput(),
                     this,
-                    error -> listener.onConnectionClosed("ACP connection failed", error));
+                    error -> {
+                        cancelPendingInteractions();
+                        listener.onConnectionClosed("ACP connection failed", error);
+                    });
             connection.start();
         } catch (IOException exception) {
             AcpLog.error("Could not start ACP agent process", exception);
@@ -186,7 +206,8 @@ public final class AcpClient implements AgentClient, JsonRpcHandler {
                         "The ACP agent requires authentication but did not advertise any authentication methods", error));
             }
             listener.onStatus("Authentication required");
-            return listener.requestAuthentication(authenticationMethods).thenCompose(methodId -> {
+            return requestInteraction(() -> listener.requestAuthentication(authenticationMethods),
+                    AUTHENTICATION_TIMEOUT_MINUTES, "authentication").thenCompose(methodId -> {
                 if (methodId == null || methodId.isBlank()) {
                     return CompletableFuture.failedFuture(new IOException("Authentication was cancelled"));
                 }
@@ -327,6 +348,7 @@ public final class AcpClient implements AgentClient, JsonRpcHandler {
     }
 
     public void cancel() throws IOException {
+        cancelPendingInteractions();
         if (sessionId == null || connection == null) {
             return;
         }
@@ -521,6 +543,7 @@ public final class AcpClient implements AgentClient, JsonRpcHandler {
 
     @Override
     public CompletableFuture<Void> closeSession() {
+        cancelPendingInteractions();
         if (sessionId == null || connection == null) return CompletableFuture.completedFuture(null);
         String closingSessionId = sessionId;
         if (!capabilities.sessionClose()) {
@@ -638,7 +661,8 @@ public final class AcpClient implements AgentClient, JsonRpcHandler {
         if ("elicitation/create".equals(method)) {
             ElicitationRequest request = new ElicitationRequest(nonBlank(string(params, "title"), "Agent input required"),
                     nonBlank(string(params, "message"), string(params, "title")));
-            return listener.requestElicitation(request).thenApply(answer -> {
+            return requestInteraction(() -> listener.requestElicitation(request), ELICITATION_TIMEOUT_MINUTES,
+                    "elicitation").thenApply(answer -> {
                 JsonObject result = new JsonObject();
                 if (answer == null) result.addProperty("action", "cancel");
                 else { result.addProperty("action", "accept"); result.addProperty("content", answer); }
@@ -669,10 +693,54 @@ public final class AcpClient implements AgentClient, JsonRpcHandler {
         if (title.isBlank()) {
             title = "The agent requests permission";
         }
+        String permissionTitle = title;
 
-        return listener.requestPermission(new PermissionRequest(title, permissionToolCall, options)).thenApply(optionId -> {
+        return requestInteraction(() -> listener.requestPermission(new PermissionRequest(permissionTitle, permissionToolCall, options)),
+                PERMISSION_TIMEOUT_MINUTES, "permission").thenApply(optionId -> {
             return permissionResult(optionId);
         });
+    }
+
+    /** Completes pending user decisions as cancellations on Stop, session close, and transport loss. */
+    private void cancelPendingInteractions() {
+        pendingInteractions.forEach(interaction -> interaction.complete(null));
+    }
+
+    private CompletableFuture<String> requestInteraction(Supplier<CompletableFuture<String>> request,
+            long timeoutMinutes, String kind) {
+        CompletableFuture<String> result = new CompletableFuture<>();
+        synchronized (interactionLock) {
+            if (pendingInteractions.size() >= MAX_PENDING_INTERACTIONS) {
+                AcpLog.warn("Rejecting ACP " + kind + " request because too many user interactions are pending", null);
+                return CompletableFuture.completedFuture(null);
+            }
+            pendingInteractions.add(result);
+        }
+        ScheduledFuture<?> timeout = interactionTimeouts.schedule(() -> result.complete(null), timeoutMinutes,
+                TimeUnit.MINUTES);
+        result.whenComplete((answer, failure) -> {
+            pendingInteractions.remove(result);
+            timeout.cancel(false);
+        });
+        try {
+            CompletableFuture<String> answer = request.get();
+            if (answer == null) {
+                result.completeExceptionally(new IllegalStateException("ACP " + kind + " request returned no future"));
+            } else {
+                answer.whenComplete((value, failure) -> {
+                    if (failure == null) result.complete(value);
+                    else result.completeExceptionally(failure);
+                });
+                // A dialog may have been queued on the UI executor. Completing its source future
+                // makes that queued work observe cancellation instead of opening an orphan dialog.
+                result.whenComplete((value, failure) -> {
+                    if (!answer.isDone()) answer.complete(null);
+                });
+            }
+        } catch (RuntimeException failure) {
+            result.completeExceptionally(failure);
+        }
+        return result;
     }
 
     private boolean isForRetiredSession(JsonObject params) {
@@ -868,6 +936,7 @@ public final class AcpClient implements AgentClient, JsonRpcHandler {
     @Override
     public void close() {
         AcpLog.info("Closing ACP connection: sessionId='" + sessionId + "'");
+        cancelPendingInteractions();
         try {
             closeSession().get(2, TimeUnit.SECONDS);
         } catch (Exception exception) {
@@ -898,6 +967,7 @@ public final class AcpClient implements AgentClient, JsonRpcHandler {
                 // The child process may already have closed the streams.
             }
         }
+        interactionTimeouts.shutdownNow();
     }
 
     private static Throwable unwrap(Throwable error) {
