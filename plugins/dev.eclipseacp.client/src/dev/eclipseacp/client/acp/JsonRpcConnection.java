@@ -28,7 +28,6 @@ import com.google.gson.Gson;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
-import dev.eclipseacp.client.AcpLog;
 
 final class JsonRpcConnection implements JsonRpcTransport {
     private static final int MAX_FRAME_CHARACTERS = 1024 * 1024;
@@ -39,6 +38,7 @@ final class JsonRpcConnection implements JsonRpcTransport {
     private final JsonRpcHandler handler;
     private final Consumer<Throwable> errorHandler;
     private final Function<String, Long> requestTimeoutMillis;
+    private final DiagnosticSink diagnostics;
     private final AtomicLong nextId = new AtomicLong();
     private final Map<String, CompletableFuture<JsonObject>> pending = new ConcurrentHashMap<>();
     private final Object writeLock = new Object();
@@ -55,16 +55,22 @@ final class JsonRpcConnection implements JsonRpcTransport {
 
     JsonRpcConnection(Reader reader, Writer writer, JsonRpcHandler handler, Consumer<Throwable> errorHandler,
             Function<String, Long> requestTimeoutMillis) {
+        this(reader, writer, handler, errorHandler, requestTimeoutMillis, DiagnosticSink.eclipse());
+    }
+
+    JsonRpcConnection(Reader reader, Writer writer, JsonRpcHandler handler, Consumer<Throwable> errorHandler,
+            Function<String, Long> requestTimeoutMillis, DiagnosticSink diagnostics) {
         this.reader = new BufferedReader(Objects.requireNonNull(reader));
         this.writer = new BufferedWriter(Objects.requireNonNull(writer));
         this.handler = Objects.requireNonNull(handler);
         this.errorHandler = Objects.requireNonNull(errorHandler);
         this.requestTimeoutMillis = Objects.requireNonNull(requestTimeoutMillis);
+        this.diagnostics = Objects.requireNonNull(diagnostics);
     }
 
     @Override
     public void start() {
-        AcpLog.info("Starting ACP JSON-RPC reader thread");
+        diagnostics.info("Starting ACP JSON-RPC reader thread");
         Thread thread = new Thread(this::readLoop, "eclipse-acp-jsonrpc");
         thread.setDaemon(true);
         thread.start();
@@ -74,7 +80,7 @@ final class JsonRpcConnection implements JsonRpcTransport {
     public CompletableFuture<JsonObject> request(String method, JsonObject params) {
         long startedAt = System.nanoTime();
         long id = nextId.getAndIncrement();
-        AcpLog.info("JSON-RPC request sent: id=" + id + ", method='" + method + "'");
+        diagnostics.trace(() -> "JSON-RPC request created: id=" + id + ", method='" + method + "'");
         JsonObject message = envelope(method, params);
         message.addProperty("id", id);
 
@@ -107,10 +113,10 @@ final class JsonRpcConnection implements JsonRpcTransport {
         });
         try {
             enqueue(message);
-            AcpLog.info("JSON-RPC request queued: id=" + id + ", method='" + method
+            diagnostics.trace(() -> "JSON-RPC request queued: id=" + id + ", method='" + method
                     + "', queueMs=" + elapsedMillis(startedAt, System.nanoTime()));
         } catch (IOException exception) {
-            AcpLog.error("JSON-RPC request could not be queued: id=" + id + ", method='" + method + "'", exception);
+            diagnostics.error("JSON-RPC request could not be queued: id=" + id + ", method='" + method + "'", exception);
             pending.remove(requestKey, future);
             future.completeExceptionally(exception);
         }
@@ -119,7 +125,7 @@ final class JsonRpcConnection implements JsonRpcTransport {
 
     @Override
     public void notification(String method, JsonObject params) throws IOException {
-        AcpLog.info("JSON-RPC notification sent: method='" + method + "'");
+        diagnostics.trace(() -> "JSON-RPC notification queued: method='" + method + "'");
         enqueue(envelope(method, params));
     }
 
@@ -136,17 +142,18 @@ final class JsonRpcConnection implements JsonRpcTransport {
             String line;
             while (!closed && (line = readFrame()) != null) {
                 if (!line.isBlank()) {
-                    AcpLog.debug("ACP JSON-RPC <- agent: " + line);
-                    dispatch(JsonParser.parseString(line).getAsJsonObject());
+                    JsonObject message = JsonParser.parseString(line).getAsJsonObject();
+                    diagnostics.trace(() -> "ACP JSON-RPC <- agent: " + DiagnosticText.json(message));
+                    dispatch(message);
                 }
             }
             if (!closed) {
-                AcpLog.warn("ACP agent closed its output stream", null);
+                diagnostics.warn("ACP agent closed its output stream", null);
                 failTransport(new IOException("ACP agent closed its output stream"));
             }
         } catch (Exception exception) {
             if (!closed) {
-                AcpLog.error("ACP JSON-RPC reader failed", exception);
+                diagnostics.error("ACP JSON-RPC reader failed", exception);
                 failTransport(exception);
             }
         }
@@ -184,11 +191,12 @@ final class JsonRpcConnection implements JsonRpcTransport {
                 return;
             }
             if (message.has("error")) {
-                AcpLog.error("JSON-RPC error response received: id=" + key(message.get("id")),
-                        new IOException(message.get("error").toString()));
-                future.completeExceptionally(new IOException("ACP error: " + message.get("error")));
+                String code = errorCode(message.get("error"));
+                diagnostics.error("JSON-RPC error response received: id=" + key(message.get("id"))
+                        + ", code=" + code, null);
+                future.completeExceptionally(new IOException(safeRemoteError(message.get("error"), code)));
             } else {
-                AcpLog.info("JSON-RPC response received: id=" + key(message.get("id")));
+                diagnostics.trace(() -> "JSON-RPC response received: id=" + key(message.get("id")));
                 future.complete(objectOrEmpty(message.get("result")));
             }
         }
@@ -214,9 +222,9 @@ final class JsonRpcConnection implements JsonRpcTransport {
             message.add("result", result == null ? new JsonObject() : result);
             try {
                 enqueue(message);
-                AcpLog.info("JSON-RPC response queued: id=" + id);
+                diagnostics.trace(() -> "JSON-RPC response queued: id=" + id);
             } catch (IOException exception) {
-                AcpLog.error("Could not send JSON-RPC response: id=" + id, exception);
+                diagnostics.error("Could not send JSON-RPC response: id=" + id, exception);
                 errorHandler.accept(exception);
             }
         });
@@ -234,7 +242,7 @@ final class JsonRpcConnection implements JsonRpcTransport {
         try {
             enqueue(message);
         } catch (IOException exception) {
-            AcpLog.error("Could not send JSON-RPC error response: id=" + id, exception);
+            diagnostics.error("Could not send JSON-RPC error response: id=" + id, exception);
             errorHandler.accept(exception);
         }
     }
@@ -245,7 +253,7 @@ final class JsonRpcConnection implements JsonRpcTransport {
                 throw new IOException("ACP connection is closed");
             }
             String payload = gson.toJson(message);
-            AcpLog.debug("ACP JSON-RPC -> agent: " + payload);
+            diagnostics.trace(() -> "ACP JSON-RPC -> agent: " + DiagnosticText.json(message));
             writer.write(payload);
             writer.newLine();
             writer.flush();
@@ -259,7 +267,7 @@ final class JsonRpcConnection implements JsonRpcTransport {
                 try {
                     send(message);
                 } catch (IOException exception) {
-                    AcpLog.error("Could not write ACP JSON-RPC message", exception);
+                    diagnostics.error("Could not write ACP JSON-RPC message", exception);
                     failTransport(exception);
                 }
             });
@@ -326,11 +334,21 @@ final class JsonRpcConnection implements JsonRpcTransport {
                 : id.toString();
     }
 
-    private static String summarize(String line) {
-        JsonObject message = JsonParser.parseString(line).getAsJsonObject();
-        String method = message.has("method") ? message.get("method").getAsString() : "<response>";
-        String id = message.has("id") ? ", id=" + key(message.get("id")) : "";
-        return "method='" + method + "'" + id;
+    private static String errorCode(JsonElement error) {
+        if (error != null && error.isJsonObject() && error.getAsJsonObject().has("code")) {
+            return error.getAsJsonObject().get("code").getAsString();
+        }
+        return "unknown";
+    }
+
+    private static String safeRemoteError(JsonElement error, String code) {
+        if (error != null && error.isJsonObject() && error.getAsJsonObject().has("message")) {
+            String message = error.getAsJsonObject().get("message").getAsString();
+            if (message.toLowerCase(java.util.Locale.ROOT).contains("authentication required")) {
+                return "Authentication required (ACP error " + code + ")";
+            }
+        }
+        return "ACP error " + code;
     }
 
     private static long elapsedMillis(long startedAt, long completedAt) {
@@ -346,7 +364,7 @@ final class JsonRpcConnection implements JsonRpcTransport {
 
     @Override
     public void close() throws IOException {
-        AcpLog.info("Closing ACP JSON-RPC connection");
+        diagnostics.info("Closing ACP JSON-RPC connection");
         transitionToClosed(new IOException("ACP connection closed"));
         writerExecutor.shutdownNow();
         timeoutExecutor.shutdownNow();

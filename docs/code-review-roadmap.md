@@ -239,17 +239,15 @@ La CI esegue questa prova sia sulla baseline 2026-06 sia sulla release recente 2
 
 **Verifica:** `mvnd -T1 clean verify` è verde con 55 test unitari e 2 test Equinox. Le prove p2 install/uninstall sono verdi su Eclipse Platform 4.40 (2026-06) e 4.41 (2026-09), senza bundle irrisolti.
 
-### R18 — P2: logging troppo accoppiato al workbench e contenuti diagnostici non filtrati
+### R18 — P2: logging troppo accoppiato al workbench e contenuti diagnostici non filtrati — risolto il 4 ottobre 2026
 
-**Dipendenza headless confermata dal probe; rischio di contenuti sensibili dedotto dai percorsi.** [AcpLog.java](../plugins/dev.eclipseacp.client/src/dev/eclipseacp/client/AcpLog.java), linee 24–31; [DefaultAgentProcessLauncher.java](../plugins/dev.eclipseacp.client/src/dev/eclipseacp/client/acp/DefaultAgentProcessLauncher.java), linee 126–145; [JsonRpcConnection.java](../plugins/dev.eclipseacp.client/src/dev/eclipseacp/client/acp/JsonRpcConnection.java), linee 89, 124–126 e 185.
+**Risolto sul codice corrente.** Il trasporto dipende ora da un `DiagnosticSink` iniettato e può essere provato headless senza inizializzare logging o preferenze Eclipse. Il sink predefinito resta un adapter verso `AcpLog`, mentre il tracing riceve `Supplier<String>` e materializza i payload solo quando la preferenza DEBUG è attiva.
 
-Il debug integrale è correttamente disabilitato per default e la pagina avvisa del contenuto sensibile. Tuttavia stderr viene sempre registrato a INFO, e payload di errore dell'agente vengono inclusi nelle eccezioni. Non si può assumere che un agente escluda token o contenuti da questi canali. Ogni notifica produce inoltre logging INFO.
+I payload JSON di trace sono limitati a 8 KiB e redigono ricorsivamente campi sensibili come token, password, secret, cookie, credenziali e authorization. Le risposte di errore ordinarie registrano soltanto ID e codice; l'eccezione pubblica conserva il segnale `Authentication required` necessario al retry, ma non il payload remoto. stderr rimane disponibile nella UI, entra nel log solo come trace opt-in ed è limitato a 4 KiB. Gli eventi protocollo ad alta frequenza, incluse le notifiche, sono passati da INFO a DEBUG.
 
-`AcpLog.debug` legge lo store Eclipse dal trasporto: la prova headless della scrittura reale fallisce inizializzando le preferenze OSGi. Questa dipendenza ostacola proprio i test di resilienza che mancano.
+La pagina delle preferenze esplicita che stderr può comunque contenere segreti: la redazione strutturata non può interpretare in modo affidabile testo arbitrario. Le eccezioni arricchite con stderr per la UI non vengono più allegate ai log ordinari.
 
-**Intervento:** sink diagnostico iniettato, controllo del livello prima di costruire payload, limiti di dimensione/frequenza e redazione per campi strutturati; politica esplicita per stderr e tracing integrale. Non memorizzare segreti letterali in preferenze quando sono sufficienti riferimenti esterni o storage sicuro.
-
-**Accettazione:** trasporto testabile senza Eclipse; fixture con token fittizi non compare nei log ordinari; tracing opt-in chiaramente distinguibile.
+**Verifica:** `mvnd -T1 clean verify` è verde con 58 test unitari e 2 test Equinox. Le fixture verificano redazione ricorsiva, limite dimensionale, valutazione lazy a trace disabilitato e assenza del token fittizio sia dai log ordinari sia dal trace redatto.
 
 ### R19 — P2: cleanup asincrono senza ownership completa di processi e attività
 

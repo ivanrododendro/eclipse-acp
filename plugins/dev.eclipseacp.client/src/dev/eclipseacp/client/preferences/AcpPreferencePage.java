@@ -41,7 +41,7 @@ public final class AcpPreferencePage extends PreferencePage implements IWorkbenc
         commandsData.horizontalSpan = 2;
         hideAgentCommandsInChat.setLayoutData(commandsData);
         debugAcpMessages = new Button(root, SWT.CHECK);
-        debugAcpMessages.setText("Enable DEBUG logging of all ACP JSON-RPC messages (may include prompts, file contents, and secrets)");
+        debugAcpMessages.setText("Enable DEBUG protocol tracing (redacted JSON and bounded stderr; stderr may still contain secrets)");
         debugAcpMessages.setSelection(AcpPreferences.store().getBoolean(AcpPreferences.DEBUG_ACP_MESSAGES));
         GridData debugData = new GridData(SWT.FILL, SWT.CENTER, true, false);
         debugData.horizontalSpan = 2;

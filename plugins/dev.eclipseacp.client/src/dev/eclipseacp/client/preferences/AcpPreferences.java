@@ -18,7 +18,7 @@ public final class AcpPreferences {
     public static final String ACTIVE_PROVIDER = "activeProvider";
     /** When enabled, agent tool calls are kept out of the chat transcript. Enabled by default. */
     public static final String HIDE_AGENT_COMMANDS_IN_CHAT = "hideAgentCommandsInChat";
-    /** When enabled, logs every ACP JSON-RPC payload at DEBUG level. Disabled by default. */
+    /** Enables bounded protocol tracing. Structured secret fields are redacted. Disabled by default. */
     public static final String DEBUG_ACP_MESSAGES = "debugAcpMessages";
     /** Number of recent chats shown directly in the chat picker. */
     public static final String VISIBLE_RECENT_SESSIONS = "visibleRecentSessions";

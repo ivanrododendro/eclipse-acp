@@ -7,6 +7,8 @@ import org.eclipse.core.runtime.Status;
 import org.osgi.framework.Bundle;
 import org.osgi.framework.FrameworkUtil;
 
+import java.util.function.Supplier;
+
 import dev.eclipseacp.client.preferences.AcpPreferences;
 
 /** Centralized logging for the ACP client. */
@@ -26,10 +28,15 @@ public final class AcpLog {
      * severity, so DEBUG is explicitly included in the message while using INFO severity.
      */
     public static void debug(String message) {
+        debug(() -> message);
+    }
+
+    /** Avoids materializing protocol payloads unless tracing is explicitly enabled. */
+    public static void debug(Supplier<String> message) {
         // Outside OSGi (notably in protocol tests), preference scopes have no configuration
         // location. There is no Eclipse log to receive this diagnostic in that case either.
         if (BUNDLE != null && AcpPreferences.store().getBoolean(AcpPreferences.DEBUG_ACP_MESSAGES)) {
-            log(IStatus.INFO, "DEBUG " + message, null);
+            log(IStatus.INFO, "DEBUG " + message.get(), null);
         }
     }
 

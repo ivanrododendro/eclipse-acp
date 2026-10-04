@@ -170,7 +170,10 @@ public final class AcpClient implements AgentClient, JsonRpcHandler {
             if (error == null) {
                 AcpLog.info("ACP connection established: sessionId='" + sessionId + "'");
             } else {
-                AcpLog.error("ACP connection failed during initialization/session setup", unwrap(error));
+                // The reported exception may include raw stderr for the user's status view.
+                // Keep that useful context out of ordinary logs, where it may expose secrets.
+                AcpLog.error("ACP connection failed during initialization/session setup ("
+                        + unwrap(error).getClass().getSimpleName() + ")", null);
             }
         });
         return reportedConnectionFuture;
@@ -575,7 +578,7 @@ public final class AcpClient implements AgentClient, JsonRpcHandler {
 
     @Override
     public void onNotification(String method, JsonObject params) {
-        AcpLog.info("ACP notification received: method='" + method + "'");
+        AcpLog.debug(() -> "ACP notification received: method='" + method + "'");
         if (!"session/update".equals(method)) {
             return;
         }

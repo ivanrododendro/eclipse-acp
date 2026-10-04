@@ -130,7 +130,10 @@ final class DefaultAgentProcessLauncher implements AgentProcessLauncher {
                 String line;
                 while ((line = reader.readLine()) != null) {
                     if (!line.isBlank()) {
-                        AcpLog.info("ACP agent stderr: " + line);
+                        // Agent stderr remains visible to the session listener, but enters the
+                        // Eclipse log only when bounded, opt-in protocol tracing is enabled.
+                        String diagnostic = line;
+                        AcpLog.debug(() -> "ACP agent stderr: " + DiagnosticText.stderr(diagnostic));
                         diagnosticConsumer.accept(line);
                     }
                 }
