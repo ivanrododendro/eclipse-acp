@@ -287,6 +287,61 @@ public class AcpSessionServiceTest {
     }
 
     @Test
+    public void retiringSessionCancelsQueuedOperationsBeforeTheyReachTheClient() throws Exception {
+        Queue<Runnable> io = new ArrayDeque<>();
+        Harness h = new Harness(io::add);
+        h.service.openSessionFor(project("first"), null);
+        io.remove().run();
+        h.client().connection.complete(null);
+        h.drainUi();
+        ChatSessionModel session = h.service.activeSession();
+        FakeClient client = h.client();
+
+        h.service.sendPrompt(session, "Must not be sent");
+        h.service.close(session);
+        while (!io.isEmpty()) io.remove().run();
+
+        assertEquals(0, client.promptCount);
+        client.closed.get(2, TimeUnit.SECONDS);
+    }
+
+    @Test
+    public void retiringSessionCancelsAnActivePromptBeforeClosingItsClient() throws Exception {
+        Queue<Runnable> io = new ArrayDeque<>();
+        Harness h = new Harness(io::add);
+        h.service.openSessionFor(project("first"), null);
+        io.remove().run();
+        h.client().connection.complete(null);
+        h.drainUi();
+        ChatSessionModel session = h.service.activeSession();
+        FakeClient client = h.client();
+
+        h.service.sendPrompt(session, "Cancel me");
+        io.remove().run();
+        assertEquals(1, client.promptCount);
+        h.service.close(session);
+
+        assertTrue(client.prompt.isCancelled());
+        io.remove().run();
+        client.closed.get(2, TimeUnit.SECONDS);
+    }
+
+    @Test
+    public void disconnectCompletesOwnedCleanupAndRejectsLaterWork() throws Exception {
+        Harness h = new Harness();
+        h.open(project("first"));
+        FakeClient client = h.client();
+
+        h.service.disconnect();
+
+        h.service.shutdownCompletion().get(2, TimeUnit.SECONDS);
+        assertTrue(client.closed.isDone());
+        h.service.openSessionFor(project("second"), null);
+        assertEquals(1, h.clients.size());
+        assertTrue(h.service.sessions().isEmpty());
+    }
+
+    @Test
     public void preservesTypedConfigValuesAndIgnoresRetiredConnectionUpdates() {
         Harness h = new Harness();
         ChatSessionModel session = h.open(project("first"));

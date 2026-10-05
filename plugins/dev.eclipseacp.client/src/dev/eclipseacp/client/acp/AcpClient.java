@@ -53,8 +53,10 @@ public final class AcpClient implements AgentClient, JsonRpcHandler {
     private final List<McpServerConfig> mcpServers;
     private final AgentProcessLauncher processLauncher;
     private final JsonRpcTransportFactory transportFactory;
-    private AgentProcess process;
-    private JsonRpcTransport connection;
+    private final Object connectionOwnership = new Object();
+    private final AtomicBoolean closing = new AtomicBoolean();
+    private volatile AgentProcess process;
+    private volatile JsonRpcTransport connection;
     private String sessionId;
     private volatile AgentCapabilities capabilities = AgentCapabilities.NONE;
     private volatile List<AuthMethod> authenticationMethods = List.of();
@@ -104,7 +106,7 @@ public final class AcpClient implements AgentClient, JsonRpcHandler {
 
     @Override
     public CompletableFuture<Void> startNewSession(Path workingDirectory, AgentListener newListener) {
-        if (connection == null) {
+        if (closing.get() || connection == null) {
             return CompletableFuture.failedFuture(new IllegalStateException("ACP connection is not connected"));
         }
         Objects.requireNonNull(newListener);
@@ -134,25 +136,47 @@ public final class AcpClient implements AgentClient, JsonRpcHandler {
             AcpLog.warn("ACP connection rejected because the command is empty", null);
             return CompletableFuture.failedFuture(new IllegalArgumentException("The ACP command is empty"));
         }
+        if (closing.get()) {
+            return CompletableFuture.failedFuture(new IllegalStateException("ACP connection is closed"));
+        }
 
         synchronized (recentAgentDiagnostics) {
             recentAgentDiagnostics.clear();
         }
+        AgentProcess launchedProcess = null;
+        JsonRpcTransport launchedConnection = null;
         try {
-            process = processLauncher.launch(command, arguments, workingDirectory,
+            launchedProcess = processLauncher.launch(command, arguments, workingDirectory,
                     line -> {
                         rememberAgentDiagnostic(line);
                         listener.onStatus("Agent: " + line);
                     },
                     error -> listener.onError("Cannot read ACP agent diagnostics", error));
-            connection = transportFactory.create(process.standardOutput(), process.standardInput(),
+            launchedConnection = transportFactory.create(launchedProcess.standardOutput(), launchedProcess.standardInput(),
                     this,
                     error -> {
                         cancelPendingInteractions();
                         listener.onConnectionClosed("ACP connection failed", error);
                     });
-            connection.start();
-        } catch (IOException exception) {
+            synchronized (connectionOwnership) {
+                if (!closing.get()) {
+                    process = launchedProcess;
+                    connection = launchedConnection;
+                    launchedConnection.start();
+                    launchedProcess = null;
+                    launchedConnection = null;
+                }
+            }
+            if (launchedProcess != null) {
+                closeOwned(launchedProcess, launchedConnection);
+                return CompletableFuture.failedFuture(new IllegalStateException("ACP connection was closed while starting"));
+            }
+        } catch (IOException | RuntimeException exception) {
+            synchronized (connectionOwnership) {
+                if (process == launchedProcess) process = null;
+                if (connection == launchedConnection) connection = null;
+            }
+            closeOwned(launchedProcess, launchedConnection);
             AcpLog.error("Could not start ACP agent process", exception);
             return CompletableFuture.failedFuture(exception);
         }
@@ -938,6 +962,7 @@ public final class AcpClient implements AgentClient, JsonRpcHandler {
 
     @Override
     public void close() {
+        if (!closing.compareAndSet(false, true)) return;
         AcpLog.info("Closing ACP connection: sessionId='" + sessionId + "'");
         cancelPendingInteractions();
         try {
@@ -949,11 +974,19 @@ public final class AcpClient implements AgentClient, JsonRpcHandler {
         capabilities = AgentCapabilities.NONE;
         authenticationMethods = List.of();
 
-        AgentProcess child = process;
-        process = null;
-        JsonRpcTransport activeConnection = connection;
-        connection = null;
+        AgentProcess child;
+        JsonRpcTransport activeConnection;
+        synchronized (connectionOwnership) {
+            child = process;
+            process = null;
+            activeConnection = connection;
+            connection = null;
+        }
+        closeOwned(child, activeConnection);
+        interactionTimeouts.shutdownNow();
+    }
 
+    private static void closeOwned(AgentProcess child, JsonRpcTransport activeConnection) {
         // Terminate the child first: this unblocks the JSON-RPC reader before its streams are closed.
         if (child != null) {
             try {
@@ -970,7 +1003,6 @@ public final class AcpClient implements AgentClient, JsonRpcHandler {
                 // The child process may already have closed the streams.
             }
         }
-        interactionTimeouts.shutdownNow();
     }
 
     private static Throwable unwrap(Throwable error) {

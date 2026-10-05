@@ -249,17 +249,17 @@ La pagina delle preferenze esplicita che stderr può comunque contenere segreti:
 
 **Verifica:** `mvnd -T1 clean verify` è verde con 58 test unitari e 2 test Equinox. Le fixture verificano redazione ricorsiva, limite dimensionale, valutazione lazy a trace disabilitato e assenza del token fittizio sia dai log ordinari sia dal trace redatto.
 
-### R19 — P2: cleanup asincrono senza ownership completa di processi e attività
+### R19 — P2: cleanup asincrono senza ownership completa di processi e attività — risolto il 4 ottobre 2026
 
-**Evidenza statica; processo orfano non osservato direttamente.** [AcpSessionService.java](../plugins/dev.eclipseacp.client/src/dev/eclipseacp/client/ui/AcpSessionService.java), linee 351–363; [AcpClient.java](../plugins/dev.eclipseacp.client/src/dev/eclipseacp/client/acp/AcpClient.java), linee 898–929; [DefaultAgentProcessLauncher.java](../plugins/dev.eclipseacp.client/src/dev/eclipseacp/client/acp/DefaultAgentProcessLauncher.java), linee 126–163.
+**Risolto sul codice corrente.** [AcpSessionService.java](../plugins/dev.eclipseacp.client/src/dev/eclipseacp/client/ui/AcpSessionService.java) possiede ora l'executor I/O, registra le operazioni per sessione e le cancella al retirement propagando la cancellazione al future ACP sottostante. Un controllo di ownership viene ripetuto sul worker prima di iniziare l'operazione, così un prompt ancora in coda non può raggiungere un client ritirato. `disconnect` è idempotente, rifiuta nuovo lavoro, accoda tutte le chiusure possedute, espone il future di completamento e arresta l'executor.
 
-`disconnect` accoda `client.close` nel common pool e dimentica i future. I reader sono daemon non conservati; il processo riceve soltanto `destroy()`, senza attesa/escalation. Non è definita una policy per eventuali discendenti del launcher. La chiusura anticipata del processo rispetto agli stream è una buona precauzione, ma non certifica che il processo termini o che il cleanup finisca prima dell'arresto del bundle.
+[AcpClient.java](../plugins/dev.eclipseacp.client/src/dev/eclipseacp/client/acp/AcpClient.java) serializza la pubblicazione e il distacco di processo/trasporto: una chiusura durante il launch o initialize libera anche le risorse create dalla corsa e le chiusure ripetute non hanno effetto. [JsonRpcConnection.java](../plugins/dev.eclipseacp.client/src/dev/eclipseacp/client/acp/JsonRpcConnection.java) conserva il reader thread, chiude entrambi gli stream e attende il reader entro un secondo.
 
-Le operazioni file già accodate continuano indipendentemente dalla rimozione della sessione; il controllo `contains` protegge alcuni callback di presentazione, non gli effetti sul workspace.
+[DefaultAgentProcessLauncher.java](../plugins/dev.eclipseacp.client/src/dev/eclipseacp/client/acp/DefaultAgentProcessLauncher.java) conserva anche il thread stderr. Alla chiusura fotografa soltanto i discendenti del processo lanciato, invia la terminazione gentile a quell'albero, attende un secondo, applica `destroyForcibly` ai superstiti e attende un altro secondo; un'eventuale sopravvivenza viene segnalata.
 
-**Intervento:** proprietario esplicito di executor, processi e operazioni per sessione; shutdown idempotente, attesa limitata, escalation e gestione dei soli processi posseduti. Agganciare il cleanup al ciclo di vita adatto al plugin, senza introdurre un activator solo per convenzione. [Eclipse — Concurrency infrastructure](https://help.eclipse.org/latest/topic/org.eclipse.platform.doc.isv/guide/runtime_jobs.htm).
+Le operazioni ACP sul workspace citate originariamente non esistono più dopo R10; la stessa ownership copre connect, prompt, configurazione, cancellazione e paginazione sessioni.
 
-**Accettazione:** chiusura durante initialize, prompt e scrittura; agente che ignora la terminazione; nessuna nuova operazione dopo retirement e nessun processo posseduto rimasto attivo oltre il limite stabilito.
+**Verifica:** `mvnd -T1 clean verify` è verde con 63 test unitari e 2 test Equinox. I test coprono retirement prima e durante un prompt, cleanup al disconnect, chiusura durante initialize ed escalation su un processo controllato che ignora `destroy()`.
 
 ### R20 — P2: parsing degli argomenti perde valori validi
 

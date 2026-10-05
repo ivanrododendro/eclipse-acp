@@ -9,12 +9,16 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
+import java.util.stream.Stream;
 
 import dev.eclipseacp.client.AcpLog;
 
 /** Default local-process implementation of {@link AgentProcessLauncher}. */
 final class DefaultAgentProcessLauncher implements AgentProcessLauncher {
+    private static final long TERMINATION_GRACE_MILLIS = 1_000;
+    private static final long FORCED_TERMINATION_MILLIS = 1_000;
     private final CommandResolver commandResolver;
 
     DefaultAgentProcessLauncher() {
@@ -36,8 +40,8 @@ final class DefaultAgentProcessLauncher implements AgentProcessLauncher {
         addCommonNodeLocationsToPath(builder);
         Process process = builder.start();
         AcpLog.info("ACP agent process started: pid=" + process.pid() + ", executable='" + resolvedCommand + "'");
-        streamStandardError(process, diagnosticConsumer, diagnosticErrorConsumer);
-        return new LocalAgentProcess(process);
+        Thread diagnosticThread = streamStandardError(process, diagnosticConsumer, diagnosticErrorConsumer);
+        return new LocalAgentProcess(process, diagnosticThread);
     }
 
     /**
@@ -123,7 +127,7 @@ final class DefaultAgentProcessLauncher implements AgentProcessLauncher {
         return result;
     }
 
-    private static void streamStandardError(Process process, Consumer<String> diagnosticConsumer,
+    private static Thread streamStandardError(Process process, Consumer<String> diagnosticConsumer,
             Consumer<Throwable> diagnosticErrorConsumer) {
         Thread thread = new Thread(() -> {
             try (var reader = process.errorReader(StandardCharsets.UTF_8)) {
@@ -146,13 +150,16 @@ final class DefaultAgentProcessLauncher implements AgentProcessLauncher {
         }, "eclipse-acp-stderr");
         thread.setDaemon(true);
         thread.start();
+        return thread;
     }
 
     private static final class LocalAgentProcess implements AgentProcess {
         private final Process process;
+        private final Thread diagnosticThread;
 
-        private LocalAgentProcess(Process process) {
+        private LocalAgentProcess(Process process, Thread diagnosticThread) {
             this.process = Objects.requireNonNull(process);
+            this.diagnosticThread = Objects.requireNonNull(diagnosticThread);
         }
 
         @Override public InputStreamReader standardOutput() {
@@ -162,7 +169,66 @@ final class DefaultAgentProcessLauncher implements AgentProcessLauncher {
             return new OutputStreamWriter(process.getOutputStream(), StandardCharsets.UTF_8);
         }
         @Override public void close() {
-            process.destroy();
+            terminate(process, TERMINATION_GRACE_MILLIS, FORCED_TERMINATION_MILLIS);
+            diagnosticThread.interrupt();
+            if (Thread.currentThread() != diagnosticThread) {
+                try {
+                    diagnosticThread.join(FORCED_TERMINATION_MILLIS);
+                } catch (InterruptedException exception) {
+                    Thread.currentThread().interrupt();
+                }
+            }
         }
+    }
+
+    /** Terminates the launched process tree only, escalating after bounded grace periods. */
+    static void terminate(Process process, long gracefulMillis, long forcedMillis) {
+        List<ProcessHandle> descendants;
+        try (Stream<ProcessHandle> owned = process.descendants()) {
+            descendants = owned.toList();
+        } catch (RuntimeException exception) {
+            AcpLog.warn("Could not enumerate ACP agent descendants; terminating the owned parent", exception);
+            descendants = List.of();
+        }
+        descendants.reversed().forEach(DefaultAgentProcessLauncher::destroy);
+        process.destroy();
+        if (awaitTermination(process, descendants, gracefulMillis)) return;
+
+        descendants.reversed().stream().filter(ProcessHandle::isAlive)
+                .forEach(DefaultAgentProcessLauncher::destroyForcibly);
+        if (process.isAlive()) process.destroyForcibly();
+        if (!awaitTermination(process, descendants, forcedMillis)) {
+            AcpLog.warn("ACP agent process tree is still alive after forced termination: pid=" + process.pid(), null);
+        }
+    }
+
+    private static void destroy(ProcessHandle process) {
+        try {
+            process.destroy();
+        } catch (RuntimeException exception) {
+            AcpLog.warn("Could not terminate owned ACP descendant: pid=" + process.pid(), exception);
+        }
+    }
+
+    private static void destroyForcibly(ProcessHandle process) {
+        try {
+            process.destroyForcibly();
+        } catch (RuntimeException exception) {
+            AcpLog.warn("Could not force termination of owned ACP descendant: pid=" + process.pid(), exception);
+        }
+    }
+
+    private static boolean awaitTermination(Process process, List<ProcessHandle> descendants, long timeoutMillis) {
+        long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(Math.max(0, timeoutMillis));
+        do {
+            if (!process.isAlive() && descendants.stream().noneMatch(ProcessHandle::isAlive)) return true;
+            try {
+                Thread.sleep(Math.min(20, Math.max(1, timeoutMillis)));
+            } catch (InterruptedException exception) {
+                Thread.currentThread().interrupt();
+                return false;
+            }
+        } while (System.nanoTime() < deadline);
+        return !process.isAlive() && descendants.stream().noneMatch(ProcessHandle::isAlive);
     }
 }

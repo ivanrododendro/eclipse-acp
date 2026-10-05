@@ -28,7 +28,7 @@ final class ChatSessionModel {
     boolean agentRenderScheduled;
     long firstAgentChunkSentAtNanos;
     long firstAgentChunkReceivedAtNanos;
-    AgentClient client;
+    volatile AgentClient client;
     boolean agentMessageOpen;
     boolean sessionTransitioning;
     boolean loadsSessionTranscript;

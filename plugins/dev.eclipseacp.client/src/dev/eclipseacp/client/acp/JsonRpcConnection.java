@@ -20,6 +20,7 @@ import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
 import java.util.function.Function;
@@ -40,6 +41,7 @@ final class JsonRpcConnection implements JsonRpcTransport {
     private final Function<String, Long> requestTimeoutMillis;
     private final DiagnosticSink diagnostics;
     private final AtomicLong nextId = new AtomicLong();
+    private final AtomicBoolean started = new AtomicBoolean();
     private final Map<String, CompletableFuture<JsonObject>> pending = new ConcurrentHashMap<>();
     private final Object writeLock = new Object();
     /** Serializes adding pending requests with the terminal state transition. */
@@ -48,6 +50,7 @@ final class JsonRpcConnection implements JsonRpcTransport {
     private final ExecutorService writerExecutor = newWriterExecutor();
     private final ScheduledExecutorService timeoutExecutor = newTimeoutExecutor();
     private volatile boolean closed;
+    private volatile Thread readerThread;
 
     JsonRpcConnection(Reader reader, Writer writer, JsonRpcHandler handler, Consumer<Throwable> errorHandler) {
         this(reader, writer, handler, errorHandler, JsonRpcConnection::requestTimeoutMillis);
@@ -70,9 +73,11 @@ final class JsonRpcConnection implements JsonRpcTransport {
 
     @Override
     public void start() {
+        if (!started.compareAndSet(false, true)) return;
         diagnostics.info("Starting ACP JSON-RPC reader thread");
         Thread thread = new Thread(this::readLoop, "eclipse-acp-jsonrpc");
         thread.setDaemon(true);
+        readerThread = thread;
         thread.start();
     }
 
@@ -368,7 +373,27 @@ final class JsonRpcConnection implements JsonRpcTransport {
         transitionToClosed(new IOException("ACP connection closed"));
         writerExecutor.shutdownNow();
         timeoutExecutor.shutdownNow();
-        reader.close();
-        writer.close();
+        IOException failure = null;
+        try {
+            reader.close();
+        } catch (IOException exception) {
+            failure = exception;
+        }
+        try {
+            writer.close();
+        } catch (IOException exception) {
+            if (failure == null) failure = exception;
+            else failure.addSuppressed(exception);
+        }
+        Thread activeReader = readerThread;
+        if (activeReader != null && activeReader != Thread.currentThread()) {
+            activeReader.interrupt();
+            try {
+                activeReader.join(1_000);
+            } catch (InterruptedException exception) {
+                Thread.currentThread().interrupt();
+            }
+        }
+        if (failure != null) throw failure;
     }
 }

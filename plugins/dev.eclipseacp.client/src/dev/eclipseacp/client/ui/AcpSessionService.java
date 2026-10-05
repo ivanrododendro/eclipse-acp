@@ -5,13 +5,19 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CancellationException;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.BooleanSupplier;
 import java.util.function.BiFunction;
 import java.util.function.Consumer;
 import java.util.function.Function;
@@ -52,6 +58,11 @@ final class AcpSessionService {
     /** Owns calls that can start a process, access files, or enqueue ACP output. */
     private final Executor io;
     private final ExecutorService shutdownableIo;
+    private final AtomicBoolean acceptingOperations = new AtomicBoolean(true);
+    private final Set<CompletableFuture<?>> cleanupOperations = ConcurrentHashMap.newKeySet();
+    private final Map<ChatSessionModel, Set<CompletableFuture<?>>> sessionOperations =
+            new ConcurrentHashMap<>();
+    private volatile CompletableFuture<Void> shutdownCompletion = CompletableFuture.completedFuture(null);
     private final List<ChatSessionModel> sessions = new ArrayList<>();
     private ChatSessionModel activeSession;
 
@@ -92,6 +103,7 @@ final class AcpSessionService {
     boolean contains(ChatSessionModel session) { return sessions.contains(session); }
 
     void openSessionFor(IProject project, String initialPrompt) {
+        if (!acceptingOperations.get()) return;
         if (project == null || !project.exists() || !project.isOpen() || project.getLocation() == null) {
             error(activeSession, "Cannot open ACP session",
                     new IllegalArgumentException("The selected project is not open"));
@@ -148,7 +160,7 @@ final class AcpSessionService {
         session.client = client;
         session.sessionTransitioning = true;
         changed(session);
-        CompletableFuture<Void> connection = io(() -> restoredSessionId == null
+        CompletableFuture<Void> connection = io(session, client, () -> restoredSessionId == null
                 ? client.connect(directory(session)) : client.restoreSession(restoredSessionId, directory(session)));
         connection.whenComplete((ignored, failure) -> ui.accept(() -> {
             if (session.client != client) return;
@@ -173,6 +185,7 @@ final class AcpSessionService {
     }
 
     private void newSession(String pendingInputText, String initialPrompt) {
+        if (!acceptingOperations.get()) return;
         ChatSessionModel current = activeSession;
         if (current == null || !current.isConnected() || current.isBusy()) return;
         SessionConfiguration configuration = newSessionConfiguration();
@@ -192,7 +205,8 @@ final class AcpSessionService {
         session.client = client;
         session.sessionTransitioning = true;
         replace(session);
-        io(() -> client.startNewSession(directory(session), listeners.apply(session))).whenComplete((ignored, failure) -> ui.accept(() -> {
+        io(session, client, () -> client.startNewSession(directory(session), listeners.apply(session)))
+                .whenComplete((ignored, failure) -> ui.accept(() -> {
             if (session.client != client) return;
             session.sessionTransitioning = false;
             if (failure != null) {
@@ -206,6 +220,7 @@ final class AcpSessionService {
     }
 
     void restore(SessionInfo selected) {
+        if (!acceptingOperations.get()) return;
         ChatSessionModel current = activeSession;
         if (current == null || current.isBusy() || selected == null) return;
         ChatSessionModel restored = new ChatSessionModel(current.project, current.label,
@@ -225,7 +240,7 @@ final class AcpSessionService {
             connect(restored, selected.id());
         } else {
             // Do not let two agent processes own the same persisted session concurrently.
-            runIo(previousClient::close)
+            runCleanup(previousClient::close)
                     .whenComplete((ignored, failure) -> ui.accept(() -> {
                         if (contains(restored)) connect(restored, selected.id());
                     }));
@@ -254,7 +269,7 @@ final class AcpSessionService {
         transcriptChanged(session);
         changed(session);
         AgentClient client = session.client;
-        io(() -> client.prompt(expanded, attachments)).whenComplete((ignored, failure) -> ui.accept(() -> {
+        io(session, client, () -> client.prompt(expanded, attachments)).whenComplete((ignored, failure) -> ui.accept(() -> {
             if (session.client != client) return;
             if (failure != null) {
                 session.attachments.addAll(attachments);
@@ -269,10 +284,11 @@ final class AcpSessionService {
     }
 
     void cancel() {
+        if (!acceptingOperations.get()) return;
         if (activeSession == null || !activeSession.isConnected()) return;
         ChatSessionModel session = activeSession;
         AgentClient client = session.client;
-        runIo(() -> {
+        runIo(session, client, () -> {
             try {
                 client.cancel();
             } catch (IOException exception) {
@@ -286,9 +302,11 @@ final class AcpSessionService {
     }
 
     void changeConfigOption(ChatSessionModel session, ConfigOption option, Object value, String success, String failure) {
+        if (!acceptingOperations.get()) return;
         if (session == null || !session.isConnected()) return;
         AgentClient client = session.client;
-        io(() -> client.setConfigOption(option.id(), ConfigValue.of(value))).whenComplete((ignored, cause) -> ui.accept(() -> {
+        io(session, client, () -> client.setConfigOption(option.id(), ConfigValue.of(value)))
+                .whenComplete((ignored, cause) -> ui.accept(() -> {
             if (session.client != client) return;
             if (cause != null) {
                 error(session, failure, unwrap(cause));
@@ -303,7 +321,8 @@ final class AcpSessionService {
 
     private void loadAgentSessions(ChatSessionModel session) {
         AgentClient client = session.client;
-        io(() -> listSessions(client, directory(session))).whenComplete((available, failure) -> ui.accept(() -> {
+        io(session, client, () -> listSessions(client, directory(session), () -> isOwned(session, client)))
+                .whenComplete((available, failure) -> ui.accept(() -> {
             if (session.client != client) return;
             if (failure != null) {
                 error(session, "Could not list agent sessions", unwrap(failure));
@@ -321,11 +340,17 @@ final class AcpSessionService {
     }
 
     CompletableFuture<List<SessionInfo>> listSessions(AgentClient client, Path workingDirectory) {
-        return listSessions(client, workingDirectory, null, new ArrayList<>(), new HashSet<>(), 0);
+        return listSessions(client, workingDirectory, acceptingOperations::get);
     }
 
     private CompletableFuture<List<SessionInfo>> listSessions(AgentClient client, Path workingDirectory,
-            String cursor, List<SessionInfo> collected, Set<String> seenCursors, int pageCount) {
+            BooleanSupplier ownership) {
+        return listSessions(client, workingDirectory, null, new ArrayList<>(), new HashSet<>(), 0, ownership);
+    }
+
+    private CompletableFuture<List<SessionInfo>> listSessions(AgentClient client, Path workingDirectory,
+            String cursor, List<SessionInfo> collected, Set<String> seenCursors, int pageCount,
+            BooleanSupplier ownership) {
         if (pageCount >= MAX_SESSION_LIST_PAGES) {
             return CompletableFuture.failedFuture(new IllegalStateException("ACP session list exceeded "
                     + MAX_SESSION_LIST_PAGES + " pages"));
@@ -337,8 +362,8 @@ final class AcpSessionService {
             collected.addAll(page.sessions());
             return page.nextCursor() == null || page.nextCursor().isBlank()
                     ? CompletableFuture.completedFuture(List.copyOf(collected))
-                    : io(() -> listSessions(client, workingDirectory, page.nextCursor(), collected, seenCursors,
-                            pageCount + 1));
+                    : io(ownership, () -> listSessions(client, workingDirectory, page.nextCursor(), collected,
+                            seenCursors, pageCount + 1, ownership));
         });
     }
 
@@ -390,30 +415,73 @@ final class AcpSessionService {
     }
 
     /** session/close lets the agent durably store the conversation. */
-    private void retire(ChatSessionModel session) {
+    private CompletableFuture<Void> retire(ChatSessionModel session) {
         AgentClient client = session.client;
         session.client = null;
         session.sessionTransitioning = false;
         session.fileLinks.close();
-        if (client != null) runIo(client::close);
+        Set<CompletableFuture<?>> operations = sessionOperations.remove(session);
+        if (operations != null) operations.forEach(operation -> operation.cancel(true));
+        return client == null ? CompletableFuture.completedFuture(null) : runCleanup(client::close);
     }
 
     void disconnect() {
-        sessions.forEach(this::retire);
+        if (!acceptingOperations.compareAndSet(true, false)) return;
+        List<CompletableFuture<Void>> cleanup = sessions.stream().map(this::retire).toList();
         sessions.clear();
         activeSession = null;
+        List<CompletableFuture<?>> allCleanup = new ArrayList<>(cleanupOperations);
+        allCleanup.addAll(cleanup);
+        shutdownCompletion = CompletableFuture.allOf(allCleanup.toArray(CompletableFuture[]::new))
+                .handle((ignored, failure) -> null);
         if (shutdownableIo != null) shutdownableIo.shutdown();
     }
 
-    private <T> CompletableFuture<T> io(Supplier<CompletableFuture<T>> operation) {
+    CompletableFuture<Void> shutdownCompletion() {
+        return shutdownCompletion;
+    }
+
+    private boolean isOwned(ChatSessionModel session, AgentClient client) {
+        return acceptingOperations.get() && session.client == client;
+    }
+
+    private <T> CompletableFuture<T> io(ChatSessionModel session, AgentClient client,
+            Supplier<CompletableFuture<T>> operation) {
+        CompletableFuture<T> result = io(() -> isOwned(session, client), operation);
+        sessionOperations.computeIfAbsent(session, ignored -> ConcurrentHashMap.newKeySet()).add(result);
+        result.whenComplete((ignored, failure) -> {
+            Set<CompletableFuture<?>> operations = sessionOperations.get(session);
+            if (operations != null) {
+                operations.remove(result);
+                if (operations.isEmpty()) sessionOperations.remove(session, operations);
+            }
+        });
+        return result;
+    }
+
+    private <T> CompletableFuture<T> io(BooleanSupplier ownership,
+            Supplier<CompletableFuture<T>> operation) {
         CompletableFuture<T> result = new CompletableFuture<>();
+        AtomicReference<CompletableFuture<T>> activeOperation = new AtomicReference<>();
+        result.whenComplete((ignored, failure) -> {
+            if (result.isCancelled()) {
+                CompletableFuture<T> active = activeOperation.get();
+                if (active != null) active.cancel(true);
+            }
+        });
         try {
             io.execute(() -> {
                 try {
+                    if (!ownership.getAsBoolean()) {
+                        result.completeExceptionally(new CancellationException("ACP session is retired"));
+                        return;
+                    }
                     CompletableFuture<T> operationResult = operation.get();
                     if (operationResult == null) {
                         result.completeExceptionally(new IllegalStateException("ACP I/O operation returned no future"));
                     } else {
+                        activeOperation.set(operationResult);
+                        if (result.isCancelled()) operationResult.cancel(true);
                         operationResult.whenComplete((value, failure) -> {
                             if (failure == null) result.complete(value);
                             else result.completeExceptionally(failure);
@@ -429,11 +497,21 @@ final class AcpSessionService {
         return result;
     }
 
-    private CompletableFuture<Void> runIo(Runnable operation) {
-        return io(() -> {
+    private CompletableFuture<Void> runIo(ChatSessionModel session, AgentClient client, Runnable operation) {
+        return io(session, client, () -> {
             operation.run();
             return CompletableFuture.completedFuture(null);
         });
+    }
+
+    private CompletableFuture<Void> runCleanup(Runnable operation) {
+        CompletableFuture<Void> result = io(() -> true, () -> {
+            operation.run();
+            return CompletableFuture.completedFuture(null);
+        });
+        cleanupOperations.add(result);
+        result.whenComplete((ignored, failure) -> cleanupOperations.remove(result));
+        return result;
     }
 
     private static ExecutorService newIoExecutor() {

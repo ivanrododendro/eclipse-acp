@@ -291,6 +291,23 @@ public class AcpClientProtocolTest {
         assertTrue(listener.permission.isDone());
     }
 
+    @Test
+    public void closeDuringInitializeReleasesProcessAndTransportAndFailsConnect() {
+        FakeProcess process = new FakeProcess();
+        PendingInitializeTransport transport = new PendingInitializeTransport();
+        AcpClient client = new AcpClient("agent", "", new CapturingListener(), List.of(),
+                (command, arguments, workingDirectory, diagnosticConsumer, diagnosticErrorConsumer) -> process,
+                (reader, writer, handler, errorHandler) -> transport);
+
+        CompletableFuture<Void> connecting = client.connect(Path.of("/workspace/project"));
+        client.close();
+        client.close();
+
+        assertTrue(process.closed);
+        assertTrue(transport.closed);
+        assertTrue(connecting.isCompletedExceptionally());
+    }
+
     private static JsonObject diff(String path, String oldText, String newText) {
         JsonObject diff = new JsonObject();
         diff.addProperty("type", "diff");
@@ -319,9 +336,23 @@ public class AcpClientProtocolTest {
     }
 
     private static final class FakeProcess implements AgentProcess {
+        private boolean closed;
         @Override public Reader standardOutput() { return new StringReader(""); }
         @Override public Writer standardInput() { return new StringWriter(); }
-        @Override public void close() throws IOException { }
+        @Override public void close() throws IOException { closed = true; }
+    }
+
+    private static final class PendingInitializeTransport implements JsonRpcTransport {
+        private final CompletableFuture<JsonObject> initialize = new CompletableFuture<>();
+        private boolean closed;
+
+        @Override public void start() { }
+        @Override public CompletableFuture<JsonObject> request(String method, JsonObject params) { return initialize; }
+        @Override public void notification(String method, JsonObject params) { }
+        @Override public void close() {
+            closed = true;
+            initialize.completeExceptionally(new IOException("closed"));
+        }
     }
 
     private static final class FakeTransport implements JsonRpcTransport {
