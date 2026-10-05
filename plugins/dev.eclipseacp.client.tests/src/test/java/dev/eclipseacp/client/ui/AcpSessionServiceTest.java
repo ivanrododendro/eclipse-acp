@@ -233,7 +233,7 @@ public class AcpSessionServiceTest {
     }
 
     @Test
-    public void restoresAttachmentsAfterPromptFailureAndRejectsOverlappingPrompts() {
+    public void restoresAttachmentsAndPromptDraftAfterFailureAndRejectsOverlappingPrompts() {
         Harness h = new Harness();
         ChatSessionModel session = h.open(project("first"));
         PromptAttachment attachment = new PromptAttachment(Path.of("/tmp/image.png"), "image/png");
@@ -252,6 +252,9 @@ public class AcpSessionServiceTest {
         h.drainUi();
         assertFalse(session.agentMessageOpen);
         assertEquals(List.of(attachment), session.attachments);
+        assertEquals("Hello", session.promptDraft);
+        assertSame(session, h.draftSession);
+        assertEquals("Hello", h.draftText);
         assertTrue(session.transcriptMarkdown.toString().contains("Prompt rejected"));
     }
 
@@ -481,6 +484,8 @@ public class AcpSessionServiceTest {
         final AcpSessionService service;
         ChatSessionModel ready;
         String initialPrompt;
+        ChatSessionModel draftSession;
+        String draftText;
         int renders;
 
         Harness() { this(Runnable::run); }
@@ -526,6 +531,10 @@ public class AcpSessionServiceTest {
         @Override public void inputReady(ChatSessionModel session, String text) {
             ready = session;
             initialPrompt = text;
+        }
+        @Override public void draftReady(ChatSessionModel session, String text) {
+            draftSession = session;
+            draftText = text;
         }
     }
 

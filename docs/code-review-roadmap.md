@@ -135,87 +135,65 @@ Le scritture vengono eseguite in background tramite `CompletableFuture.supplyAsy
 
 **Accettazione:** test Eclipse con editor aperti e modificati: nessun accesso UI dal worker e nessuna sovrascrittura dei buffer non salvati; la UI continua a rispondere durante le operazioni file.
 
-### R08 — P1: EOF ed errori del reader lasciano il trasporto apparentemente aperto
+### R08 — P1: EOF ed errori del reader lasciano il trasporto apparentemente aperto — risolto il 4 ottobre 2026
 
-**EOF confermato con probe; conseguenze ricostruite staticamente.** [JsonRpcConnection.java](../plugins/dev.eclipseacp.client/src/dev/eclipseacp/client/acp/JsonRpcConnection.java), linee 84–103 e 179–188; [ChatSessionModel.java](../plugins/dev.eclipseacp.client/src/dev/eclipseacp/client/ui/ChatSessionModel.java), linea 97.
+**Risolto sul codice corrente.** [JsonRpcConnection.java](../plugins/dev.eclipseacp.client/src/dev/eclipseacp/client/acp/JsonRpcConnection.java) esegue una transizione terminale serializzata e idempotente per EOF, eccezioni del reader e fallimenti del writer: fallisce le richieste pendenti, impedisce nuove richieste e invoca una sola volta il callback terminale. [AcpSessionService.java](../plugins/dev.eclipseacp.client/src/dev/eclipseacp/client/ui/AcpSessionService.java) ritira il client dalla sessione, perciò una chat inattiva non rimane connessa apparentemente.
 
-Su EOF vengono fallite le richieste esistenti, ma `closed` resta falso e `errorHandler` non viene chiamato. Anche l'uscita per eccezione non marca il trasporto chiuso. La UI considera connessa una sessione finché `client != null`; una terminazione dell'agente mentre la sessione è inattiva può restare invisibile.
+La condizione era confermata sulla baseline: su EOF venivano fallite solo le richieste esistenti, ma `closed` restava falso e la UI deduceva ancora la connessione dal client non nullo.
 
 Una richiesta successiva può essere inserita in `pending` quando non esiste più un reader: se il writer accetta ancora i dati, nessuno completa la risposta. La prova runtime di questo secondo passaggio è stata limitata dalla dipendenza del logging dalle preferenze OSGi, come riportato nel metodo.
 
-**Intervento:** un'unica transizione terminale, idempotente e visibile tra thread, che chiuda il trasporto, fallisca le richieste e notifichi il servizio. Modellare `Connecting/Ready/Busy/Disconnected/Closing/Closed` anziché dedurre la connessione dal riferimento non nullo.
+**Intervento applicato:** una transizione terminale, idempotente e visibile tra thread; callback dedicato per ritirare il client dalla sessione. La modellazione completa degli stati di sessione resta un possibile miglioramento architetturale, ma non è più necessaria per impedire il falso stato connesso di R08.
 
-**Accettazione:** EOF prima/dopo initialize e durante inattività disconnette la UI; ogni richiesta successiva fallisce immediatamente; callback terminale una sola volta.
+**Verifica:** test unitari per EOF con richiesta pendente e per eccezione del reader verificano callback terminale unico e fallimento immediato delle richieste successive; un test del servizio verifica la disconnessione di una sessione inattiva.
 
-### R09 — P1: richieste e interazioni pendenti non hanno una politica completa di timeout/cancellazione
+### R09 — P1: richieste e interazioni pendenti non hanno una politica completa di timeout/cancellazione — risolto il 4 ottobre 2026
 
-**Evidenza statica, confidenza alta.** [JsonRpcConnection.java](../plugins/dev.eclipseacp.client/src/dev/eclipseacp/client/acp/JsonRpcConnection.java), linee 29, 49–67 e 213–224; [AcpChatDialogs.java](../plugins/dev.eclipseacp.client/src/dev/eclipseacp/client/ui/AcpChatDialogs.java), linee 82–129; [AcpSessionService.java](../plugins/dev.eclipseacp.client/src/dev/eclipseacp/client/ui/AcpSessionService.java), linee 253–259 e 297–307.
+**Risolto sul codice corrente.** [JsonRpcConnection.java](../plugins/dev.eclipseacp.client/src/dev/eclipseacp/client/acp/JsonRpcConnection.java) applica scadenze per metodo e rimuove ogni richiesta da `pending` in tutti i percorsi terminali. Le operazioni di protocollo scadono dopo 30 s, `authenticate` dopo 5 minuti e `session/prompt` dopo 15 minuti; frame oltre 1 MiB e più di 128 richieste contemporanee sono rifiutati. [AcpClient.java](../plugins/dev.eclipseacp.client/src/dev/eclipseacp/client/acp/AcpClient.java) registra fino a 16 interazioni umane per client: Stop, chiusura sessione/trasporto e chiusura client le completano come annullate; permessi, elicitation e autenticazione hanno durate distinte e adeguate all'interazione umana. [AcpChatDialogs.java](../plugins/dev.eclipseacp.client/src/dev/eclipseacp/client/ui/AcpChatDialogs.java) non apre più dialog già completati o con shell disposed.
 
-Initialize, creazione sessione, lista e configurazione possono restare pendenti indefinitamente. Cancellare il future non rimuove l'entry da `pending`. Stop invia una notifica, ma non gestisce le interazioni UI pendenti. Un runnable scartato dopo dispose della view non completa il future creato dal dialog; una richiesta accodata per una sessione chiusa non verifica la validità della sessione prima di mostrare il dialog.
+[AcpSessionService.java](../plugins/dev.eclipseacp.client/src/dev/eclipseacp/client/ui/AcpSessionService.java) limita a 100 pagine l'elenco sessioni e rifiuta un `nextCursor` ripetuto.
 
-Anche la lista delle sessioni segue ricorsivamente `nextCursor` senza rilevare cursori ripetuti o fissare un limite di pagine.
+**Verifica:** test unitari coprono agente silenzioso e cleanup della richiesta, Stop che restituisce un permesso annullato e cursore ciclico. [ACP — Tool calls](https://agentclientprotocol.com/protocol/v1/tool-calls).
 
-**Intervento:** timeout per tipo di operazione, cancellazione per sessione e registry delle richieste/interazioni; rimozione dal pending in ogni percorso terminale; limite frame/pending/paginazione. Per prompt e autenticazione usare timeout adeguati alla durata e all'interazione umana, non una scadenza breve uniforme. I permessi di un turno cancellato devono completarsi come cancellati. [ACP — Tool calls](https://agentclientprotocol.com/protocol/v1/tool-calls).
+### R10 — P2: letture e scritture ignorano charset e buffer non salvati — obsoleto dal 4 ottobre 2026
 
-**Accettazione:** agente silenzioso, cursore ciclico, Stop e chiusura view non lasciano future o dialog orfani; dimensioni delle code restano limitate.
+**Non applicabile al codice corrente.** Il commit `0f30433` ha rimosso `WorkspaceDiffApplier` e `WorkspaceFileService`, comprese le operazioni ACP di lettura, scrittura e applicazione dei diff nel workspace. Restano la visualizzazione dei diff e i link ai file, che non leggono né modificano il contenuto del workspace.
 
-### R10 — P2: letture e scritture ignorano charset e buffer non salvati
+Il rilievo resta come requisito di review per un'eventuale reintroduzione di tali capacità: la nuova implementazione dovrà rispettare il charset di `IFile`, i buffer dirty, BOM/newline, limiti di riga sicuri e la creazione delle directory prevista dal contratto. [Eclipse — IFile](https://help.eclipse.org/latest/topic/org.eclipse.platform.doc.isv/reference/api/org/eclipse/core/resources/IFile.html), [ACP — File system](https://agentclientprotocol.com/protocol/v1/file-system).
 
-**Evidenza statica, confidenza alta.** [WorkspaceDiffApplier.java](../plugins/dev.eclipseacp.client/src/dev/eclipseacp/client/ui/WorkspaceDiffApplier.java), linee 35–43 e 135–142.
+### R11 — P2: preferenze salvate prima di OK e gestione incompleta degli errori — risolto il 4 ottobre 2026
 
-Il contenuto viene sempre decodificato/codificato come UTF-8. Un file Windows-1252 o UTF-16 può essere letto male e riscritto con byte incompatibili con il charset configurato. Le letture usano `IFile.getContents()` e non vedono modifiche non salvate dell'editor; la difesa sugli editor dirty riguarda le scritture.
+**Risolto sul codice corrente.** [AgentProviderRegistry.java](../plugins/dev.eclipseacp.client/src/dev/eclipseacp/client/preferences/AgentProviderRegistry.java) ora mantiene una bozza in memoria e serializza soltanto quando la pagina delle preferenze conferma Apply o OK; il flush resta di responsabilità di [AcpPreferences.java](../plugins/dev.eclipseacp.client/src/dev/eclipseacp/client/preferences/AcpPreferences.java). Cancel quindi non modifica provider o preferenze.
 
-Esistono anche due casi limite: `line` oltre EOF può produrre `first > last` e un'eccezione da `copyOfRange`; `first + limit` può andare in overflow. La creazione non prepara cartelle parent mancanti.
+[AcpPreferencePage.java](../plugins/dev.eclipseacp.client/src/dev/eclipseacp/client/preferences/AcpPreferencePage.java) valida nome e comando prima del salvataggio, visualizza gli errori previsti e impedisce la rimozione dell'ultimo provider. Defaults ripristina provider, provider predefinito, checkbox e numero di chat recenti.
 
-**Intervento:** rispettare `IFile.getCharset()` e una policy esplicita per nuovi file, BOM e newline; integrare i text file buffer; validare line/limit con aritmetica sicura e creare gerarchie quando previsto dal contratto. [Eclipse — IFile](https://help.eclipse.org/latest/topic/org.eclipse.platform.doc.isv/reference/api/org/eclipse/core/resources/IFile.html), [ACP — File system](https://agentclientprotocol.com/protocol/v1/file-system).
+Un JSON provider non valido non viene più sovrascritto al caricamento. Se l'utente lo sostituisce esplicitamente, l'originale viene conservato in `providersJsonRecovery`; la pagina mostra inoltre un avviso recuperabile. I test unitari verificano l'isolamento della bozza, il recupero del JSON corrotto e il reset dei provider.
 
-**Accettazione:** round trip senza perdita di caratteri per UTF-8, Windows-1252 e UTF-16; lettura coerente del buffer dirty; casi EOF, limite massimo e file in nuova directory.
+### R12 — P2: la bozza del prompt non è isolata per progetto — risolto il 4 ottobre 2026
 
-### R11 — P2: preferenze salvate prima di OK e gestione incompleta degli errori
+**Risolto sul codice corrente.** [ChatSessionModel.java](../plugins/dev.eclipseacp.client/src/dev/eclipseacp/client/ui/ChatSessionModel.java) possiede ora `promptDraft`. [ChatComposer.java](../plugins/dev.eclipseacp.client/src/dev/eclipseacp/client/ui/ChatComposer.java) salva il testo della sessione uscente e ripristina quello della sessione selezionata, così il widget SWT condiviso non può trasferire una bozza da A a B. Il testo originale è inoltre mantenuto separato dal prompt espanso inviato ad ACP.
 
-**Evidenza statica, confidenza alta.** [AcpPreferencePage.java](../plugins/dev.eclipseacp.client/src/dev/eclipseacp/client/preferences/AcpPreferencePage.java), linee 30–33, 60–79; [AgentProviderRegistry.java](../plugins/dev.eclipseacp.client/src/dev/eclipseacp/client/preferences/AgentProviderRegistry.java), linee 24–53.
+Se l'invio fallisce, [AcpSessionService.java](../plugins/dev.eclipseacp.client/src/dev/eclipseacp/client/ui/AcpSessionService.java) ripristina la bozza e notifica la view, che la rimette nell'editor; gli allegati continuano a essere ripristinati come prima. `pendingInputText` resta dedicato al caso di una nuova sessione.
 
-Add/update, selezione default e rimozione scrivono subito sullo store e chiamano `flush()`. Cancel della pagina non annulla queste modifiche, mentre i checkbox vengono salvati in `performOk`: il comportamento è incoerente. `performDefaults` ripristina solo il numero di chat recenti.
+**Verifica:** il test del servizio copre il ripristino congiunto di allegati e bozza dopo un prompt rifiutato. È comunque opportuno uno smoke test workbench A → B → A quando sarà disponibile l'harness UI.
 
-Gli handler non intercettano errori prevedibili come provider duplicato, campi vuoti o rimozione dell'ultimo provider. Un JSON corrotto viene silenziosamente sostituito dal provider di fallback durante il caricamento, con rischio di perdere la configurazione utile al recupero.
+### R13 — P2: reflection JDT senza dipendenza OSGi dichiarata — risolto il 4 ottobre 2026
 
-**Intervento:** modello di editing locale, validazione inline, commit su Apply/OK e rollback su Cancel; ripristino completo dei default; preservazione del JSON non valido e segnalazione recuperabile. Separare serializzazione e persistenza: `AgentProviderRegistry` riceve uno store ma forza il flush di uno scope globale.
+**Risolto sul codice corrente.** [EclipseContext.java](../plugins/dev.eclipseacp.client/src/dev/eclipseacp/client/ui/EclipseContext.java) non offre più il riferimento `@java` e non contiene più classloading o reflection verso JDT. Anche i prompt rapidi non richiedono più il modello Java.
 
-**Accettazione:** Cancel non altera configurazioni; Defaults ripristina tutti i campi previsti; input errato non produce eccezioni non gestite; dati corrotti restano recuperabili.
+La scelta di prodotto è eliminare l'integrazione JDT anziché aggiungere una dipendenza opzionale: il contesto esplicito resta indipendente dal linguaggio tramite `@file`, `@selection`, `@problems`, `@console` e `@folder`.
 
-### R12 — P2: la bozza del prompt non è isolata per progetto
+**Verifica:** la ricerca nell'intero repository non trova codice, test o configurazione che usino JDT, `JavaCore`, `@java` o il modello Java.
 
-**Evidenza statica, confidenza alta; da verificare con test UI.** [ChatComposer.java](../plugins/dev.eclipseacp.client/src/dev/eclipseacp/client/ui/ChatComposer.java), linee 193–216 e 241–264; [AcpChatView.java](../plugins/dev.eclipseacp.client/src/dev/eclipseacp/client/ui/AcpChatView.java), linee 235–250.
+### R14 — P2: il costo di rendering cresce con l'intera conversazione — risolto il 4 ottobre 2026
 
-Passando da una sessione all'altra, `update()` cambia `activeSession` ma non salva o sostituisce il testo del widget. `pendingInputText` copre un caso di creazione sessione, non le bozze ordinarie. Una bozza scritta per A può rimanere visibile dopo il passaggio a B e venire inviata all'agente di B. Inoltre, il testo viene svuotato prima di espansione e invio; il fallimento ripristina gli allegati, non la bozza nell'editor.
+**Risolto sul codice corrente.** [ChatTranscript.java](../plugins/dev.eclipseacp.client/src/dev/eclipseacp/client/ui/ChatTranscript.java) mantiene separati il transcript stabile e il messaggio live. Durante lo streaming riparsa e sostituisce soltanto il messaggio corrente; al cambio di messaggio congela i nodi DOM esistenti e aggiunge soltanto il delta stabile. Un cambio sessione o una modifica non append-only usa ancora prudentemente il rendering completo.
 
-**Intervento:** bozza posseduta dalla sessione, salvataggio/ripristino esplicito alla selezione, possibilità di retry del prompt fallito. Chiarire se il contesto dell'editor attivo può appartenere a un progetto diverso da quello della chat.
+[WorkspaceFileLinks.java](../plugins/dev.eclipseacp.client/src/dev/eclipseacp/client/ui/WorkspaceFileLinks.java) memorizza anche gli esiti negativi e invalida la cache quando cambia il progetto. Il listener viene rimosso al retirement della sessione. Lo scroll automatico durante gli aggiornamenti avviene soltanto quando l'utente era già vicino al fondo.
 
-**Accettazione:** A → B → A preserva due bozze distinte; fallimento prima dell'invio consente retry senza ricostruire il testo.
+La retention del transcript e delle mappe tool resta una possibile policy di prodotto: imporre ora un taglio silenzioso cambierebbe la cronologia visibile e il contesto utente senza un limite concordato.
 
-### R13 — P2: reflection JDT senza dipendenza OSGi dichiarata
-
-**Evidenza statica, confidenza alta sul wiring mancante; da verificare in Equinox.** [EclipseContext.java](../plugins/dev.eclipseacp.client/src/dev/eclipseacp/client/ui/EclipseContext.java), linee 76–108 e 174–186; [MANIFEST.MF](../plugins/dev.eclipseacp.client/META-INF/MANIFEST.MF), linee 8–19.
-
-`Class.forName("org.eclipse.jdt.core.JavaCore")` usa il classloader del bundle, che non dichiara una dipendenza JDT né un import di quei package. Installare JDT nell'IDE non garantisce che il bundle possa caricarlo: `@java` può riportarlo assente anche quando è installato. La reflection sui metodi delle implementazioni aggiunge fragilità.
-
-Il commento che motiva la reflection di `ITextSelection` con un bundle Text opzionale è inoltre incoerente con le dipendenze testuali già richieste nel manifest.
-
-**Intervento:** adapter JDT opzionale, preferibilmente separato se serve supportare IDE senza JDT; in alternativa dipendenza opzionale dichiarata e comportamento verificato. Usare i contratti pubblici tipizzati per la parte già obbligatoria. [OSGi — Module Layer](https://docs.osgi.org/specification/osgi.core/8.0.0/framework.module.html).
-
-**Accettazione:** test in un'installazione con JDT e una senza; contesto Java disponibile nel primo caso, fallback comprensibile nel secondo.
-
-### R14 — P2: il costo di rendering cresce con l'intera conversazione
-
-**Evidenza statica; degrado da misurare.** [ChatTranscript.java](../plugins/dev.eclipseacp.client/src/dev/eclipseacp/client/ui/ChatTranscript.java), linee 118–136; [WorkspaceFileLinks.java](../plugins/dev.eclipseacp.client/src/dev/eclipseacp/client/ui/WorkspaceFileLinks.java), linee 23–53; [AcpChatView.java](../plugins/dev.eclipseacp.client/src/dev/eclipseacp/client/ui/AcpChatView.java), linee 271–273.
-
-Il batching a 40 ms è positivo, ma ogni aggiornamento ricostruisce il documento Markdown completo e sostituisce l'intero `main`. Il resolver può attraversare tutto il progetto per ogni nome file non risolto: `computeIfAbsent` non memorizza i risultati null, quindi il lavoro si ripete. Il tutto avviene sul percorso UI. La cache dei risultati positivi non viene invalidata dopo rename/delete o nuovi nomi ambigui.
-
-Il transcript e le mappe di tool crescono senza retention. Lo scroll è sempre riportato al fondo, anche mentre l'utente legge messaggi precedenti.
-
-**Intervento:** misurare prima; snapshot/rendering separati dalla UI, aggiornamento del messaggio corrente, indice dei file con invalidazione e cache negativa, budget per sessione. Scorrere automaticamente solo se l'utente segue già il fondo.
-
-**Accettazione:** benchmark con conversazione lunga e progetto grande, tempi del thread UI e memoria registrati; nessuna scansione completa ripetuta per un riferimento inesistente.
+**Verifica:** test unitari coprono la separazione HTML stabile/live e i confini dei messaggi del modello; la suite completa resta verde. Il benchmark UI su un workbench reale rientra nell'harness di R15.
 
 ### R15 — P2: mancano test del plugin nel runtime che lo esegue — risolto il 4 ottobre 2026
 
@@ -296,7 +274,7 @@ Riferimenti contrattuali: [AgentClient.java](../plugins/dev.eclipseacp.client/sr
 | UI | Widget, dialog, rendering e azioni utente | Servizi applicativi e API pubbliche SWT/JFace/workbench |
 | Composition root | Creazione e collegamento delle implementazioni | Adapter concreti e lifecycle Eclipse |
 
-Applicare questi confini prima come package e contratti. Valutare successivamente un bundle core senza UI e un adapter JDT opzionale: il beneficio deve essere verificabile in testabilità, installazione o riuso. Non esportare tutti i package per facilitare i test; gli export OSGi sono una decisione di API.
+Applicare questi confini prima come package e contratti. Valutare successivamente un bundle core senza UI: il beneficio deve essere verificabile in testabilità, installazione o riuso. Non esportare tutti i package per facilitare i test; gli export OSGi sono una decisione di API.
 
 ## 6. Ulteriori osservazioni e aspetti positivi
 
@@ -331,8 +309,8 @@ Stime orientative in **giorni-persona**, comprendenti implementazione e test mir
 | 0 — Baseline verificabile | Ripristinare build ufficiale in ambiente con cache scrivibile; registrare versioni risolte; aggiungere harness minimo Eclipse/workspace e fake agent controllabile. | R15, R16 | Nessuna | 2–3 gg | `mvn verify` e un test workspace passano; i risultati sono archiviati in CI. |
 | 1 — Integrità delle modifiche | Separare eventi/permessi/scritture; proteggere percorsi, verifica/apply e recupero batch; filtrare URL. | R01, R02, R04, R05, R07 | Fase 0 per regressioni workspace; R02 può procedere subito | Da ristimare | Nessuna scrittura da notifica o permesso rifiutato; successo write coerente; race/failure non perdono dati; URL fuori policy bloccati. |
 | 2 — Resilienza e lifecycle | I/O fuori UI, writer serializzato, stati di connessione, timeout, cancellazione e cleanup per sessione. | R06–R09, R18, R19, M06 | Contratti di Fase 1 | 6–9 gg | Agente silenzioso/terminato non blocca Eclipse; future e processi terminano entro le policy stabilite. |
-| 3 — Correttezza d'uso | Charset/buffer/nuovi file, preferenze transazionali, bozze per progetto, argomenti e UX essenziale. | R10–R12, R20, M03–M05 | Fasi 1–2 | 4–6 gg | Test di round trip, Cancel/Defaults, cambio progetto e invocazione multipiattaforma verdi. |
-| 4 — Consolidamento SOLID e prestazioni | Estrarre codec/lifecycle/port; rendere il core testabile senza workbench; adapter JDT corretto; rendering incrementale e indice file. | R13, R14, R18, analisi SOLID, M02, M08 | Invarianti stabilizzate e test precedenti | 6–10 gg | Nessuna regressione di protocollo; transport testabile headless; benchmark UI/memoria e test con/senza JDT. |
+| 3 — Correttezza d'uso | Preferenze transazionali, bozze per progetto, argomenti e UX essenziale. Charset/buffer/nuovi file sono fuori perimetro finché non vengono reintrodotte operazioni ACP sul workspace. | R11–R12, R20, M03–M05 | Fasi 1–2 | 4–6 gg | Test di Cancel/Defaults, cambio progetto e invocazione multipiattaforma verdi. |
+| 4 — Consolidamento SOLID e prestazioni | Estrarre codec/lifecycle/port; rendere il core testabile senza workbench; rendering incrementale e indice file. | R13, R14, R18, analisi SOLID, M02, M08 | Invarianti stabilizzate e test precedenti | 6–10 gg | Nessuna regressione di protocollo; transport testabile headless; benchmark UI/memoria. |
 | 5 — Compatibilità e rilascio | Test di install/update su IDE puliti, intervalli dipendenze, matrice runtime, documenti aggiornati e pipeline stabile. | R15, R16, M01, M07 | Fasi precedenti | 4–6 gg | Artifact installabile sulla matrice dichiarata, smoke test OS verdi e documentazione allineata alla versione pubblicata. |
 
 ### Prime unità di lavoro consigliate
@@ -340,7 +318,7 @@ Stime orientative in **giorni-persona**, comprendenti implementazione e test mir
 1. **PR A — Notifiche senza effetti:** isolare R01 con test che dimostri la mancata scrittura su richiesta di permesso rifiutata e notifiche ripetute. È il primo rischio da ridurre.
 2. **PR B — Transcript confinato:** R02 con test del renderer e controllo di navigazione; includere i renderer personalizzati nella verifica.
 3. **PR C — Operazioni workspace affidabili:** R04/R05/R07, con test di collisione e fallimento parziale; introdurre solo le astrazioni necessarie alla correzione.
-4. **PR D — Trasporto terminale e timeout:** R08/R09, diagnostica iniettata e test con EOF/frame invalidi/agente silenzioso; poi completare R06/R19.
+4. **PR D — Timeout e robustezza del trasporto:** R09, diagnostica iniettata e test con frame invalidi/agente silenzioso; poi completare R06/R19. R08 è risolto.
 
 Ogni PR deve contenere un comportamento verificabile, non un insieme di rinominazioni e refactoring scollegati. Aggiornare stato e test di accettazione degli ID interessati. La policy delle linked resource è una decisione di prodotto da registrare esplicitamente.
 
@@ -362,7 +340,7 @@ Una sola persona può coprire più ruoli. L'assegnazione serve a evitare che i p
 | Trasporto/processo | EOF, frame malformati/grandi, risposta mancante, backpressure stdin, stderr continuo, cancellazione, shutdown e launcher che non termina. | I fake attuali non esercitano stream e processo reali. |
 | PDE workspace | Linked resource/symlink, charset, dirty buffer, conflitto tra job, creazione cartelle, errore sul secondo file, letture e scritture dirette. | Qui si concentra il rischio di effetti sui dati. |
 | UI Eclipse | Dialog dopo chiusura, due progetti con bozze diverse, browser indisponibile, navigazione URL, tastiera, temi e DPI. | Verificare thread e lifecycle dei widget reali. |
-| Installazione | IDE minimo dichiarato, release più recente supportata, distribuzione con/senza JDT, update e uninstall. | Confermare wiring e assunzioni del repository p2. |
+| Installazione | IDE minimo dichiarato, release più recente supportata, update e uninstall. | Confermare wiring e assunzioni del repository p2. |
 
 Obiettivi iniziali proposti, da calibrare con una baseline reale:
 

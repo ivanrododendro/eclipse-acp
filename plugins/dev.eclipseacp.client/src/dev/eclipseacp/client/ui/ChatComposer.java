@@ -103,6 +103,7 @@ final class ChatComposer {
         prompt.setLayoutData(promptData);
         prompt.setMessage("Do anything");
         prompt.addModifyListener(event -> {
+            if (activeSession != null) activeSession.promptDraft = prompt.getText();
             int lines = Math.max(prompt.getLineCount(), prompt.getText().length()
                     / Math.max(20, prompt.getClientArea().width / 8) + 1);
             int height = Math.max(minimumPromptHeight, Math.min(160, lines * prompt.getLineHeight()));
@@ -192,7 +193,12 @@ final class ChatComposer {
 
     void update() {
         if (composer.isDisposed()) return;
-        activeSession = sessions.activeSession();
+        ChatSessionModel nextSession = sessions.activeSession();
+        if (activeSession != nextSession) {
+            saveDraft();
+            activeSession = nextSession;
+            restoreActiveDraft();
+        }
         composer.setEnabled(activeSession != null);
         if (activeSession == null) {
             resetWithoutSession();
@@ -201,7 +207,6 @@ final class ChatComposer {
         }
         boolean connected = activeSession != null && activeSession.isConnected();
         boolean busy = activeSession != null && activeSession.isBusy();
-        if (activeSession == null && !prompt.getText().isEmpty()) prompt.setText("");
         contextUsage.setUsage(activeSession == null ? null : activeSession.usage);
         showControl(contextUsage, contextUsage.isAvailable());
         updateSendButton();
@@ -240,15 +245,21 @@ final class ChatComposer {
     }
 
     private void sendPrompt() {
-        String text = prompt.getText().trim();
+        String draft = prompt.getText();
+        String text = draft.trim();
         if (text.isEmpty() || activeSession == null || !activeSession.isConnected() || activeSession.isBusy()) return;
+        activeSession.promptDraft = "";
         prompt.setText("");
-        if (chatPageVisible.getAsBoolean()) sendPrompt(activeSession, text);
+        if (chatPageVisible.getAsBoolean()) sendPrompt(activeSession, draft, text);
         else sendInNewSession.accept(text);
     }
 
     private void sendPrompt(ChatSessionModel session, String text) {
-        sessions.sendPrompt(session, EclipseContext.expand(text, session.project, page));
+        sendPrompt(session, text, text);
+    }
+
+    private void sendPrompt(ChatSessionModel session, String draft, String text) {
+        sessions.sendPrompt(session, draft, EclipseContext.expand(text, session.project, page));
     }
 
     void prepareInput(ChatSessionModel session, String initialPrompt) {
@@ -258,10 +269,33 @@ final class ChatComposer {
             if (session.pendingInputText != null) {
                 String text = session.pendingInputText;
                 session.pendingInputText = null;
-                prompt.setText(text);
-                prompt.setSelection(text.length());
+                restoreDraft(session, text);
             }
             setFocus();
+        }
+    }
+
+    void restoreDraft(ChatSessionModel session, String text) {
+        if (session == null) return;
+        session.promptDraft = text == null ? "" : text;
+        if (session == activeSession && !prompt.isDisposed()) {
+            prompt.setText(session.promptDraft);
+            prompt.setSelection(session.promptDraft.length());
+        }
+    }
+
+    private void saveDraft() {
+        if (activeSession != null && prompt != null && !prompt.isDisposed()) {
+            activeSession.promptDraft = prompt.getText();
+        }
+    }
+
+    private void restoreActiveDraft() {
+        if (prompt == null || prompt.isDisposed()) return;
+        String draft = activeSession == null ? "" : activeSession.promptDraft;
+        if (!prompt.getText().equals(draft)) {
+            prompt.setText(draft);
+            prompt.setSelection(draft.length());
         }
     }
 

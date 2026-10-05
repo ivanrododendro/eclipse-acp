@@ -75,6 +75,9 @@ public final class AcpChatView extends ViewPart {
                 @Override public void inputReady(ChatSessionModel session, String text) {
                     composer.prepareInput(session, text);
                 }
+                @Override public void draftReady(ChatSessionModel session, String text) {
+                    composer.restoreDraft(session, text);
+                }
             }, this::listenerFor);
 
     @Override

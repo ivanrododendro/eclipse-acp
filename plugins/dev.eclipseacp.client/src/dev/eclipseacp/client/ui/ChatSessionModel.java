@@ -43,6 +43,8 @@ final class ChatSessionModel {
     final Map<String, ConfigOption> configOptions = new LinkedHashMap<>();
     String sessionId;
     String sessionName = "New session";
+    /** Prompt text owned by this chat, rather than by the shared SWT editor. */
+    String promptDraft = "";
     String pendingInputText;
     String initialPrompt;
     String statusText = "Not connected";

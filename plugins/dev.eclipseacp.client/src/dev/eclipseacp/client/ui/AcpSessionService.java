@@ -48,6 +48,7 @@ final class AcpSessionService {
         void statusChanged(ChatSessionModel session);
         void transcriptChanged(ChatSessionModel session);
         void inputReady(ChatSessionModel session, String text);
+        void draftReady(ChatSessionModel session, String text);
     }
 
     private final IPreferenceStore preferences;
@@ -258,6 +259,13 @@ final class AcpSessionService {
     }
 
     void sendPrompt(ChatSessionModel session, String expanded) {
+        sendPrompt(session, expanded, expanded);
+    }
+
+    /**
+     * Sends the expanded ACP prompt while retaining the editor text for a retry if it fails.
+     */
+    void sendPrompt(ChatSessionModel session, String draft, String expanded) {
         if (session == null || !session.isConnected() || session.isBusy() || expanded == null || expanded.isBlank()) return;
         session.beginPrompt(expanded);
         List<PromptAttachment> attachments = List.copyOf(session.attachments);
@@ -273,7 +281,9 @@ final class AcpSessionService {
             if (session.client != client) return;
             if (failure != null) {
                 session.attachments.addAll(attachments);
+                session.promptDraft = draft == null ? "" : draft;
                 error(session, "Prompt failed", unwrap(failure));
+                presentation.draftReady(session, session.promptDraft);
             } else if (session.agentMessageOpen) {
                 append(session, "\n\n");
             }
