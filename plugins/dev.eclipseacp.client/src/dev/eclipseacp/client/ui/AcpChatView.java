@@ -72,6 +72,9 @@ public final class AcpChatView extends ViewPart {
                 @Override public void transcriptChanged(ChatSessionModel session) {
                     if (session == activeSession) transcript.update();
                 }
+                @Override public void transcriptReloaded(ChatSessionModel session) {
+                    if (session == activeSession) transcript.render();
+                }
                 @Override public void inputReady(ChatSessionModel session, String text) {
                     composer.prepareInput(session, text);
                 }

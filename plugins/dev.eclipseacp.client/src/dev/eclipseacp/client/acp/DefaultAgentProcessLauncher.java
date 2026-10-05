@@ -59,8 +59,22 @@ final class DefaultAgentProcessLauncher implements AgentProcessLauncher {
         } else {
             processCommand.add(resolvedCommand);
         }
-        processCommand.addAll(agentArguments);
+        processCommand.addAll(isWindowsScript(resolvedCommand) ? agentArguments
+                : agentArguments.stream().map(DefaultAgentProcessLauncher::escapeWindowsLiteralQuotes).toList());
         return processCommand;
+    }
+
+    /**
+     * JDKs using Windows' legacy command-line mode do not quote an argument that only contains a
+     * literal double quote. Escape it explicitly so CommandLineToArgvW preserves the quote instead
+     * of letting it delimit a following argument.
+     */
+    private static String escapeWindowsLiteralQuotes(String argument) {
+        if (!DefaultCommandResolver.isWindows()
+                || !Boolean.parseBoolean(System.getProperty("jdk.lang.Process.allowAmbiguousCommands", "true"))) {
+            return argument;
+        }
+        return argument.replace("\"", "\\\"");
     }
 
     private static boolean isWindowsScript(String command) {

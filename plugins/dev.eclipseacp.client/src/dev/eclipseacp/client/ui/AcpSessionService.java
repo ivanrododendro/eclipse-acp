@@ -47,6 +47,7 @@ final class AcpSessionService {
         void changed(ChatSessionModel session);
         void statusChanged(ChatSessionModel session);
         void transcriptChanged(ChatSessionModel session);
+        void transcriptReloaded(ChatSessionModel session);
         void inputReady(ChatSessionModel session, String text);
         void draftReady(ChatSessionModel session, String text);
     }
@@ -171,7 +172,12 @@ final class AcpSessionService {
                 error(session, "Could not start " + session.provider.name(), unwrap(failure));
                 return;
             }
-            if (restoredSessionId != null) session.statusText = "Session restored";
+            if (restoredSessionId != null) {
+                session.statusText = "Session restored";
+                // session/load replays messages while the Browser may still be installing its
+                // initial document. Rebuild it once the replay response has completed.
+                presentation.transcriptReloaded(session);
+            }
             connected(session);
         }));
     }

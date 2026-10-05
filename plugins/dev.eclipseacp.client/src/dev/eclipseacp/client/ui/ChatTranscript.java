@@ -31,6 +31,10 @@ final class ChatTranscript {
     private ChatSessionModel renderedSession;
     private String renderedMarkdown = "";
     private int renderedBoundary;
+    /** A setText page load has not installed the DOM used by incremental updates yet. */
+    private boolean documentLoading;
+    /** Transcript updates received while the document is loading are coalesced until completion. */
+    private boolean updatePending;
 
     ChatTranscript(Composite parent, IWorkbenchPage page, Supplier<ChatSessionModel> activeSession,
             Consumer<String> newSession, String fontFamily, int fontSizePoints) {
@@ -89,6 +93,11 @@ final class ChatTranscript {
         });
         transcript.addProgressListener(new ProgressAdapter() {
             @Override public void completed(ProgressEvent event) {
+                documentLoading = false;
+                if (updatePending) {
+                    updatePending = false;
+                    update();
+                }
                 installTranscriptSelectionTracking();
                 installZoomShortcuts();
                 scrollTranscriptToBottom();
@@ -122,12 +131,21 @@ final class ChatTranscript {
         renderedSession = snapshot.session();
         renderedMarkdown = snapshot.markdown();
         renderedBoundary = snapshot.boundary();
+        documentLoading = true;
+        updatePending = false;
         transcript.setText(chatDocument(snapshot));
         scrollTranscriptToBottom();
     }
 
     void update() {
         if (isDisposed()) return;
+        // A restored session may replay its history while setText is still loading. Browser.execute()
+        // reports successful script evaluation even when the transcript DOM is not present, so do
+        // not let an incremental update advance the rendered snapshot in that interval.
+        if (documentLoading) {
+            updatePending = true;
+            return;
+        }
         TranscriptSnapshot next = snapshot();
         if (next.session() != renderedSession || !next.markdown().startsWith(renderedMarkdown)) {
             render();

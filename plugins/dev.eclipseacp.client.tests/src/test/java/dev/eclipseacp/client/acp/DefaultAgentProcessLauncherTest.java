@@ -7,6 +7,7 @@ import static org.junit.Assert.assertThrows;
 
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.nio.charset.Charset;
 import java.nio.file.Path;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -36,8 +37,9 @@ public class DefaultAgentProcessLauncherTest {
 
     @Test
     public void nativeProcessReceivesExactParsedArguments() throws Exception {
+        String unicodeArgument = processSafeUnicodeArgument();
         List<String> arguments = DefaultAgentProcessLauncher.parseArguments(
-                "--name \"\" 'città 日本語' 'C:\\Program Files\\agent\\' 'a\"b' \"it's\"");
+                "--name \"\" '" + unicodeArgument + "' 'C:\\Program Files\\agent\\' 'a\"b' \"it's\"");
         List<String> javaArguments = new ArrayList<>(List.of("-cp",
                 Path.of(ArgumentEcho.class.getProtectionDomain().getCodeSource().getLocation().toURI()).toString(),
                 ArgumentEcho.class.getName()));
@@ -63,7 +65,7 @@ public class DefaultAgentProcessLauncherTest {
     public void windowsBatchLauncherReceivesEmptySpacedAndUnicodeArguments() throws Exception {
         org.junit.Assume.assumeTrue(DefaultCommandResolver.isWindows());
         Path fixture = Path.of(getClass().getResource("/argument-echo.cmd").toURI());
-        List<String> arguments = List.of("--name", "", "two words", "città 日本語", "C:\\tools\\agent");
+        List<String> arguments = List.of("--name", "", "two words", processSafeUnicodeArgument(), "C:\\tools\\agent");
         ProcessBuilder builder = new ProcessBuilder(
                 DefaultAgentProcessLauncher.buildProcessCommand(fixture.toString(), arguments));
         builder.environment().put("ACP_TEST_JAVA", Path.of(System.getProperty("java.home"), "bin", "java.exe").toString());
@@ -92,6 +94,12 @@ public class DefaultAgentProcessLauncherTest {
         assertEquals(1, process.destroyCount);
         assertEquals(1, process.destroyForciblyCount);
         assertFalse(process.isAlive());
+    }
+
+    private static String processSafeUnicodeArgument() {
+        String fullUnicode = "città 日本語";
+        Charset nativeCharset = Charset.forName(System.getProperty("sun.jnu.encoding", StandardCharsets.UTF_8.name()));
+        return nativeCharset.newEncoder().canEncode(fullUnicode) ? fullUnicode : "città";
     }
 
     private static final class StubbornProcess extends Process {

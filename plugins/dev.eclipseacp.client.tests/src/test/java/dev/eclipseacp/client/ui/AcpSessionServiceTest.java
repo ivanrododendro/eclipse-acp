@@ -192,6 +192,29 @@ public class AcpSessionServiceTest {
     }
 
     @Test
+    public void reloadsTheTranscriptAfterAStoredSessionHasBeenRestored() {
+        Harness h = new Harness();
+        h.service.openSessionFor(project("first"), null);
+        FakeClient initial = h.client();
+        initial.capabilities = historyCapabilities();
+        initial.connection.complete(null);
+        h.drainUi();
+
+        h.service.restore(info("saved", "/workspace/first"));
+        h.drainUi();
+        FakeClient restored = h.client();
+        restored.listener.onUserText("Earlier question");
+        h.drainUi();
+        int beforeCompletion = h.reloads;
+
+        restored.connection.complete(null);
+        h.drainUi();
+
+        assertEquals(beforeCompletion + 1, h.reloads);
+        assertTrue(h.service.activeSession().transcriptMarkdown.toString().contains("Earlier question"));
+    }
+
+    @Test
     public void rejectsCyclicSessionListCursors() throws Exception {
         Harness h = new Harness();
         h.open(project("first"));
@@ -487,6 +510,7 @@ public class AcpSessionServiceTest {
         ChatSessionModel draftSession;
         String draftText;
         int renders;
+        int reloads;
 
         Harness() { this(Runnable::run); }
 
@@ -528,6 +552,7 @@ public class AcpSessionServiceTest {
         @Override public void changed(ChatSessionModel session) { }
         @Override public void statusChanged(ChatSessionModel session) { }
         @Override public void transcriptChanged(ChatSessionModel session) { renders++; }
+        @Override public void transcriptReloaded(ChatSessionModel session) { reloads++; }
         @Override public void inputReady(ChatSessionModel session, String text) {
             ready = session;
             initialPrompt = text;
