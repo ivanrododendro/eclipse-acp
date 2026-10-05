@@ -42,7 +42,7 @@ La verifica alternativa ha usato una directory temporanea, `/private/tmp/eclipse
 
 ## 3. Best practice adottate e fonti
 
-Fonti consultate il 3 ottobre 2026. La target del progetto è Eclipse **2026-06**; le pagine `latest` descrivono la documentazione pubblicata al momento della consultazione. Prima di usare nuove API, verificarne la disponibilità nella target minima. Le Eclipse UI Guidelines sono esplicitamente una bozza mantenuta dalla comunità; qui sono usate come guida progettuale.
+Fonti consultate il 3 ottobre 2026. La target del progetto è Eclipse **2026-03**; le pagine `latest` descrivono la documentazione pubblicata al momento della consultazione. Prima di usare nuove API, verificarne la disponibilità nella target minima. Le Eclipse UI Guidelines sono esplicitamente una bozza mantenuta dalla comunità; qui sono usate come guida progettuale.
 
 | Area | Pratica applicabile | Fonte primaria |
 | --- | --- | --- |
@@ -205,17 +205,17 @@ Resta utile ampliare gradualmente l'harness con test UI mirati e una matrice CI 
 
 **Verifica:** `mvnd -T1 verify` esegue 55 test unitari e 2 test nel runtime Equinox, tutti verdi. R10 richiede nuovi test solo se vengono reintrodotte operazioni ACP sul workspace.
 
-### R16 — P2: compatibilità OSGi e installabilità non sono abbastanza vincolate — risolto il 4 ottobre 2026
+### R16 — P2: compatibilità OSGi e installabilità non sono abbastanza vincolate — corretto il 5 ottobre 2026
 
-**Risolto sul codice corrente.** La [target](../releng/dev.eclipseacp.target/dev.eclipseacp.target.target) fissa ora le IU effettivamente risolte dalla baseline 2026-06: Eclipse Platform 4.40, Gson 2.14.0 e CommonMark 0.28.0. Il build non cambia più dipendenze quando il repository composito viene aggiornato.
+**Risolto sul codice corrente.** La [target](../releng/dev.eclipseacp.target/dev.eclipseacp.target.target) fissa ora le IU effettivamente risolte dalla baseline 2026-03: Eclipse Platform 4.39, Gson 2.13.2 e CommonMark 0.27.1. Il build non cambia più dipendenze quando il repository composito viene aggiornato.
 
 Il [manifest](../plugins/dev.eclipseacp.client/META-INF/MANIFEST.MF) dichiara per ogni bundle l'intervallo dalla versione verificata nella baseline fino alla major successiva esclusa. La versione Gson dei test deriva dalla stessa proprietà del reactor. Questi limiti corrispondono a versioni realmente provate e al confine di compatibilità major OSGi, non a numeri presunti.
 
 L'isolamento del repository resta intenzionale: le librerie non-platform sono prerequisiti già forniti dalle release Eclipse supportate. [verify-p2-installation.sh](../scripts/verify-p2-installation.sh) crea un profilo pulito con p2 director, installa Eclipse Platform e la feature ACP, verifica la root installata, la disinstalla e controlla che il profilo host resti integro.
 
-La CI esegue questa prova sia sulla baseline 2026-06 sia sulla release recente 2026-09. Un update fra due versioni ACP pubblicate resta un gate di release da aggiungere quando saranno disponibili due repository con versioni crescenti; i metadati p2 di aggiornamento vengono comunque validati dal build del repository. [OSGi — Module Layer](https://docs.osgi.org/specification/osgi.core/8.0.0/framework.module.html).
+La CI esegue questa prova sulla baseline 2026-03 e sulle release recenti 2026-06 e 2026-09. Un update fra due versioni ACP pubblicate resta un gate di release da aggiungere quando saranno disponibili due repository con versioni crescenti; i metadati p2 di aggiornamento vengono comunque validati dal build del repository. [OSGi — Module Layer](https://docs.osgi.org/specification/osgi.core/8.0.0/framework.module.html).
 
-**Verifica:** `mvnd -T1 clean verify` è verde con 55 test unitari e 2 test Equinox. Le prove p2 install/uninstall sono verdi su Eclipse Platform 4.40 (2026-06) e 4.41 (2026-09), senza bundle irrisolti.
+**Verifica:** `mvnd -T1 clean verify` è verde con 67 test unitari (uno ignorato) e 2 test Equinox. Le prove p2 install/uninstall sulla baseline Eclipse Platform 4.39 (2026-03), oltre che sulle release 2026-06 e 2026-09, devono essere verdi senza bundle irrisolti.
 
 ### R18 — P2: logging troppo accoppiato al workbench e contenuti diagnostici non filtrati — risolto il 4 ottobre 2026
 
