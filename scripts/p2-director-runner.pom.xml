@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <!--
+    Standalone Maven context for scripts/verify-p2-installation.sh.
+    This deliberately does not inherit the build's target-platform configuration:
+    compatibility jobs receive the built p2 repository, not the reactor artifacts.
+  -->
+  <groupId>dev.eclipseacp.verification</groupId>
+  <artifactId>p2-director-runner</artifactId>
+  <version>1.0.0</version>
+  <packaging>pom</packaging>
+</project>

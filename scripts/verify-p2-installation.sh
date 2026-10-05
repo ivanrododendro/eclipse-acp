@@ -20,7 +20,9 @@ bundle_pool="$work_dir/bundle-pool"
 profile="EclipseACPCompatibility"
 director=(
   "$maven_command" --batch-mode --no-transfer-progress
-  -f "$project_dir/releng/dev.eclipseacp.repository/pom.xml"
+  # Keep the verification independent from the build reactor. The compatibility
+  # jobs download only the p2 repository and start with an empty Maven repository.
+  -f "$project_dir/scripts/p2-director-runner.pom.xml"
   "org.eclipse.tycho:tycho-p2-director-plugin:5.0.4:director"
   "-Ddestination=$destination"
   "-Dbundlepool=$bundle_pool"
