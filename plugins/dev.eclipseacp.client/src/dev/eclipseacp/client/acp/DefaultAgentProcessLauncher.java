@@ -97,14 +97,22 @@ final class DefaultAgentProcessLauncher implements AgentProcessLauncher {
         return false;
     }
 
+    /**
+     * Whitespace separates tokens outside single/double quotes. Quoted and unquoted
+     * fragments concatenate; even an empty quoted fragment starts a token. Backslashes
+     * are always literal: use the other quote delimiter to include a literal quote.
+     * This is an argument editor grammar, not a shell (no expansion or substitution).
+     */
     static List<String> parseArguments(String commandLine) {
         List<String> result = new ArrayList<>();
         StringBuilder current = new StringBuilder();
         boolean quoted = false;
+        boolean tokenStarted = false;
         char quote = 0;
         for (int index = 0; index < commandLine.length(); index++) {
             char character = commandLine.charAt(index);
             if (character == '\'' || character == '"') {
+                tokenStarted = true;
                 if (!quoted) {
                     quoted = true;
                     quote = character;
@@ -114,17 +122,19 @@ final class DefaultAgentProcessLauncher implements AgentProcessLauncher {
                     current.append(character);
                 }
             } else if (Character.isWhitespace(character) && !quoted) {
-                if (!current.isEmpty()) {
+                if (tokenStarted) {
                     result.add(current.toString());
                     current.setLength(0);
+                    tokenStarted = false;
                 }
             } else {
+                tokenStarted = true;
                 current.append(character);
             }
         }
         if (quoted) throw new IllegalArgumentException("Unterminated quote in ACP agent arguments");
-        if (!current.isEmpty()) result.add(current.toString());
-        return result;
+        if (tokenStarted) result.add(current.toString());
+        return List.copyOf(result);
     }
 
     private static Thread streamStandardError(Process process, Consumer<String> diagnosticConsumer,

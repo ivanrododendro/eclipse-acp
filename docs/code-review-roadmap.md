@@ -261,15 +261,15 @@ Le operazioni ACP sul workspace citate originariamente non esistono più dopo R1
 
 **Verifica:** `mvnd -T1 clean verify` è verde con 63 test unitari e 2 test Equinox. I test coprono retirement prima e durante un prompt, cleanup al disconnect, chiusura durante initialize ed escalation su un processo controllato che ignora `destroy()`.
 
-### R20 — P2: parsing degli argomenti perde valori validi
+### R20 — P2: parsing degli argomenti perde valori validi — parser corretto il 5 ottobre 2026; verifica Windows pendente
 
-**Confermato con probe.** [DefaultAgentProcessLauncher.java](../plugins/dev.eclipseacp.client/src/dev/eclipseacp/client/acp/DefaultAgentProcessLauncher.java), linee 48–59 e 96–123.
+**Bug ancora attuale e corretto.** [DefaultAgentProcessLauncher.java](../plugins/dev.eclipseacp.client/src/dev/eclipseacp/client/acp/DefaultAgentProcessLauncher.java) distingue ora un token iniziato da un buffer non vuoto: `--name "" next` conserva tutti e tre gli argomenti. Il risultato è una lista immutabile passata al process builder.
 
-Il parser aggiunge un token solo se il buffer non è vuoto: `--name "" next` diventa `--name next`, cambiando il significato del comando. Non esiste una grammatica documentata per escape e quote letterali. Su Windows gli script passano da `cmd /c`, che aggiunge un diverso livello di interpretazione; la correttezza dei metacaratteri non è provata dai due test del resolver.
+La grammatica è documentata nel codice e nel [README](../README.md): gli spazi separano i token fuori dalle quote; frammenti adiacenti si concatenano; i backslash restano letterali; una quota letterale si inserisce usando l'altro delimitatore. Le quote non chiuse sono rifiutate. Non viene introdotta espansione shell nel parser.
 
-**Intervento:** rappresentare internamente gli argomenti come lista, conservando eventualmente un editor testuale con grammatica esplicita. Testare l'invocazione Windows tramite uno script fixture che restituisca gli argomenti ricevuti; non classificare come vulnerabilità di shell un comando scelto intenzionalmente dall'utente senza distinguere il modello di fiducia.
+Un processo Java fixture restituisce gli argomenti in base64 e verifica il passaggio reale di stringhe vuote, spazi, Unicode, quote e percorsi Windows. Una fixture `.cmd` verifica separatamente token vuoti, spazi, Unicode e backslash su Windows; il nuovo job CI `windows-arguments` esegue la suite su quel sistema.
 
-**Accettazione:** token vuoti, spazi, Unicode, quote e percorsi con backslash attraversano l'invocazione senza alterazioni sui sistemi supportati.
+**Verifica locale:** `mvnd -T1 clean verify` verde: 66 test unitari superati, un test specifico Windows saltato su macOS, 2 test Equinox superati. La verifica Windows resta pendente fino all'esecuzione del job CI. Gli script batch conservano il livello di interpretazione di `cmd.exe`: il README esplicita questo limite e suggerisce l'eseguibile nativo per argomenti con quote letterali o metacaratteri. L'accettazione completa per argomenti arbitrari via batch non è quindi dichiarata soddisfatta.
 
 ## 5. Analisi SOLID e direzione architetturale
 

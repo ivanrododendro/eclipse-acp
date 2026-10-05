@@ -9,6 +9,24 @@ permissions:
   contents: read
 
 jobs:
+  windows-arguments:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+      - name: Verify native and batch argument invocation
+        run: mvn --batch-mode --no-transfer-progress -pl releng/dev.eclipseacp.target,plugins/dev.eclipseacp.client.tests -am test
+      - name: Upload Windows test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eclipse-acp-windows-test-reports
+          path: plugins/dev.eclipseacp.client.tests/target/surefire-reports/**
+
   build:
     runs-on: ubuntu-latest
     steps:

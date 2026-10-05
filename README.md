@@ -24,6 +24,18 @@ If the listing does not appear in Marketplace, install from the p2 update site v
 
 The selected agent handles authentication and API keys. Permission requests are shown to the user, with rejection selected by default when the agent offers that option.
 
+The provider **Arguments** field is parsed into a list. Whitespace separates arguments;
+single or double quotes group text, including empty arguments (`--name "" next`).
+Adjacent fragments concatenate (`prefix" suffix"` is one argument). Backslashes are
+literal, including in Windows paths: `'C:\Program Files\agent\'` retains its trailing
+backslash. Include a literal double quote inside single quotes (`'a"b'`) or an
+apostrophe inside double quotes (`"it's"`). Unclosed quotes are rejected. There is no
+shell expansion of variables, wildcards or escape sequences in this editor grammar.
+Native executables receive this list directly. Windows `.cmd`/`.bat` launchers still
+pass through `cmd.exe`; its expansion and quoting rules also apply. For arguments
+containing shell metacharacters or literal quotes, prefer the native executable
+(for example `node.exe` with the agent's JavaScript entry point).
+
 ## Build and development
 
 Requires JDK 21 and Maven 3.9 or newer. The Tycho build uses Eclipse 2026-06 as its target platform:
