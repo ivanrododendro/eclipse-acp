@@ -8,7 +8,6 @@ import java.nio.file.Path;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Queue;
@@ -30,27 +29,18 @@ import dev.eclipseacp.client.agent.SessionInfo;
 import dev.eclipseacp.client.agent.SessionPage;
 import dev.eclipseacp.client.agent.ToolCall;
 import dev.eclipseacp.client.preferences.AcpPreferences;
+import dev.eclipseacp.client.preferences.AgentProviderRegistry;
 
 public class AcpSessionServiceTest {
     @Test
-    public void ranksSlashCommandsByExactPrefixAndSubstringMatch() {
-        Map<String, String> commands = new LinkedHashMap<>();
-        commands.put("inspect", "");
-        commands.put("inspect-all", "");
-        commands.put("pre-inspect", "");
-
-        assertEquals(List.of("inspect", "inspect-all", "pre-inspect"),
-                ChatComposer.slashCommandMatches(commands, "inspect"));
-        assertEquals(List.of("inspect", "inspect-all", "pre-inspect"),
-                ChatComposer.slashCommandMatches(commands, "INSP"));
-    }
-
-    @Test
     public void readsTheActiveProviderAgainForEachNewSession() {
         Harness h = new Harness();
-        assertEquals("codex", h.service.newSessionConfiguration().provider().id());
+        assertEquals("codex", h.open(project("first")).provider.id());
         h.preferences.setValue(AcpPreferences.ACTIVE_PROVIDER, "other");
-        assertEquals("other", h.service.newSessionConfiguration().provider().id());
+        h.preferences.setValue(AcpPreferences.HIDE_AGENT_COMMANDS_IN_CHAT, true);
+        ChatSessionModel second = h.open(project("second"));
+        assertEquals("other", second.provider.id());
+        assertTrue(second.hideAgentCommands);
     }
 
     @Test
@@ -212,23 +202,6 @@ public class AcpSessionServiceTest {
 
         assertEquals(beforeCompletion + 1, h.reloads);
         assertTrue(h.service.activeSession().transcriptMarkdown.toString().contains("Earlier question"));
-    }
-
-    @Test
-    public void rejectsCyclicSessionListCursors() throws Exception {
-        Harness h = new Harness();
-        h.open(project("first"));
-        FakeClient client = h.client();
-        client.pages.put("", new SessionPage(List.of(), "again"));
-        client.pages.put("again", new SessionPage(List.of(), "again"));
-
-        CompletableFuture<List<SessionInfo>> result = h.service.listSessions(client, Path.of("/workspace/first"));
-        try {
-            result.get(2, TimeUnit.SECONDS);
-            throw new AssertionError("expected repeated cursor to fail");
-        } catch (java.util.concurrent.ExecutionException expected) {
-            assertTrue(expected.getCause().getMessage().contains("repeated cursor"));
-        }
     }
 
     @Test
@@ -519,11 +492,13 @@ public class AcpSessionServiceTest {
                     "[{\"id\":\"codex\",\"name\":\"Codex\",\"command\":\"codex-acp\",\"arguments\":\"\"},"
                     + "{\"id\":\"other\",\"name\":\"Other\",\"command\":\"other-acp\",\"arguments\":\"\"}]");
             preferences.setValue(AcpPreferences.ACTIVE_PROVIDER, "codex");
-            service = new AcpSessionService(preferences, ui::add, this, this::listener, (session, listener) -> {
+            service = new AcpSessionService(() -> new AcpSessionService.SessionConfiguration(
+                    new AgentProviderRegistry(preferences).active(),
+                    preferences.getBoolean(AcpPreferences.HIDE_AGENT_COMMANDS_IN_CHAT)), ui::add, this, this::listener, (session, listener) -> {
                 FakeClient client = new FakeClient(listener);
                 clients.add(client);
                 return client;
-            }, io);
+            }, new SessionOperationScope(io));
         }
 
         private AgentListener listener(ChatSessionModel session) {

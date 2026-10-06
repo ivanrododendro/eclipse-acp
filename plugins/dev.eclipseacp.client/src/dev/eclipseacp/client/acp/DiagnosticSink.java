@@ -4,7 +4,7 @@ import java.util.function.Supplier;
 
 import dev.eclipseacp.client.AcpLog;
 
-/** Diagnostic boundary used by the protocol transport, including in headless tests. */
+/** Diagnostic boundary used by the ACP adapter and transport, including in headless tests. */
 interface DiagnosticSink {
     void info(String message);
 

@@ -13,7 +13,10 @@ import java.io.StringReader;
 import java.io.StringWriter;
 import java.io.Writer;
 import java.nio.file.Path;
+import java.nio.file.Files;
+import java.util.Base64;
 import java.util.concurrent.CompletableFuture;
+import java.util.function.Supplier;
 
 import org.junit.Test;
 
@@ -21,24 +24,126 @@ import com.google.gson.JsonObject;
 import dev.eclipseacp.client.agent.AgentListener;
 import dev.eclipseacp.client.agent.PermissionOption;
 import dev.eclipseacp.client.agent.ToolCall;
+import dev.eclipseacp.client.agent.PromptAttachment;
 
 public class AcpClientProtocolTest {
     @Test
+    public void usesInjectedDiagnosticsThroughoutTheClientLifecycle() throws Exception {
+        FakeTransport transport = new FakeTransport();
+        RecordingDiagnostics diagnostics = new RecordingDiagnostics();
+        AcpClient client = new AcpClient("agent", "", new CapturingListener(), List.of(),
+                (command, arguments, workingDirectory, diagnosticConsumer, diagnosticErrorConsumer) -> new FakeProcess(),
+                (reader, writer, handler, errorHandler) -> transport, diagnostics);
+        try {
+            client.connect(Path.of("/workspace/project")).join();
+            client.prompt("private prompt content").join();
+            client.onNotification("session/update", FakeTransport.agentTextUpdate("session-1", "private reply"));
+            client.cancel();
+        } finally {
+            client.close();
+        }
+
+        assertTrue(diagnostics.messages.stream().anyMatch(message -> message.contains("connection established")));
+        assertTrue(diagnostics.messages.stream().anyMatch(message -> message.contains("session/prompt")));
+        assertTrue(diagnostics.messages.stream().anyMatch(message -> message.contains("session/cancel")));
+        assertTrue(diagnostics.messages.stream().anyMatch(message -> message.contains("Closing ACP connection")));
+        assertFalse(diagnostics.messages.stream().anyMatch(message -> message.contains("private")));
+        assertEquals(1, diagnostics.traces.size());
+        assertTrue(diagnostics.traces.get(0).get().contains("session/update"));
+    }
+
+    @Test
+    public void routesLaunchErrorsAndCleanupWarningsToTheInjectedSink() {
+        RecordingDiagnostics diagnostics = new RecordingDiagnostics();
+        AcpClient client = new AcpClient("agent", "", new CapturingListener(), List.of(),
+                (command, arguments, workingDirectory, diagnosticConsumer, diagnosticErrorConsumer) -> {
+                    throw new IOException("launch failed");
+                }, (reader, writer, handler, errorHandler) -> new FakeTransport(), diagnostics);
+        try {
+            assertTrue(client.connect(Path.of("project")).isCompletedExceptionally());
+            assertEquals("launch failed", diagnostics.errors.get(0).getMessage());
+        } finally {
+            client.close();
+        }
+
+        AgentProcess process = new AgentProcess() {
+            @Override public Reader standardOutput() { return new StringReader(""); }
+            @Override public Writer standardInput() { return new StringWriter(); }
+            @Override public void close() throws IOException { throw new IOException("cleanup failed"); }
+        };
+        AcpClient cleanupClient = new AcpClient("agent", "", new CapturingListener(), List.of(),
+                (command, arguments, workingDirectory, diagnosticConsumer, diagnosticErrorConsumer) -> process,
+                (reader, writer, handler, errorHandler) -> new FakeTransport(), diagnostics);
+        try {
+            cleanupClient.connect(Path.of("project")).join();
+        } finally {
+            cleanupClient.close();
+        }
+        assertEquals("cleanup failed", diagnostics.warnings.get(0).getMessage());
+    }
+
+    @Test
     public void replacesSessionWithoutReinitializingTheConnection() {
         FakeTransport transport = new FakeTransport();
-        AgentListener first = new CapturingListener();
-        AgentListener second = new CapturingListener();
+        CapturingListener first = new CapturingListener();
+        CapturingListener second = new CapturingListener();
         AcpClient client = new AcpClient("agent", "", first, List.of(),
                 (command, arguments, workingDirectory, diagnosticConsumer, diagnosticErrorConsumer) ->
                         new FakeProcess(),
                 (reader, writer, handler, errorHandler) -> transport);
 
-        client.connect(Path.of("/workspace/project")).join();
-        client.startNewSession(Path.of("/workspace/project"), second).join();
+        try {
+            client.connect(Path.of("/workspace/project")).join();
+            client.startNewSession(Path.of("/workspace/project"), second).join();
 
-        assertEquals(List.of("initialize", "session/new", "session/close", "session/new"), transport.methods);
-        assertEquals(1, transport.count("initialize"));
-        assertEquals("session-2", client.sessionId());
+            assertEquals(List.of("initialize", "session/new", "session/close", "session/new"), transport.methods);
+            assertEquals(1, transport.count("initialize"));
+            assertEquals("session-2", client.sessionId());
+            client.onNotification("session/update", FakeTransport.agentTextUpdate("session-1", "retired"));
+            assertNull(second.text);
+            client.onNotification("session/update", FakeTransport.agentTextUpdate("session-2", "new session"));
+            assertEquals("new session", second.text);
+            assertNull(first.text);
+        } finally {
+            client.close();
+        }
+    }
+
+    @Test
+    public void attachmentPromptIncludesEveryAttachmentAndWaitsForTheAgentResponse() throws Exception {
+        FakeTransport transport = new FakeTransport();
+        transport.promptResponse = new CompletableFuture<>();
+        Path image = Files.createTempFile("acp-contract-", ".png");
+        Path audio = Files.createTempFile("acp-contract-", ".wav");
+        byte[] imageBytes = { 1, 2, 3 };
+        byte[] audioBytes = { 4, 5, 6 };
+        AcpClient client = new AcpClient("agent", "", new CapturingListener(), List.of(),
+                (command, arguments, workingDirectory, diagnosticConsumer, diagnosticErrorConsumer) -> new FakeProcess(),
+                (reader, writer, handler, errorHandler) -> transport);
+        try {
+            Files.write(image, imageBytes);
+            Files.write(audio, audioBytes);
+            client.connect(Path.of("/workspace/project")).join();
+            CompletableFuture<Void> prompt = client.prompt("describe", List.of(
+                    new PromptAttachment(image, "image/png"), new PromptAttachment(audio, "audio/wav")));
+
+            var content = transport.promptParams.getAsJsonArray("prompt");
+            assertEquals(3, content.size());
+            assertEquals("describe", content.get(0).getAsJsonObject().get("text").getAsString());
+            assertEquals("image", content.get(1).getAsJsonObject().get("type").getAsString());
+            assertEquals("image/png", content.get(1).getAsJsonObject().get("mimeType").getAsString());
+            assertEquals(Base64.getEncoder().encodeToString(imageBytes), content.get(1).getAsJsonObject().get("data").getAsString());
+            assertEquals("audio", content.get(2).getAsJsonObject().get("type").getAsString());
+            assertEquals("audio/wav", content.get(2).getAsJsonObject().get("mimeType").getAsString());
+            assertEquals(Base64.getEncoder().encodeToString(audioBytes), content.get(2).getAsJsonObject().get("data").getAsString());
+            assertFalse(prompt.isDone());
+            transport.promptResponse.complete(new JsonObject());
+            prompt.join();
+        } finally {
+            client.close();
+            Files.deleteIfExists(image);
+            Files.deleteIfExists(audio);
+        }
     }
 
     @Test
@@ -92,114 +197,6 @@ public class AcpClientProtocolTest {
 
         assertFalse(transport.initializeParams.getAsJsonObject("clientCapabilities").has("fs"));
         client.close();
-    }
-
-    @Test
-    public void parsesV1AgentCapabilitiesAtTheirSpecifiedLocations() {
-        JsonObject caps = new JsonObject();
-        caps.addProperty("loadSession", true);
-        JsonObject sessions = new JsonObject();
-        sessions.add("list", new JsonObject());
-        sessions.add("resume", new JsonObject());
-        sessions.add("close", new JsonObject());
-        sessions.add("delete", new JsonObject());
-        sessions.add("additionalDirectories", new JsonObject());
-        caps.add("sessionCapabilities", sessions);
-        JsonObject prompt = new JsonObject();
-        prompt.addProperty("image", true);
-        prompt.addProperty("audio", true);
-        prompt.addProperty("embeddedContext", true);
-        caps.add("promptCapabilities", prompt);
-        JsonObject mcp = new JsonObject();
-        mcp.addProperty("http", true);
-        mcp.addProperty("sse", true);
-        caps.add("mcpCapabilities", mcp);
-        JsonObject auth = new JsonObject();
-        auth.add("logout", new JsonObject());
-        caps.add("auth", auth);
-        JsonObject result = new JsonObject();
-        result.add("agentCapabilities", caps);
-
-        var actual = AcpClient.capabilities(result);
-
-        assertTrue(actual.loadSession());
-        assertTrue(actual.sessionList());
-        assertTrue(actual.sessionResume());
-        assertTrue(actual.sessionClose());
-        assertTrue(actual.sessionDelete());
-        assertTrue(actual.additionalDirectories());
-        assertTrue(actual.promptImage());
-        assertTrue(actual.promptAudio());
-        assertTrue(actual.promptEmbeddedContext());
-        assertTrue(actual.mcpHttp());
-        assertTrue(actual.mcpSse());
-        assertTrue(actual.logout());
-    }
-
-    @Test
-    public void treatsOmittedCapabilitiesAsUnsupported() {
-        var actual = AcpClient.capabilities(new JsonObject());
-
-        assertFalse(actual.loadSession());
-        assertFalse(actual.sessionList());
-        assertFalse(actual.sessionClose());
-        assertFalse(actual.promptImage());
-        assertFalse(actual.logout());
-    }
-
-    @Test
-    public void parsesAgentAndTerminalAuthenticationMethods() {
-        JsonObject result = new JsonObject();
-        var methods = new com.google.gson.JsonArray();
-        JsonObject agent = new JsonObject();
-        agent.addProperty("id", "web-login");
-        agent.addProperty("name", "Sign in");
-        methods.add(agent);
-        JsonObject terminal = new JsonObject();
-        terminal.addProperty("id", "terminal-login");
-        terminal.addProperty("type", "terminal");
-        terminal.addProperty("description", "Use browser login");
-        var args = new com.google.gson.JsonArray();
-        args.add("--login");
-        terminal.add("args", args);
-        JsonObject env = new JsonObject();
-        env.addProperty("ACP_INTERACTIVE_LOGIN", "1");
-        terminal.add("env", env);
-        methods.add(terminal);
-        result.add("authMethods", methods);
-
-        var actual = AcpClient.authenticationMethods(result);
-
-        assertEquals(2, actual.size());
-        assertEquals("agent", actual.get(0).type());
-        assertFalse(actual.get(0).isTerminal());
-        assertTrue(actual.get(1).isTerminal());
-        assertEquals("--login", actual.get(1).arguments().get(0));
-        assertEquals("1", actual.get(1).environment().get("ACP_INTERACTIVE_LOGIN"));
-    }
-
-    @Test
-    public void retainsSessionListMetadataAndPaginationCursor() {
-        JsonObject session = new JsonObject();
-        session.addProperty("sessionId", "session-1");
-        session.addProperty("cwd", "/workspace");
-        session.addProperty("title", "Implement ACP");
-        session.addProperty("updatedAt", "2026-09-05T12:00:00Z");
-        var additionalDirectories = new com.google.gson.JsonArray();
-        additionalDirectories.add("/shared");
-        session.add("additionalDirectories", additionalDirectories);
-        var sessions = new com.google.gson.JsonArray();
-        sessions.add(session);
-        JsonObject result = new JsonObject();
-        result.add("sessions", sessions);
-        result.addProperty("nextCursor", "opaque-next-page");
-
-        var page = AcpClient.sessionPage(result);
-
-        assertEquals("opaque-next-page", page.nextCursor());
-        assertEquals(1, page.sessions().size());
-        assertEquals("Implement ACP", page.sessions().get(0).title());
-        assertEquals("/shared", page.sessions().get(0).additionalDirectories().get(0));
     }
 
     @Test
@@ -308,6 +305,61 @@ public class AcpClientProtocolTest {
         assertTrue(connecting.isCompletedExceptionally());
     }
 
+    @Test
+    public void closingCancelsElicitationAndRejectsLaterDialogs() {
+        CompletableFuture<String> answer = new CompletableFuture<>();
+        int[] requests = { 0 };
+        CapturingListener listener = new CapturingListener() {
+            @Override public CompletableFuture<String> requestElicitation(
+                    dev.eclipseacp.client.agent.ElicitationRequest request) {
+                requests[0]++;
+                return answer;
+            }
+        };
+        AcpClient client = new AcpClient("unused", "", listener);
+        CompletableFuture<com.google.gson.JsonElement> response = client.onRequest("elicitation/create", new JsonObject());
+        assertFalse(response.isDone());
+
+        client.close();
+        client.close();
+
+        assertEquals("cancel", response.join().getAsJsonObject().get("action").getAsString());
+        assertTrue(answer.isDone());
+        assertNull(answer.join());
+        assertEquals("cancel", client.onRequest("elicitation/create", new JsonObject())
+                .join().getAsJsonObject().get("action").getAsString());
+        assertEquals(1, requests[0]);
+    }
+
+    @Test
+    public void transportLossCancelsPendingPermissionAndItsSource() {
+        PendingPermissionListener listener = new PendingPermissionListener();
+        FakeTransport transport = new FakeTransport();
+        var terminal = new java.util.concurrent.atomic.AtomicReference<java.util.function.Consumer<Throwable>>();
+        AcpClient client = new AcpClient("agent", "", listener, List.of(),
+                (command, arguments, directory, diagnosticConsumer, diagnosticErrorConsumer) -> new FakeProcess(),
+                (reader, writer, handler, errorHandler) -> {
+                    terminal.set(errorHandler);
+                    return transport;
+                });
+        try {
+            client.connect(Path.of("/workspace/project")).join();
+            JsonObject params = new JsonObject();
+            params.addProperty("sessionId", client.sessionId());
+            CompletableFuture<com.google.gson.JsonElement> response = client.onRequest("session/request_permission", params);
+            assertFalse(response.isDone());
+
+            terminal.get().accept(new IOException("transport lost"));
+
+            assertEquals("cancelled", response.join().getAsJsonObject().getAsJsonObject("outcome")
+                    .get("outcome").getAsString());
+            assertTrue(listener.permission.isDone());
+            assertNull(listener.permission.join());
+        } finally {
+            client.close();
+        }
+    }
+
     private static JsonObject diff(String path, String oldText, String newText) {
         JsonObject diff = new JsonObject();
         diff.addProperty("type", "diff");
@@ -326,6 +378,17 @@ public class AcpClientProtocolTest {
         @Override public CompletableFuture<String> requestPermission(String title, List<PermissionOption> options) {
             return CompletableFuture.completedFuture(null);
         }
+    }
+
+    private static final class RecordingDiagnostics implements DiagnosticSink {
+        final List<String> messages = new ArrayList<>();
+        final List<Supplier<String>> traces = new ArrayList<>();
+        final List<Throwable> errors = new ArrayList<>();
+        final List<Throwable> warnings = new ArrayList<>();
+        @Override public void info(String message) { messages.add(message); }
+        @Override public void trace(Supplier<String> message) { traces.add(message); }
+        @Override public void warn(String message, Throwable error) { messages.add(message); warnings.add(error); }
+        @Override public void error(String message, Throwable error) { messages.add(message); errors.add(error); }
     }
 
     private static final class PendingPermissionListener extends CapturingListener {
@@ -360,6 +423,8 @@ public class AcpClientProtocolTest {
         private int sessionNumber;
         private JsonRpcHandler handler;
         private JsonObject initializeParams;
+        private JsonObject promptParams;
+        private CompletableFuture<JsonObject> promptResponse = CompletableFuture.completedFuture(new JsonObject());
         private boolean sendUpdateBeforeSecondSessionResponse;
         private boolean sendOldUpdateBeforeSecondSessionResponse;
 
@@ -385,6 +450,9 @@ public class AcpClientProtocolTest {
                     handler.onNotification("session/update", agentTextUpdate("session-1", "late old update"));
                 }
                 result.addProperty("sessionId", newSessionId);
+            } else if ("session/prompt".equals(method)) {
+                promptParams = params.deepCopy();
+                return promptResponse;
             }
             return CompletableFuture.completedFuture(result);
         }

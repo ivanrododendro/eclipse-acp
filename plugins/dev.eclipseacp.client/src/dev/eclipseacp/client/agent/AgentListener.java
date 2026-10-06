@@ -3,7 +3,14 @@ package dev.eclipseacp.client.agent;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 
-/** UI-facing callback port; protocol-specific messages are converted before reaching it. */
+/**
+ * UI-facing callback port; protocol-specific messages are converted before reaching it.
+ * Callbacks have no UI-thread affinity and may arrive from different client workers.
+ * Implementations must dispatch widget access to the UI thread and keep callbacks
+ * short. Interaction methods return non-null futures instead of waiting for a user
+ * decision; null results mean cancellation. The client owns cancellation of pending
+ * interactions when the prompt/session is retired or the connection is closed.
+ */
 public interface AgentListener {
     void onAgentText(String text);
     default void onPromptFirstAgentChunk(long sentAtNanos, long receivedAtNanos) { }
