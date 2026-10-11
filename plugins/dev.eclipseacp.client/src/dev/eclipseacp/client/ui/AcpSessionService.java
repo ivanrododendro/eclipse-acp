@@ -60,6 +60,20 @@ final class AcpSessionService {
     ChatSessionModel activeSession() { return activeSession; }
     boolean contains(ChatSessionModel session) { return sessions.contains(session); }
 
+    /** Adds a project to the view without launching an agent or creating an ACP session. */
+    void addProject(IProject project) {
+        if (project == null || !project.exists() || !project.isOpen() || project.getLocation() == null) return;
+        ChatSessionModel existing = sessionFor(project);
+        if (existing != null) {
+            select(existing);
+            return;
+        }
+        ChatSessionModel session = newSession(project, configurations.get());
+        sessions.add(session);
+        select(session);
+        connectForSessionList(session);
+    }
+
     void openSessionFor(IProject project, String initialPrompt) {
         if (!operations.isAccepting()) return;
         if (project == null || !project.exists() || !project.isOpen() || project.getLocation() == null) {
@@ -138,6 +152,27 @@ final class AcpSessionService {
         }));
     }
 
+    /** Initializes only the protocol connection so the project history can be listed. */
+    private void connectForSessionList(ChatSessionModel session) {
+        AgentClient client = clients.apply(session, listeners.apply(session));
+        session.client = client;
+        session.sessionTransitioning = true;
+        session.statusText = "Loading sessions from " + session.provider.name() + "…";
+        changed(session);
+        operations.run(session, () -> isOwned(session, client), () -> client.connectForSessionList(directory(session)))
+                .whenComplete((ignored, failure) -> ui.accept(() -> {
+            if (session.client != client) return;
+            session.sessionTransitioning = false;
+            if (failure != null) {
+                retire(session);
+                error(session, "Could not list agent sessions", unwrap(failure));
+                return;
+            }
+            session.statusText = "Connected";
+            connected(session);
+        }));
+    }
+
     void newSession(String pendingInputText) {
         newSession(pendingInputText, null);
     }
@@ -150,8 +185,17 @@ final class AcpSessionService {
     private void newSession(String pendingInputText, String initialPrompt) {
         if (!operations.isAccepting()) return;
         ChatSessionModel current = activeSession;
-        if (current == null || !current.isConnected() || current.isBusy()) return;
+        if (current == null || current.isBusy()) return;
         SessionConfiguration configuration = configurations.get();
+        if (!current.isConnected()) {
+            ChatSessionModel session = newSession(current.project, configuration);
+            session.pendingInputText = pendingInputText;
+            session.initialPrompt = initialPrompt;
+            session.statusText = "Connecting to " + session.provider.name() + " in " + current.project.getLocation() + "…";
+            replace(session);
+            connect(session, null);
+            return;
+        }
         ChatSessionModel session = newSession(current.project, configuration);
         session.pendingInputText = pendingInputText;
         session.initialPrompt = initialPrompt;
@@ -178,6 +222,11 @@ final class AcpSessionService {
             } else {
                 session.statusText = "Connected";
                 connected(session);
+                // startNewSession replaces the active server-side session while the Browser may
+                // still be completing the render selected by replace(session). Rebuild from the
+                // authoritative model, as we do after session/load, so the first prompt is not
+                // applied to the previous document and then lost.
+                presentation.transcriptReloaded(session);
             }
         }));
     }
@@ -236,7 +285,12 @@ final class AcpSessionService {
             session.append("> Attached: " + attachments.stream().map(item -> "`" + item.path().getFileName() + "`")
                     .collect(java.util.stream.Collectors.joining(", ")) + "\n\n");
         }
-        transcriptChanged(session);
+        if (session.firstPromptNeedsTranscriptReload) {
+            session.firstPromptNeedsTranscriptReload = false;
+            presentation.transcriptReloaded(session);
+        } else {
+            transcriptChanged(session);
+        }
         changed(session);
         AgentClient client = session.client;
         operations.run(session, () -> isOwned(session, client), () -> client.prompt(expanded, attachments))

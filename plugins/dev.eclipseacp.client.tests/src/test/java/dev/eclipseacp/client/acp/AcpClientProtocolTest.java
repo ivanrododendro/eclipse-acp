@@ -110,6 +110,24 @@ public class AcpClientProtocolTest {
     }
 
     @Test
+    public void initializesForSessionListingWithoutCreatingASession() {
+        FakeTransport transport = new FakeTransport();
+        AcpClient client = new AcpClient("agent", "", new CapturingListener(), List.of(),
+                (command, arguments, workingDirectory, diagnosticConsumer, diagnosticErrorConsumer) ->
+                        new FakeProcess(),
+                (reader, writer, handler, errorHandler) -> transport);
+
+        try {
+            client.connectForSessionList(Path.of("/workspace/project")).join();
+
+            assertEquals(List.of("initialize"), transport.methods);
+            assertNull(client.sessionId());
+        } finally {
+            client.close();
+        }
+    }
+
+    @Test
     public void attachmentPromptIncludesEveryAttachmentAndWaitsForTheAgentResponse() throws Exception {
         FakeTransport transport = new FakeTransport();
         transport.promptResponse = new CompletableFuture<>();

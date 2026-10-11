@@ -151,7 +151,7 @@ Una richiesta successiva può essere inserita in `pending` quando non esiste pi�
 
 **Risolto sul codice corrente.** [JsonRpcConnection.java](../plugins/dev.eclipseacp.client/src/dev/eclipseacp/client/acp/JsonRpcConnection.java) applica scadenze per metodo e rimuove ogni richiesta da `pending` in tutti i percorsi terminali. Le operazioni di protocollo scadono dopo 30 s, `authenticate` dopo 5 minuti e `session/prompt` dopo 15 minuti; frame oltre 1 MiB e più di 128 richieste contemporanee sono rifiutati. [AcpClient.java](../plugins/dev.eclipseacp.client/src/dev/eclipseacp/client/acp/AcpClient.java) registra fino a 16 interazioni umane per client: Stop, chiusura sessione/trasporto e chiusura client le completano come annullate; permessi, elicitation e autenticazione hanno durate distinte e adeguate all'interazione umana. [AcpChatDialogs.java](../plugins/dev.eclipseacp.client/src/dev/eclipseacp/client/ui/AcpChatDialogs.java) non apre più dialog già completati o con shell disposed.
 
-[AcpSessionService.java](../plugins/dev.eclipseacp.client/src/dev/eclipseacp/client/ui/AcpSessionService.java) limita a 100 pagine l'elenco sessioni e rifiuta un `nextCursor` ripetuto.
+[AgentSessionHistory.java](../plugins/dev.eclipseacp.client/src/dev/eclipseacp/client/ui/AgentSessionHistory.java) limita a 100 pagine l'elenco sessioni e rifiuta un `nextCursor` ripetuto.
 
 **Verifica:** test unitari coprono agente silenzioso e cleanup della richiesta, Stop che restituisce un permesso annullato e cursore ciclico. [ACP — Tool calls](https://agentclientprotocol.com/protocol/v1/tool-calls).
 
@@ -229,9 +229,9 @@ La pagina delle preferenze esplicita che stderr può comunque contenere segreti:
 
 ### R19 — P2: cleanup asincrono senza ownership completa di processi e attività — risolto il 4 ottobre 2026
 
-**Risolto sul codice corrente.** [AcpSessionService.java](../plugins/dev.eclipseacp.client/src/dev/eclipseacp/client/ui/AcpSessionService.java) possiede ora l'executor I/O, registra le operazioni per sessione e le cancella al retirement propagando la cancellazione al future ACP sottostante. Un controllo di ownership viene ripetuto sul worker prima di iniziare l'operazione, così un prompt ancora in coda non può raggiungere un client ritirato. `disconnect` è idempotente, rifiuta nuovo lavoro, accoda tutte le chiusure possedute, espone il future di completamento e arresta l'executor.
+**Risolto sul codice corrente.** [SessionOperationScope.java](../plugins/dev.eclipseacp.client/src/dev/eclipseacp/client/ui/SessionOperationScope.java), usato da `AcpSessionService`, possiede l'executor I/O, registra le operazioni per sessione e le cancella al retirement propagando la cancellazione al future ACP sottostante. Un controllo di ownership viene ripetuto sul worker prima di iniziare l'operazione, così un prompt ancora in coda non può raggiungere un client ritirato. `disconnect` è idempotente, rifiuta nuovo lavoro, accoda tutte le chiusure possedute, espone il future di completamento e arresta l'executor.
 
-[AcpClient.java](../plugins/dev.eclipseacp.client/src/dev/eclipseacp/client/acp/AcpClient.java) serializza la pubblicazione e il distacco di processo/trasporto: una chiusura durante il launch o initialize libera anche le risorse create dalla corsa e le chiusure ripetute non hanno effetto. [JsonRpcConnection.java](../plugins/dev.eclipseacp.client/src/dev/eclipseacp/client/acp/JsonRpcConnection.java) conserva il reader thread, chiude entrambi gli stream e attende il reader entro un secondo.
+[AcpConnectionLifecycle.java](../plugins/dev.eclipseacp.client/src/dev/eclipseacp/client/acp/AcpConnectionLifecycle.java) serializza la pubblicazione e il distacco di processo/trasporto: una chiusura durante il launch o initialize libera anche le risorse create dalla corsa e le chiusure ripetute non hanno effetto. [JsonRpcConnection.java](../plugins/dev.eclipseacp.client/src/dev/eclipseacp/client/acp/JsonRpcConnection.java) conserva il reader thread, chiude entrambi gli stream e attende il reader entro un secondo.
 
 [DefaultAgentProcessLauncher.java](../plugins/dev.eclipseacp.client/src/dev/eclipseacp/client/acp/DefaultAgentProcessLauncher.java) conserva anche il thread stderr. Alla chiusura fotografa soltanto i discendenti del processo lanciato, invia la terminazione gentile a quell'albero, attende un secondo, applica `destroyForcibly` ai superstiti e attende un altro secondo; un'eventuale sopravvivenza viene segnalata.
 
@@ -251,17 +251,91 @@ Un processo Java fixture restituisce gli argomenti in base64 e verifica il passa
 
 ## 5. Analisi SOLID e direzione architetturale
 
-Le dimensioni di `AcpClient` (936 righe), `AcpChatView` (600), `ChatComposer` (538) e `AcpSessionService` (372) indicano dove investigare, non dimostrano da sole una violazione. La valutazione seguente si basa sulle responsabilità effettive.
+Le dimensioni delle classi indicano dove investigare, non dimostrano da sole una violazione. La valutazione seguente si basa sulle responsabilità effettive ed è aggiornata per i gruppi da 1 a 7 al 5 ottobre 2026.
 
 | Principio | Stato osservato | Evoluzione raccomandata |
 | --- | --- | --- |
-| **S — Single Responsibility** | Buona estrazione di process launcher, transport, transcript e service. `AcpClient` continua però a unire negoziazione, autenticazione, ciclo sessioni, codec JSON, preparazione allegati e routing richieste. `WorkspaceDiffApplier` combina policy percorsi, codec testo e stato editor. | Estrarre prima i componenti con invarianti/test distinti: `SessionLifecycle`, codec ACP, `WorkspaceAccessPolicy`, adapter dei buffer e operazione di modifica. Tenere la composizione SWT nella view. |
-| **O — Open/Closed** | Le interfacce di processo/trasporto consentono sostituzione. Nuovi eventi o metodi ACP richiedono modifiche alle lunghe catene in `deliverSessionUpdate` e `onRequest`. | Codec e handler coesi per famiglia di messaggi; estendere una famiglia senza cambiare lifecycle e UI. Non serve un registro dinamico o un extension point per ogni ramo. |
-| **L — Liskov Substitution** | `AgentClient` è utile ma i default `prompt(text, attachments)` e `startNewSession(path, listener)` ignorano rispettivamente allegati e nuovo listener. L'implementazione ACP li sovrascrive, quindi non è un bug attuale di quell'adapter; è un rischio contrattuale per implementazioni alternative. | Documentare precondizioni, completamento asincrono, threading e postcondizioni. Operazioni non supportate devono fallire esplicitamente o essere separate in contratti di capability. Contract test condivisi per gli adapter. |
-| **I — Interface Segregation** | `AgentClient` copre chat, history, auth, configurazione e lifecycle; `AgentListener` unisce eventi, permessi, filesystem e dialog. Molti default nascondono le funzionalità assenti. | Piccoli port per esigenze realmente diverse: eventi, interazioni, filesystem e gestione sessioni. Conservare una facade di composizione se semplifica la UI; evitare proliferazione di interfacce senza utilizzatori distinti. |
-| **D — Dependency Inversion** | Il package `agent` non importa Gson né classi ACP: miglioramento concreto. Launcher/factory e UI executor sono iniettabili. Persistono dipendenze statiche da `AcpLog`/preferenze, `PlatformUI`, `ResourcesPlugin` e costruzione diretta di servizi nel modello. | Spostare la composizione nel punto di ingresso; iniettare diagnostica, scheduler, gateway workspace e provider della configurazione. Rendere il modello proprietario dello stato, senza costruirvi gli adapter di infrastruttura. |
+| **S — Single Responsibility** | Process launcher, transport, transcript e service sono separati. Il gruppo 2 estrae le conversioni JSON e i payload principali in `AcpMessageCodec`; `AcpClient` mantiene negoziazione, autenticazione, ciclo sessioni, preparazione degli allegati, filtro delle sessioni e routing delle richieste. Il gruppo 6 estrae interazioni pendenti e traduzione degli aggiornamenti; il gruppo 7 separa ownership e lifecycle della connessione. `WorkspaceDiffApplier` è stato rimosso dopo R10. I gruppi da 3 a 5 separano operazioni asincrone, storico, widget del composer, pannello recenti e navigazione. | Conservare i confini estratti e i test delle invarianti; valutare ulteriori separazioni solo quando emerge una responsabilità autonoma. Policy di scrittura e adapter dei buffer sono fuori perimetro finché non si reintroduce il filesystem ACP. Tenere la composizione SWT nella view. |
+| **O — Open/Closed** | Le interfacce di processo/trasporto consentono sostituzione; le conversioni sono ora isolate nel codec. Nuovi eventi o metodi ACP richiedono ancora modifiche alle catene nel dispatcher e in `onRequest`. | Valutare handler coesi per famiglia quando l'estensione dei messaggi lo richiede. Non serve un registro dinamico o un extension point per ogni ramo. |
+| **L — Liskov Substitution** | Aggiornato il 5 ottobre 2026: i default rifiutano allegati non vuoti, sostituzione del listener e chiusura sessione non supportati; non dichiarano più un successo ridotto. Allegati null/vuoti conservano la delega al prompt testuale. I contratti esplicitano threading, completamento e cancellazione. | Mantenere i test del contratto dei default e le verifiche degli override ACP; applicare gli stessi scenari agli eventuali nuovi adapter. |
+| **I — Interface Segregation** | `AgentClient` copre chat, history, auth, configurazione e lifecycle; `AgentListener` unisce eventi, permessi e dialog, senza operazioni filesystem dopo R10. Le operazioni opzionali non supportate falliscono esplicitamente. | Conservare la facade attuale: non emergono utilizzatori distinti che richiedano nuove interfacce. Separare port di capability quando un consumatore concreto ne dimostra la necessità. |
+| **D — Dependency Inversion** | Il package `agent` non importa Gson né classi ACP. Launcher/factory ed executor del servizio sono iniettabili. Trasporto e, dal gruppo 2, `AcpClient` dipendono da `DiagnosticSink`; l'adapter predefinito conserva `AcpLog`. Il modello costruisce ancora `WorkspaceFileLinks` e dipende da `IProject`; la view inietta nel servizio il supplier di configurazione, la factory del client e lo scope I/O. I selettori ricevono opzioni e callback, senza dipendenze dal servizio. | Conservare la composizione nella view e lo scheduler iniettabile delle interazioni; rendere esplicita l'ownership delle risorse workspace del modello. |
 
-Riferimenti contrattuali: [AgentClient.java](../plugins/dev.eclipseacp.client/src/dev/eclipseacp/client/agent/AgentClient.java), linee 12–28; [AgentListener.java](../plugins/dev.eclipseacp.client/src/dev/eclipseacp/client/agent/AgentListener.java); [ChatSessionModel.java](../plugins/dev.eclipseacp.client/src/dev/eclipseacp/client/ui/ChatSessionModel.java), linee 51–59. Interpretazione applicativa dei [principi OOD di Martin](https://butunclebob.com/ArticleS.UncleBob.PrinciplesOfOod).
+Riferimenti contrattuali: [AgentClient.java](../plugins/dev.eclipseacp.client/src/dev/eclipseacp/client/agent/AgentClient.java); [AgentListener.java](../plugins/dev.eclipseacp.client/src/dev/eclipseacp/client/agent/AgentListener.java); [ChatSessionModel.java](../plugins/dev.eclipseacp.client/src/dev/eclipseacp/client/ui/ChatSessionModel.java). Interpretazione applicativa dei [principi OOD di Martin](https://butunclebob.com/ArticleS.UncleBob.PrinciplesOfOod).
+
+### Gruppo 1 — Contratto agente, implementato il 5 ottobre 2026
+
+`AgentClient` non perde più gli allegati nel default del prompt e non apre una nuova sessione ignorando il listener richiesto. Anche il default `closeSession` fallisce esplicitamente: un adapter deve implementare il distacco per dichiararlo riuscito. Gli override ACP restano invariati. È una modifica del comportamento dei default per adapter alternativi: devono implementare le operazioni opzionali che intendono supportare.
+
+Il contratto precisa che le chiamate possono effettuare lavoro sincrono prima di restituire un future e vanno eseguite fuori dal thread UI; callback e continuazioni non hanno affinità UI. Il completamento indica l'esito dell'operazione, mentre `cancel()` richiede l'arresto senza confermarlo. La cancellazione di un future non garantisce l'arresto remoto. `AgentListener` documenta dispatch UI, ritorno non bloccante delle interazioni e ownership della loro cancellazione.
+
+La suite [AgentClientContractTest.java](../plugins/dev.eclipseacp.client.tests/src/test/java/dev/eclipseacp/client/agent/AgentClientContractTest.java) verifica i default ereditati dagli adapter minimi: preservazione del future testuale, rifiuto degli allegati senza inviare testo, rifiuto della sostituzione listener senza aprire una sessione e fallimento delle operazioni opzionali. I test ACP verificano che il nuovo listener riceva gli eventi della nuova sessione e non quelli ritirati, e che immagini/audio siano inclusi integralmente nel prompt senza completarlo prima della risposta dell'agente. Non sono introdotte nuove interfacce di capability in assenza di consumatori distinti.
+
+**Verifica:** `mvnd -T1 verify` verde: 72 test unitari superati, un test Windows saltato su macOS e 2 test Equinox superati.
+
+### Gruppo 2 — Codec e diagnostica ACP, implementato il 5 ottobre 2026
+
+[AcpMessageCodec.java](../plugins/dev.eclipseacp.client/src/dev/eclipseacp/client/acp/AcpMessageCodec.java) contiene conversioni pure di capability, autenticazione, testo, comandi, opzioni, usage, storico e permessi, oltre alla costruzione dei payload initialize, prompt, configurazione e risposte alle interazioni. Non dipende da Eclipse, trasporto, processi o logging. Riceve gli allegati come byte già preparati; lettura dei file e limiti restano nel client. I messaggi e i fallback di compatibilità esistenti sono conservati.
+
+`AcpClient` riceve `DiagnosticSink` insieme a launcher e factory del trasporto. Tutti i suoi log, inclusi trace lazy, errori di avvio e avvisi di cleanup, passano dal sink. I costruttori esistenti conservano l'adapter Eclipse predefinito. Stato, locking, timeout, lifecycle e routing degli eventi restano nel client: questa estrazione non conclude il refactoring del lifecycle né introduce un registro dinamico di handler.
+
+Le verifiche pure preesistenti sono trasferite in [AcpMessageCodecTest.java](../plugins/dev.eclipseacp.client.tests/src/test/java/dev/eclipseacp/client/acp/AcpMessageCodecTest.java). Nuovi casi coprono varianti dei comandi e delle scelte, valori boolean/null, testo legacy e anteprime tool, metriche assenti e cancellazione/selezione delle interazioni. I test del client verificano diagnostica iniettata durante connect, prompt, cancel, notifiche e close, oltre a errori di launch e warning di cleanup, senza includere testo del prompt o della risposta nei log ordinari della fixture.
+
+**Verifica:** `mvnd -T1 verify` verde: 79 test unitari superati, un test Windows saltato su macOS e 2 test Equinox superati. `git diff --check` senza errori.
+
+### Gruppo 3 — Servizio sessioni, implementato il 5 ottobre 2026
+
+`AcpSessionService` passa da 554 a 386 righe. Conserva ownership dei client e casi d'uso; `SessionOperationScope` gestisce executor, future per sessione, cancellazione e cleanup. Le operazioni sono registrate prima dello scheduling, anche con executor sincroni. `AgentSessionHistory` gestisce paginazione, limite di 100 pagine, cursori ciclici e filtro dei percorsi normalizzati; ogni pagina viene eseguita e tracciata nello scope della sessione.
+
+La view inietta factory del client e `Supplier<SessionConfiguration>`, riletto per ogni nuova sessione. Il servizio non dipende più da preferenze Eclipse o implementazioni ACP. Le nuove suite `SessionOperationScopeTest` e `AgentSessionHistoryTest` coprono isolamento della cancellazione, cancellazione durante preparazione sincrona, shutdown, rifiuto dell'executor, filtro progetto e interruzione delle pagine. I test del servizio conservano riuso, restore, bozze e gestione degli eventi tardivi.
+
+**Verifica:** `mvnd -T1 verify` verde, inclusi i 2 test Equinox.
+
+### Gruppo 4 — Componenti del composer, implementato il 5 ottobre 2026
+
+`ChatComposer` passa da 573 a 303 righe e conserva editor, bozze, invio e collegamento delle azioni. `SlashCommandCompletion` possiede palette, ranking e lifecycle del popup; `ContextUsageIndicator` possiede rendering e accessibilità del contesto. Due istanze di `AgentOptionSelector` gestiscono modello e modalità con stato tipizzato e callback, senza dipendere dal servizio o dal modello della sessione. Il fallback alla prima scelta resta specifico del selettore modello; la modalità senza valore riconosciuto resta senza selezione.
+
+Il test di ranking viene trasferito in `SlashCommandCompletionTest`; i componenti restano package-private e il manifest non cambia. L'estrazione conserva ordine dei widget, eventi, colori, risorse e comportamento di invio e Stop.
+
+**Verifica:** `mvnd -T1 verify` verde: 87 test unitari superati, un test Windows saltato su macOS e 2 test Equinox superati. Un probe locale SWT su macOS verifica fallback dei selettori, callback, blocco durante busy, reset, usage, accettazione slash con Tab e dispose del popup. Il probe è una verifica locale, non una suite CI né una verifica visiva completa del workbench. `git diff --check` senza errori.
+
+### Gruppo 5 — Componenti della view, implementato il 5 ottobre 2026
+
+`AcpChatView` passa da 530 righe dopo il gruppo 3 a 291 righe. `RecentSessionsPanel` possiede righe recenti, menu, dialog di selezione, rendering e accessibilità; costruisce una snapshot dell'elenco conservando ordinamento, normalizzazione dei titoli e distinzione tra chat aperte e ripristinabili. Emette callback di apertura e chiusura; la view le collega al servizio.
+
+`ChatPageNavigator` possiede visibilità, geometria e animazione delle pagine e fornisce lo stato al composer. La view conserva header, comandi pubblici, presentazione, composizione e lifecycle Eclipse. Le transizioni precedenti vengono invalidate anche su resize, così un timer non ripristina dimensioni ormai obsolete. I componenti restano package-private, senza nuovi export OSGi.
+
+**Verifica:** `mvnd -T1 verify` verde: 92 test unitari superati, un test Windows saltato su macOS e 2 test Equinox superati. I 5 test di `RecentSessionsPanelTest` coprono snapshot vuote, ordine, titoli, chat attiva e storico senza chiamare l'agente. Un probe locale SWT su macOS verifica callback open/restore/close, blocco restore durante busy, reset, transizioni rapide, resize e dispose con timer pendenti. Il dialog “View all” e l'integrazione visiva completa nel workbench non sono esercitati dal probe. `git diff --check` senza errori.
+
+### Gruppo 6 — Interazioni e aggiornamenti ACP, implementato il 5 ottobre 2026
+
+`AcpClient` passa da 775 a 671 righe. `PendingAgentInteractions` possiede future delle decisioni, timeout, limite di 16 richieste, cancellazione e shutdown dello scheduler. Lo scheduler è iniettabile per test deterministici; timeout o cancellazione completano anche il future sorgente del dialog, compreso quello restituito dopo una cancellazione avvenuta durante la preparazione. `cancelAll` consente successive richieste su una connessione riusata; `close` è idempotente e impedisce nuovi dialog. Un errore nello scheduling viene restituito come future fallito senza accodare il dialog.
+
+`AcpSessionUpdateDispatcher` traduce solo aggiornamenti già accettati dal client e gestisce la misura del primo chunk del prompt. Riceve il listener corrente per ogni evento e condivide il tracker degli strumenti con il percorso delle richieste di permesso. Stato della sessione, lock, filtro delle notifiche, buffering durante `session/new`, autenticazione e routing delle richieste restano nel client. Il lifecycle di processo e trasporto viene estratto nel gruppo 7.
+
+**Verifica:** `mvnd -T1 verify` verde: 105 test unitari superati, un test Windows saltato su macOS e 2 test Equinox superati. Le nuove suite coprono timer deterministici, limite e recupero slot, errori di callback/scheduler, chiusura e sorgenti tardive; primo chunk una sola volta per prompt, listener corrente, ordine degli eventi e tracker condiviso. I test ACP verificano anche cancellazione dell'elicitation alla chiusura e dei permessi alla perdita del trasporto, conservando i casi di Stop, riuso, eventi ritirati e buffering. `git diff --check` senza errori.
+
+### Gruppo 7 — Lifecycle della connessione, implementato il 5 ottobre 2026
+
+`AcpClient` passa da 671 a 587 righe. `AcpConnectionLifecycle` possiede processo e trasporto, avvio, accesso RPC, contesto stderr limitato alle ultime 8 righe e cleanup. Gli stati sono `NEW`, `STARTING`, `ACTIVE`, `CLOSING` e `CLOSED`: un errore di avvio ripulisce le risorse e consente un retry; la chiusura impedisce nuovi avvii. Un secondo avvio su una connessione già avviata viene ora rifiutato esplicitamente, evitando la sostituzione di risorse possedute.
+
+La chiusura mantiene due fasi: `beginClose` blocca avvio e riuso conservando il trasporto per la richiesta finale `session/close`; `close` distacca le risorse e chiude prima il processo e poi il trasporto. Risorse che arrivano dopo una chiusura durante il launch vengono rilasciate senza essere avviate. Un callback rientrante da `start()` non causa una seconda chiusura, anche se `start()` fallisce successivamente. Gli errori di cleanup, compresi quelli runtime, vengono diagnosticati senza saltare l'altra risorsa. Le letture di stato e trasporto usano snapshot volatile per non aggiungere un lock nei callback delle sessioni.
+
+Il client conserva negoziazione, autenticazione, operazioni e stato delle sessioni, filtro e buffering; non possiede più processo o trasporto. I costruttori esistenti e i port di launcher/factory restano disponibili. Il manifest non cambia.
+
+**Verifica:** `mvnd -T1 verify` verde: 116 test unitari superati, un test Windows saltato su macOS e 2 test Equinox superati. Gli 11 test di `AcpConnectionLifecycleTest` verificano ordine ed idempotenza della chiusura, richiesta finale durante closing, avvio duplicato, failure di factory/start, chiusura concorrente al launch, callback rientrante, errori di cleanup e limite stderr. Restano verdi i test ACP di chiusura durante initialize, riuso, restore, buffering e interazioni. `git diff --check` senza errori.
+
+### Dimensioni dopo le estrazioni
+
+| Classe principale | Baseline all'inizio del piano | Attuale |
+| --- | ---: | ---: |
+| `AcpClient` | 775 | 587 |
+| `AcpChatView` | 519 | 291 |
+| `ChatComposer` | 573 | 303 |
+| `AcpSessionService` | 554 | 386 |
+| **Totale** | **2421** | **1567** |
+
+Le estrazioni previste sono completate. Le soglie proposte erano orientative: `AcpClient` rimane sopra la stima iniziale di 400–480 righe, conservando insieme stato e operazioni del protocollo di sessione. La riduzione del 35% riguarda queste quattro classi, non il totale dei sorgenti: i collaboratori estratti rendono esplicite responsabilità e ownership.
 
 ### Confini proposti
 
@@ -283,7 +357,7 @@ Applicare questi confini prima come package e contratti. Valutare successivament
 | ID | Osservazione | Azione |
 | --- | --- | --- |
 | M01 — P3 | `docs/conformite-architecture.md` conserva numeri di riga/dimensioni obsoleti e affermazioni contraddittorie: dice che la view non dipende dalle preferenze, mentre ora le legge; descrive una configurazione MCP non collegata al percorso corrente. | Aggiornare diagramma e documento dopo le decisioni architetturali, distinguendo stato attuale e obiettivo. |
-| M02 — P3 | `McpServerRegistry` non è usato dal service, che passa `List.of()` alla factory; `AcpSessionUpdate` non ha utilizzatori emersi dalla ricerca. | Decidere esplicitamente se completare o rimuovere questi percorsi. Non presentarli come feature funzionanti. |
+| M02 — P3 | `McpServerRegistry` non è collegato alla composizione della view, che passa `List.of()` alla factory; `AcpSessionUpdate` non ha utilizzatori emersi dalla ricerca. | Decidere esplicitamente se completare o rimuovere questi percorsi. Non presentarli come feature funzionanti. |
 | M03 — P3 | `IconButton` attiva l'azione su qualsiasi `MouseUp`, senza verificare `event.button == 1`, diversamente dalle righe recenti della view. | Test del click destro e della tastiera; preferire semantica di pulsante standard o completarla nel controllo custom. |
 | M04 — P3 | Il footer forza bianco/nero e disabilita il CSS workbench; etichette e testi sono hardcoded; mancano prove ad alto contrasto e con screen reader. | Usare risorse di tema e NLS dove il prodotto richiede localizzazione; verificare focus, tastiera, DPI e contrasto. Non assumere accessibilità completa dalla sola etichetta accessibile. |
 | M05 — P3 | Il README indica Ctrl+Alt+O/⌘⌥O, mentre `plugin.xml:89` usa `M1+M2+O`; il binding va verificato e allineato sui sistemi supportati. Sono presenti anche comandi deliberatamente disabilitati. | Allineare shortcut reale, documentazione e scelta di mostrare funzionalità future. |

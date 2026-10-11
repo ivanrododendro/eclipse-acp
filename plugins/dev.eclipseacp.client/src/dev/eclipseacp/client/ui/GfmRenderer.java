@@ -60,7 +60,7 @@ final class GfmRenderer {
         String content = stableMarkdown.isBlank() && liveMarkdown.isBlank()
                 ? "<section class='welcome'><div class='mark'>✦</div><h1>Build something great</h1>"
                     + "<p>Explore your code, solve a problem, or plan your next change.</p>"
-                    + "<div class='hint'>To start, right-click a project and open an ACP session.</div></section>"
+                    + "<div class='hint'>To start, right-click a project and open it in the ACP view.</div></section>"
                 : "<section class='conversation'><div id='transcript-stable' class='transcript-parts'>"
                     + conversationPart(stableMarkdown, fileLinkResolver)
                     + "</div><div id='transcript-live' class='transcript-part'>"

@@ -29,7 +29,7 @@
     <command
           categoryId="dev.eclipseacp.client.commands.category"
           id="dev.eclipseacp.client.commands.openChat"
-          name="Open ACP Session">
+          name="Open in ACP View">
       <commandParameter
             id="dev.eclipseacp.client.commands.openChat.action"
             name="Action"
@@ -64,7 +64,7 @@
   <extension point="org.eclipse.ui.menus">
     <menuContribution locationURI="popup:org.eclipse.ui.popup.any?after=additions">
       <menu id="dev.eclipseacp.client.menus.acp" label="ACP">
-        <command commandId="dev.eclipseacp.client.commands.openChat" label="Open ACP Session" style="push">
+        <command commandId="dev.eclipseacp.client.commands.openChat" label="Open in ACP View" style="push">
           <visibleWhen checkEnabled="false">
             <with variable="selection">
               <iterate ifEmpty="false">

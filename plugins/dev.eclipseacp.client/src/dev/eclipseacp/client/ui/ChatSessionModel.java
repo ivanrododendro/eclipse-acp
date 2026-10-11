@@ -31,6 +31,8 @@ final class ChatSessionModel {
     volatile AgentClient client;
     boolean agentMessageOpen;
     boolean sessionTransitioning;
+    /** The first prompt needs a complete Browser render after this session is selected. */
+    boolean firstPromptNeedsTranscriptReload = true;
     boolean loadsSessionTranscript;
     boolean acceptingRestoredTranscript;
     boolean restoredAgentMessageOpen;

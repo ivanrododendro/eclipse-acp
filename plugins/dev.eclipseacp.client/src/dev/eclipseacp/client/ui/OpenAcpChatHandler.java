@@ -12,7 +12,7 @@ import org.eclipse.core.commands.AbstractHandler;
 import org.eclipse.core.commands.ExecutionEvent;
 import org.eclipse.core.commands.ExecutionException;
 
-/** Opens a session for the owning project, even when invoked on a child resource. */
+/** Selects the owning project in the ACP view, even when invoked on a child resource. */
 public final class OpenAcpChatHandler extends AbstractHandler {
     @Override
     public Object execute(ExecutionEvent event) throws ExecutionException {
@@ -32,15 +32,11 @@ public final class OpenAcpChatHandler extends AbstractHandler {
             throw new ExecutionException("Select an open Eclipse project or one of its resources");
         }
         try {
-            String action = event.getParameter("dev.eclipseacp.client.commands.openChat.action");
-            // Collect before showing the chat view: this preserves a console selection and the invoking editor state.
-            String prompt = action == null ? null
-                    : EclipseContext.expand(EclipseContext.actionPrompt(action, project, page), project, page);
             AcpChatView view = (AcpChatView) page.showView(AcpChatView.ID);
-            view.openSessionFor(project, prompt);
+            view.openProject(project);
             return null;
         } catch (Exception exception) {
-            throw new ExecutionException("Could not open ACP chat", exception);
+            throw new ExecutionException("Could not open ACP view", exception);
         }
     }
 }

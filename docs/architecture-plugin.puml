@@ -19,7 +19,9 @@ actor "Utilisateur" as user
 rectangle "Eclipse IDE" as eclipse #EDF2F7 {
   component "Commandes Eclipse\nplugin.xml + OpenAcpChatHandler" as commands #FFFFFF
   component "ACP Chat\nAcpChatView" as chat #FFFFFF
+  component "Historique et navigation\nRecentSessionsPanel · ChatPageNavigator" as chatPages #FFFFFF
   component "Saisie et options\nChatComposer" as composer #FFFFFF
+  component "Widgets de saisie\nSlashCommandCompletion · ContextUsageIndicator\nAgentOptionSelector" as composerWidgets #FFFFFF
   component "Dialogs\nAcpChatDialogs" as dialogs #FFFFFF
   component "Rendu et integration workspace\nChatTranscript · GfmRenderer\nWorkspaceFileLinks · WorkspaceFileOpener" as presentation #FFFFFF
   component "Etat d'une conversation\nChatSessionModel" as chatModel #FFFFFF
@@ -33,6 +35,8 @@ rectangle "Eclipse IDE" as eclipse #EDF2F7 {
 
   package "Client independant du protocole" #E6FFFA {
     component "Service de session\nAcpSessionService" as sessionService #FFFFFF
+    component "Execution I/O et cleanup\nSessionOperationScope" as operations #FFFFFF
+    component "Historique par projet\nAgentSessionHistory" as history #FFFFFF
     interface "AgentClient" as agentClient
     component "Pont de session UI\nAcpChatSessionListener" as sessionListener #FFFFFF
     interface "AgentListener" as agentListener
@@ -42,6 +46,10 @@ rectangle "Eclipse IDE" as eclipse #EDF2F7 {
   package "Adaptateur ACP v1" #F3E8FF {
     component "AcpClientFactory" as factory #FFFFFF
     component "AcpClient" as acpClient #FFFFFF
+    component "Cycle de connexion\nAcpConnectionLifecycle" as connectionLifecycle #FFFFFF
+    component "Conversions et payloads\nAcpMessageCodec" as codec #FFFFFF
+    component "Traduction des updates\nAcpSessionUpdateDispatcher" as updateDispatcher #FFFFFF
+    component "Decisions et timeouts\nPendingAgentInteractions" as interactions #FFFFFF
     component "Lanceur de processus\nAgentProcessLauncher" as processLauncher #FFFFFF
     component "Processus local\nAgentProcess" as process #FFFFFF
     component "Fabrique de transport\nJsonRpcTransportFactory" as transportFactory #FFFFFF
@@ -59,7 +67,9 @@ commands --> chat : projet et contexte
 user --> chat : prompt / decisions
 
 chat --> presentation : transcript Markdown
+chat --> chatPages : compose / etat / callbacks
 chat --> composer : compose
+composer --> composerWidgets : compose / etat / callbacks
 composer --> sessionService : prompts et options
 composer --> dialogs : commandes et fichiers joints
 presentation --> workspace : liens et ouverture
@@ -67,14 +77,23 @@ presentation --> workspace : liens et ouverture
 prefPage --> registries : configure
 registries --> preferenceStore : persiste
 chat --> sessionService : actions de session
-sessionService --> registries : fournisseur actif\nserveurs MCP applicables
+chat --> registries : configuration courante injectee
 
-sessionService --> factory : compose le client ACP
+chat --> factory : fabrique du client injectee
+sessionService --> agentClient : operations agent
+sessionService --> operations : execution / annulation / cleanup
+sessionService --> history : sessions du projet
+history --> operations : pages annulables
+history --> agentClient : liste paginee
 factory --> agentClient
 factory --> acpClient : implementation
 acpClient ..|> agentClient
 
-acpClient --> acpEvents : statut, texte et permissions
+acpClient --> acpEvents : etat des outils pour permissions
+acpClient --> updateDispatcher : updates filtres / listener courant
+updateDispatcher --> acpEvents : fusion des outils
+updateDispatcher --> agentListener : evenements types
+acpClient --> interactions : decisions / annulation / fermeture
 acpClient --> agentListener : evenements convertis\nvers les modeles agent
 agentListener <|.. sessionListener
 sessionService --> chatModel : cycle de vie des sessions
@@ -82,11 +101,14 @@ sessionService --> chat : notifications de presentation
 sessionListener --> chatModel : texte, outils et options
 sessionListener --> sessionService : notifications de presentation
 sessionListener --> dialogs : interactions de l'agent
-acpClient --> processLauncher : demarre l'agent
+acpClient --> connectionLifecycle : demarrage / RPC / fermeture
+acpClient --> codec : payloads et reponses
+updateDispatcher --> codec : conversions
+connectionLifecycle --> processLauncher : demarre l'agent
 processLauncher --> process : stdio / diagnostics
-acpClient --> transportFactory : cree le transport
+connectionLifecycle --> transportFactory : cree le transport
 transportFactory --> transport
-acpClient --> transport : requetes / notifications
+connectionLifecycle --> transport : requetes / notifications
 transport <--> agent : stdio, JSON-RPC\nun message par ligne
 acpClient --> mcp : declaration des serveurs\npendant session/new
 agent --> model : requetes IA

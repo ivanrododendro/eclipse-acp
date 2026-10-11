@@ -25,6 +25,11 @@ import java.util.concurrent.CompletableFuture;
  */
 public interface AgentClient extends AutoCloseable {
     CompletableFuture<Void> connect(Path workingDirectory);
+    /** Initializes an ACP connection without creating a new agent-side session. */
+    default CompletableFuture<Void> connectForSessionList(Path workingDirectory) {
+        return CompletableFuture.failedFuture(new UnsupportedOperationException(
+                "Connecting without creating a session is not supported"));
+    }
     /** Opens another session on this already initialized ACP connection. */
     default CompletableFuture<Void> startNewSession(Path workingDirectory) {
         return CompletableFuture.failedFuture(new UnsupportedOperationException("Opening another session is not supported"));

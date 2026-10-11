@@ -82,7 +82,12 @@ public final class AcpClient implements AgentClient, JsonRpcHandler {
     }
 
     public CompletableFuture<Void> connect(Path workingDirectory) {
-        return connect(workingDirectory, null);
+        return connect(workingDirectory, null, true);
+    }
+
+    @Override
+    public CompletableFuture<Void> connectForSessionList(Path workingDirectory) {
+        return connect(workingDirectory, null, false);
     }
 
     @Override
@@ -107,7 +112,7 @@ public final class AcpClient implements AgentClient, JsonRpcHandler {
         if (restoredSessionId == null || restoredSessionId.isBlank()) {
             return CompletableFuture.failedFuture(new IllegalArgumentException("The ACP session ID is empty"));
         }
-        return connect(workingDirectory, restoredSessionId);
+        return connect(workingDirectory, restoredSessionId, true);
     }
 
     @Override
@@ -115,7 +120,7 @@ public final class AcpClient implements AgentClient, JsonRpcHandler {
         return sessionId;
     }
 
-    private CompletableFuture<Void> connect(Path workingDirectory, String restoredSessionId) {
+    private CompletableFuture<Void> connect(Path workingDirectory, String restoredSessionId, boolean createSession) {
         diagnostics.info("ACP connection requested: command='" + command + "', workingDirectory='" + workingDirectory
                 + "'");
         if (command.isBlank()) {
@@ -132,16 +137,18 @@ public final class AcpClient implements AgentClient, JsonRpcHandler {
                 error -> {
                     interactions.cancelAll();
                     listener.onConnectionClosed("ACP connection failed", error);
-                }).thenCompose(ignored -> initializeSession(workingDirectory, restoredSessionId));
+                }).thenCompose(ignored -> initializeSession(workingDirectory, restoredSessionId, createSession));
     }
 
-    private CompletableFuture<Void> initializeSession(Path workingDirectory, String restoredSessionId) {
+    private CompletableFuture<Void> initializeSession(Path workingDirectory, String restoredSessionId, boolean createSession) {
         diagnostics.info("ACP JSON-RPC reader started; sending initialize");
         listener.onStatus("Initializing " + command + "…");
         CompletableFuture<Void> connectionFuture = initialize()
-                .thenCompose(ignored -> establishSession(() -> restoredSessionId == null
-                        ? newSession(workingDirectory).thenAccept(result -> { })
-                        : restoreAfterInitialize(restoredSessionId, workingDirectory)))
+                .thenCompose(ignored -> createSession
+                        ? establishSession(() -> restoredSessionId == null
+                                ? newSession(workingDirectory).thenAccept(result -> { })
+                                : restoreAfterInitialize(restoredSessionId, workingDirectory))
+                        : CompletableFuture.completedFuture(null))
                 .thenAccept(ignored -> listener.onStatus("Connected"));
         CompletableFuture<Void> reportedConnectionFuture = connectionFuture.exceptionallyCompose(error ->
                 CompletableFuture.failedFuture(connection.withAgentDiagnostics(unwrap(error))));

@@ -11,6 +11,7 @@ import static dev.eclipseacp.client.acp.AcpMessageCodec.usage;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.regex.Pattern;
 
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
@@ -20,6 +21,15 @@ import dev.eclipseacp.client.agent.ToolCall;
 
 /** Translates accepted ACP updates; session ownership and filtering belong to AcpClient. */
 final class AcpSessionUpdateDispatcher {
+    /**
+     * Codex emits these control messages when an automation deliberately has no user-facing
+     * result. They are part of the restored agent context, not conversation content.
+     */
+    private static final Pattern SILENT_HEARTBEAT = Pattern.compile(
+            "\\A\\s*<heartbeat>\\s*<automation_id>.*?</automation_id>\\s*"
+                    + "<decision>\\s*DONT_NOTIFY\\s*</decision>\\s*"
+                    + "<message>.*?</message>\\s*</heartbeat>\\s*\\z",
+            Pattern.DOTALL);
     private final ToolCallTracker toolCalls;
     private final DiagnosticSink diagnostics;
     private volatile long promptSentAtNanos;
@@ -58,6 +68,10 @@ final class AcpSessionUpdateDispatcher {
         } else if ("agent_message_chunk".equals(kind)) {
             String text = textFrom(update.get("content"));
             if (!text.isEmpty()) {
+                if (SILENT_HEARTBEAT.matcher(text).matches()) {
+                    diagnostics.info("Ignoring non-user-facing DONT_NOTIFY heartbeat: sessionId='" + updateSessionId + "'");
+                    return;
+                }
                 long receivedAt = System.nanoTime();
                 long sentAt = promptSentAtNanos;
                 if (sentAt != 0 && firstAgentChunkReceived.compareAndSet(false, true)) {

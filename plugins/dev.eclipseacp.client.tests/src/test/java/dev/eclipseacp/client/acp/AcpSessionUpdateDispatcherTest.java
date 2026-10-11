@@ -42,6 +42,32 @@ public class AcpSessionUpdateDispatcherTest {
     }
 
     @Test
+    public void omitsSilentAutomationHeartbeatsFromAgentText() {
+        AcpSessionUpdateDispatcher dispatcher = dispatcher(new ToolCallTracker());
+        Listener listener = new Listener();
+
+        dispatcher.dispatch(update("agent_message_chunk", """
+                \"content\":{\"type\":\"text\",\"text\":\"<heartbeat>\\n<automation_id>resume-at-02-10</automation_id>\\n<decision>DONT_NOTIFY</decision>\\n<message>Already running.</message>\\n</heartbeat>\"}
+                """), listener);
+        dispatcher.dispatch(update("agent_message_chunk", "\"content\":{\"type\":\"text\",\"text\":\"Visible reply\"}"), listener);
+
+        assertEquals(List.of("agent:Visible reply"), listener.events);
+    }
+
+    @Test
+    public void keepsHeartbeatsThatAreNotMarkedSilent() {
+        AcpSessionUpdateDispatcher dispatcher = dispatcher(new ToolCallTracker());
+        Listener listener = new Listener();
+
+        dispatcher.dispatch(update("agent_message_chunk", """
+                \"content\":{\"type\":\"text\",\"text\":\"<heartbeat><automation_id>job</automation_id><decision>NOTIFY</decision><message>Done.</message></heartbeat>\"}
+                """), listener);
+
+        assertEquals(List.of("agent:<heartbeat><automation_id>job</automation_id><decision>NOTIFY</decision><message>Done.</message></heartbeat>"),
+                listener.events);
+    }
+
+    @Test
     public void dispatchesTypedAndStatusEventsInArrivalOrder() {
         AcpSessionUpdateDispatcher dispatcher = dispatcher(new ToolCallTracker());
         Listener listener = new Listener();

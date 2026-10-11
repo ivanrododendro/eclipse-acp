@@ -87,7 +87,7 @@ public final class AcpChatView extends ViewPart {
         projectSelector.setToolTipText("Current project");
         projectSelector.addListener(SWT.Selection, ignored -> selectProjectFromCombo());
         closeProjectButton = new IconButton(projectBar, lucideIcon("x"),
-                "Close the current session and remove the project from the list", this::closeCurrentProject);
+                "Remove the current project from the list", this::closeCurrentProject);
         closeProjectButton.setEnabled(false);
 
         Composite header = new Composite(parent, SWT.NONE);
@@ -150,15 +150,10 @@ public final class AcpChatView extends ViewPart {
         updateControls();
     }
 
-    /** Called by the project/resource context-menu command. */
-    public void openSessionFor(IProject project) {
-        openSessionFor(project, null);
-    }
-
-    public void openSessionFor(IProject project, String initialPrompt) {
-        sessionService.openSessionFor(project, initialPrompt);
-        ChatSessionModel selected = sessionService.activeSession();
-        if (selected != null && selected.project.equals(project)) navigator.show(true, true);
+    /** Called by the project/resource context-menu command without starting an ACP session. */
+    public void openProject(IProject project) {
+        sessionService.addProject(project);
+        navigator.show(false, true);
     }
 
     private void selectSession(ChatSessionModel session) {
@@ -225,10 +220,9 @@ public final class AcpChatView extends ViewPart {
     private void updateControls() {
         if (status == null || status.isDisposed()) return;
         updateHeaderTitle();
-        boolean connected = activeSession != null && activeSession.isConnected();
         boolean busy = activeSession != null && activeSession.isBusy();
         backButton.setEnabled(activeSession != null);
-        newSessionButton.setEnabled(connected && !busy && activeSession.project.isOpen());
+        newSessionButton.setEnabled(activeSession != null && !busy && activeSession.project.isOpen());
         closeProjectButton.setEnabled(activeSession != null);
         updateRecentSessions();
         renderStatus();

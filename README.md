@@ -4,7 +4,7 @@ An [Agent Client Protocol (ACP)](https://agentclientprotocol.com/) client for Ec
 
 ## Features
 
-- **Project chats:** choose **ACP → Open ACP Session** from a project or resource context menu, or press `Ctrl+Alt+O` (`⌘⌥O` on macOS) with a project selected or its editor active. The agent uses the project directory as its working directory. Switch between projects in the view, start a new chat, or stop a response.
+- **Project chats:** choose **ACP → Open in ACP View** from a project or resource context menu, or press `Ctrl+Alt+O` (`⌘⌥O` on macOS) with a project selected or its editor active. This adds the project to the ACP view and shows its chat list; start a new chat when you are ready. The agent uses the project directory as its working directory.
 - **Conversations:** streamed responses, session history, and restoration for agents that support `session/list` and either `session/load` or `session/resume`. The transcript renders CommonMark and GFM tables; file references within the project can open in an Eclipse editor.
 - **Transcript controls:** the view shows agent status and can show tool calls, terminal output, change previews, and usage data when enabled in preferences. Select text in the transcript and use **Copy and Paste in a New Session** to place it in a new chat's prompt. Debug logging of ACP messages is also available in preferences and is off by default.
 - **Agents and options:** manage multiple providers under **Window → Preferences → ACP Connector** and choose a default. When the agent offers them, the view displays session mode, model, and reasoning level selectors, with other settings under **Options…**.
@@ -18,7 +18,7 @@ Requires Eclipse IDE 2026-03 or newer, Java 21, and an ACP agent installed and a
 
 1. In Eclipse, open **Help → Eclipse Marketplace…**, search for **Eclipse ACP Connector**, select **Install**, and complete the wizard. Restart Eclipse if prompted.
 2. Open **Window → Preferences → ACP Connector**. Add a provider named **Cline** with command `cline` and arguments `--acp`, then set it as the default. If Eclipse cannot find the command, use its absolute path. You can configure other ACP agents in the same way.
-3. In **Project Explorer**, right-click an open project and choose **ACP → Open ACP Session**. Enter a prompt in the **ACP Chat** view and send it with **Send** or `Ctrl+Enter` (`⌘+Enter` on macOS).
+3. In **Project Explorer**, right-click an open project and choose **ACP → Open in ACP View**. In the **ACP Chat** view, create a new chat, enter a prompt, and send it with **Send** or `Ctrl+Enter` (`⌘+Enter` on macOS).
 
 If the listing does not appear in Marketplace, install from the p2 update site via **Help → Install New Software… → Add…**. Enter `https://ivanrododendro.github.io/eclipse-acp/` and select **Eclipse ACP Connector**. Leave **Contact all update sites during install to find required software** unchecked. The update site is published with GitHub releases; if it is unavailable, see the release assets for the p2 archive.
 
@@ -55,7 +55,8 @@ Eclipse commands / AcpChatView (SWT composition)
                   │
                   ├─ ChatComposer / ChatTranscript → SWT editor / browser
                   ├─ AcpChatDialogs → modal interactions
-                  ├─ AcpSessionService → AgentProviderRegistry → Eclipse preferences
+                  ├─ AgentProviderRegistry → Eclipse preferences (composition)
+                  ├─ AcpSessionService → SessionOperationScope / AgentSessionHistory
                   └─ AcpChatSessionListener → ChatSessionModel
                          │
                     AgentClient / AgentListener (protocol-neutral interfaces and models)
@@ -65,9 +66,9 @@ Eclipse commands / AcpChatView (SWT composition)
                     JsonRpcConnection → stdio → ACP agent process
 ```
 
-`plugins/dev.eclipseacp.client` contains the UI, session services, agent model, and ACP adapter. `AgentClient` and `AgentListener` keep protocol messages out of the UI; `AcpClient` negotiates capabilities, manages sessions, and translates ACP events. Process launch and JSON-RPC 2.0 transport are separate and injectable. Eclipse does not expose client-side file access through ACP. `features/` defines the installable feature, `releng/` the target platform and p2 repository, and `plugins/dev.eclipseacp.client.tests` the tests. See the [detailed component diagram](docs/architecture-plugin.puml).
+`plugins/dev.eclipseacp.client` contains the UI, session services, agent model, and ACP adapter. `AgentClient` and `AgentListener` keep protocol messages out of the UI; `AcpClient` negotiates capabilities, manages sessions, and translates ACP events. `AcpSessionUpdateDispatcher` translates accepted updates using the listener supplied for each event; session filtering and buffering stay in `AcpClient`. `PendingAgentInteractions` owns decision futures, timeouts, capacity limits, and cancellation on Stop, session close, or transport loss, and rejects new dialogs once the client closes. `AcpConnectionLifecycle` owns process and transport resources, startup states, bounded stderr context, and cleanup. It preserves the transport for the final session-close request, releases the process before the transport, and rejects duplicate startup. Launchers and transport factories remain injectable. Eclipse does not expose client-side file access through ACP. `features/` defines the installable feature, `releng/` the target platform and p2 repository, and `plugins/dev.eclipseacp.client.tests` the tests. See the [detailed component diagram](docs/architecture-plugin.puml).
 
-`AcpChatView` composes the UI and presents the selected project. `ChatComposer` owns prompt editing and option selectors; `ChatTranscript` owns HTML rendering, file navigation, and text selection. `AcpSessionService` owns open chats, connection reuse, restoration, prompts, and configuration changes. `AcpChatSessionListener` batches agent events and updates `ChatSessionModel`; dialogs and asynchronous workspace operations stay in their dedicated services.
+`AcpChatView` composes the UI and presents the selected project. `RecentSessionsPanel` owns recent-chat rows, menus, and selection dialogs and emits open/close callbacks. `ChatPageNavigator` owns page geometry and transitions, invalidating stale animation frames on navigation or resize; the view retains header presentation and session actions. `ChatComposer` owns prompt editing, drafts, and submission, composing `SlashCommandCompletion`, `ContextUsageIndicator`, and two `AgentOptionSelector` widgets; `ChatTranscript` owns HTML rendering, file navigation, and text selection. `AcpSessionService` owns open chats, connection reuse, restoration, prompts, and configuration changes. The view injects the client factory and a configuration supplier that reads current preferences for each new session. `SessionOperationScope` owns I/O execution, per-session cancellation, cleanup, and executor shutdown; `AgentSessionHistory` loads paginated history and filters it by project directory. Option selectors receive typed option state and callbacks, without depending on the session service. `AcpChatSessionListener` batches agent events and updates `ChatSessionModel`; dialogs and asynchronous workspace operations stay in their dedicated services.
 
 ## License
 

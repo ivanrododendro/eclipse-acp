@@ -60,6 +60,32 @@ public class AcpSessionServiceTest {
     }
 
     @Test
+    public void addsAProjectAndLoadsItsHistoryWithoutStartingAnAcpSession() {
+        Harness h = new Harness();
+        IProject project = project("first");
+
+        h.service.addProject(project);
+
+        ChatSessionModel added = h.service.activeSession();
+        assertEquals(List.of(added), h.service.sessions());
+        assertSame(project, added.project);
+        assertEquals(1, h.clients.size());
+        FakeClient client = h.client();
+        assertEquals(1, client.sessionListConnectCount);
+        assertEquals(0, client.newSessionCount);
+
+        h.service.addProject(project);
+        assertSame(added, h.service.activeSession());
+        assertEquals(1, h.service.sessions().size());
+        assertEquals(1, h.clients.size());
+
+        client.connection.complete(null);
+        h.drainUi();
+        h.service.newSession(null);
+        assertEquals(1, client.newSessionCount);
+    }
+
+    @Test
     public void transfersAnIdleConnectionToANewSessionAndGuardsTheTransition() {
         Harness h = new Harness();
         ChatSessionModel previous = h.open(project("first"));
@@ -85,6 +111,7 @@ public class AcpSessionServiceTest {
         assertFalse(next.isBusy());
         assertEquals(1, h.clients.size());
         assertEquals(List.of(next), h.service.sessions());
+        assertEquals(1, h.reloads);
     }
 
     @Test
@@ -385,6 +412,18 @@ public class AcpSessionServiceTest {
     }
 
     @Test
+    public void fullyReloadsTheTranscriptForTheFirstPromptOfANewSession() {
+        Harness h = new Harness();
+        ChatSessionModel session = h.open(project("first"));
+        int reloads = h.reloads;
+
+        h.service.sendPrompt(session, "First question");
+
+        assertEquals(reloads + 1, h.reloads);
+        assertEquals("## You\n\nFirst question\n\n## Agent\n\n", session.transcriptMarkdown.toString());
+    }
+
+    @Test
     public void preservesReplayOrderAcrossAgentToolAndUserUpdates() {
         Harness h = new Harness();
         ChatSessionModel session = h.open(project("first"));
@@ -553,16 +592,23 @@ public class AcpSessionServiceTest {
         String activeSessionId;
         int promptCount;
         int connectCount;
+        int sessionListConnectCount;
+        int newSessionCount;
         int cancelCount;
 
         FakeClient(AgentListener listener) { this.listener = listener; }
         @Override public CompletableFuture<Void> connect(Path directory) { connectCount++; return connection; }
+        @Override public CompletableFuture<Void> connectForSessionList(Path directory) {
+            sessionListConnectCount++;
+            return connection;
+        }
         @Override public CompletableFuture<Void> restoreSession(String id, Path directory) {
             restoredId = id;
             return connection;
         }
         @Override public CompletableFuture<Void> startNewSession(Path directory, AgentListener listener) {
             this.listener = listener;
+            newSessionCount++;
             return newSession;
         }
         @Override public CompletableFuture<Void> prompt(String text) {
