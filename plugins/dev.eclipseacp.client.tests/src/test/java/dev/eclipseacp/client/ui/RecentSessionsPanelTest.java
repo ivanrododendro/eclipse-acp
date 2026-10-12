@@ -82,6 +82,13 @@ public class RecentSessionsPanelTest {
         assertEquals("", RecentSessionsPanel.chatTitle(null));
     }
 
+    @Test
+    public void showsViewAllOnlyWhenSomeSessionsAreNotInTheRecentList() {
+        assertFalse(RecentSessionsPanel.shouldShowViewAll(0, 3));
+        assertFalse(RecentSessionsPanel.shouldShowViewAll(3, 3));
+        assertTrue(RecentSessionsPanel.shouldShowViewAll(4, 3));
+    }
+
     private static ChatSessionModel session() {
         return new ChatSessionModel(null, "Project", new AgentProvider("agent", "Agent", "agent", ""), false);
     }

@@ -92,8 +92,9 @@ final class RecentSessionsPanel {
             showControl(button, visible);
             button.redraw();
         }
-        viewAllButton.setEnabled(!recentSessions.isEmpty());
-        showControl(viewAllButton, !recentSessions.isEmpty());
+        boolean showViewAll = shouldShowViewAll(recentSessions.size(), recentButtons.size());
+        viewAllButton.setEnabled(showViewAll);
+        showControl(viewAllButton, showViewAll);
         viewAllButton.redraw();
         viewAllButton.getParent().layout(true, true);
     }
@@ -118,6 +119,10 @@ final class RecentSessionsPanel {
             }
         }
         return List.copyOf(entries);
+    }
+
+    static boolean shouldShowViewAll(int sessionCount, int visibleCount) {
+        return sessionCount > visibleCount;
     }
 
     private Canvas createTextAction(Composite parent, Supplier<String> label, Supplier<String> trailingLabel,
