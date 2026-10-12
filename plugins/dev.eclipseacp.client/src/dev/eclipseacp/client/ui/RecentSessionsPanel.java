@@ -4,11 +4,10 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Locale;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
 
-import org.eclipse.jface.dialogs.Dialog;
-import org.eclipse.jface.viewers.LabelProvider;
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.accessibility.ACC;
 import org.eclipse.swt.accessibility.AccessibleAdapter;
@@ -16,6 +15,7 @@ import org.eclipse.swt.accessibility.AccessibleControlAdapter;
 import org.eclipse.swt.accessibility.AccessibleControlEvent;
 import org.eclipse.swt.accessibility.AccessibleEvent;
 import org.eclipse.swt.graphics.GC;
+import org.eclipse.swt.graphics.Point;
 import org.eclipse.swt.layout.GridData;
 import org.eclipse.swt.layout.GridLayout;
 import org.eclipse.swt.widgets.Canvas;
@@ -23,7 +23,11 @@ import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Control;
 import org.eclipse.swt.widgets.Menu;
 import org.eclipse.swt.widgets.MenuItem;
-import org.eclipse.ui.dialogs.ElementListSelectionDialog;
+import org.eclipse.swt.widgets.Shell;
+import org.eclipse.swt.widgets.Table;
+import org.eclipse.swt.widgets.TableColumn;
+import org.eclipse.swt.widgets.TableItem;
+import org.eclipse.swt.widgets.Text;
 
 import dev.eclipseacp.client.agent.SessionInfo;
 
@@ -36,6 +40,11 @@ final class RecentSessionsPanel {
     private final List<Canvas> recentButtons;
     private final Canvas viewAllButton;
     private List<RecentSession> recentSessions = List.of();
+    private Shell allSessionsPopup;
+    private Table allSessionsTable;
+    private Text allSessionsFilter;
+    private TableColumn allSessionsTitleColumn;
+    private TableColumn allSessionsAgeColumn;
 
     RecentSessionsPanel(Composite parent, int visibleCount, Consumer<RecentSession> open,
             Consumer<ChatSessionModel> onClose) {
@@ -71,12 +80,15 @@ final class RecentSessionsPanel {
         viewAllButton = createTextAction(control, () -> "View all (" + recentSessions.size() + ")", () -> "",
                 this::showAllSessions);
         viewAllButton.setToolTipText("Show all available chats");
+        control.addListener(SWT.Resize, ignored -> positionAllSessionsPopup());
+        control.addDisposeListener(ignored -> closeAllSessionsPopup());
     }
 
     Composite control() { return control; }
 
     void update(ChatSessionModel session) {
         if (control.isDisposed()) return;
+        closeAllSessionsPopup();
         recentSessions = entriesFor(session);
         boolean canRestore = session != null && !session.isBusy()
                 && session.canRestoreSavedSessions();
@@ -194,16 +206,121 @@ final class RecentSessionsPanel {
     }
 
     private void showAllSessions() {
-        ElementListSelectionDialog dialog = new ElementListSelectionDialog(control.getShell(), new LabelProvider() {
-            @Override public String getText(Object element) { return ((RecentSession) element).label(); }
+        if (allSessionsPopup != null && !allSessionsPopup.isDisposed()) {
+            closeAllSessionsPopup();
+            return;
+        }
+        allSessionsPopup = new Shell(control.getShell(), SWT.ON_TOP | SWT.TOOL);
+        GridLayout popupLayout = new GridLayout(1, false);
+        popupLayout.marginWidth = popupLayout.marginHeight = 0;
+        popupLayout.verticalSpacing = 0;
+        allSessionsPopup.setLayout(popupLayout);
+        allSessionsFilter = new Text(allSessionsPopup, SWT.SINGLE | SWT.SEARCH | SWT.ICON_SEARCH | SWT.CANCEL);
+        allSessionsFilter.setMessage("Filter chats");
+        allSessionsFilter.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
+        allSessionsTable = new Table(allSessionsPopup, SWT.SINGLE | SWT.FULL_SELECTION | SWT.BORDER | SWT.V_SCROLL);
+        allSessionsTable.setLayoutData(new GridData(SWT.FILL, SWT.FILL, true, true));
+        allSessionsTitleColumn = new TableColumn(allSessionsTable, SWT.LEFT);
+        allSessionsAgeColumn = new TableColumn(allSessionsTable, SWT.RIGHT);
+        allSessionsTable.addListener(SWT.Resize, ignored -> layoutAllSessionsColumns());
+        allSessionsFilter.addModifyListener(ignored -> refreshAllSessionsResults());
+        allSessionsFilter.addListener(SWT.KeyDown, event -> {
+            if (event.keyCode == SWT.ARROW_DOWN && allSessionsTable.getItemCount() > 0) {
+                allSessionsTable.setFocus();
+                event.doit = false;
+            } else if (event.keyCode == SWT.ESC) {
+                closeAllSessionsPopup();
+                viewAllButton.setFocus();
+                event.doit = false;
+            } else if ((event.keyCode == SWT.CR || event.keyCode == SWT.KEYPAD_CR)
+                    && allSessionsTable.getSelectionCount() > 0) {
+                openSelectedSession();
+                event.doit = false;
+            }
         });
-        dialog.setTitle("All chats");
-        dialog.setMessage("Select a chat to open");
-        dialog.setElements(recentSessions.toArray());
-        if (dialog.open() != Dialog.OK) return;
-        RecentSession selected = (RecentSession) dialog.getFirstResult();
-        if (selected == null) return;
+        allSessionsFilter.addListener(SWT.FocusOut, ignored -> closeAllSessionsPopupAfterFocusChange());
+        refreshAllSessionsResults();
+        allSessionsTable.addListener(SWT.DefaultSelection, ignored -> openSelectedSession());
+        allSessionsTable.addListener(SWT.KeyDown, event -> {
+            if (event.keyCode == SWT.ESC) {
+                closeAllSessionsPopup();
+                viewAllButton.setFocus();
+                event.doit = false;
+            }
+        });
+        allSessionsTable.addListener(SWT.FocusOut, ignored -> closeAllSessionsPopupAfterFocusChange());
+        allSessionsPopup.addListener(SWT.Deactivate, ignored -> closeAllSessionsPopup());
+        positionAllSessionsPopup();
+        allSessionsPopup.setVisible(true);
+        allSessionsFilter.setFocus();
+    }
+
+    private void refreshAllSessionsResults() {
+        if (allSessionsTable == null || allSessionsTable.isDisposed()) return;
+        allSessionsTable.removeAll();
+        String query = allSessionsFilter.getText().toLowerCase(Locale.ROOT);
+        for (RecentSession session : recentSessions) {
+            if (!session.label().toLowerCase(Locale.ROOT).contains(query)) continue;
+            TableItem item = new TableItem(allSessionsTable, SWT.NONE);
+            String age = SessionAge.format(session.updatedAt(), Instant.now());
+            item.setText(0, session.label());
+            item.setText(1, age);
+            item.setData(session);
+        }
+        if (allSessionsTable.getItemCount() > 0) allSessionsTable.select(0);
+        layoutAllSessionsColumns();
+        positionAllSessionsPopup();
+    }
+
+    private void layoutAllSessionsColumns() {
+        if (allSessionsTable == null || allSessionsTable.isDisposed()) return;
+        GC gc = new GC(allSessionsTable);
+        int ageWidth = 0;
+        for (TableItem item : allSessionsTable.getItems()) {
+            ageWidth = Math.max(ageWidth, gc.textExtent(item.getText(1)).x);
+        }
+        gc.dispose();
+        ageWidth += 10;
+        allSessionsAgeColumn.setWidth(ageWidth);
+        allSessionsTitleColumn.setWidth(Math.max(0, allSessionsTable.getClientArea().width - ageWidth));
+    }
+
+    private void positionAllSessionsPopup() {
+        if (allSessionsPopup == null || allSessionsPopup.isDisposed() || viewAllButton.isDisposed()) return;
+        Point origin = viewAllButton.toDisplay(0, viewAllButton.getSize().y);
+        int width = control.getClientArea().width;
+        int belowButton = viewAllButton.getBounds().y + viewAllButton.getSize().y;
+        int filterHeight = allSessionsFilter.computeSize(SWT.DEFAULT, SWT.DEFAULT).y;
+        int availableHeight = Math.max(filterHeight + allSessionsTable.getItemHeight() + 4,
+                control.getClientArea().height - belowButton);
+        int contentHeight = filterHeight + Math.max(1, allSessionsTable.getItemCount())
+                * allSessionsTable.getItemHeight() + 4;
+        int height = Math.min(contentHeight, availableHeight);
+        allSessionsPopup.setBounds(origin.x, origin.y, width, height);
+    }
+
+    private void closeAllSessionsPopupAfterFocusChange() {
+        control.getDisplay().asyncExec(() -> {
+            if (allSessionsPopup == null || allSessionsPopup.isDisposed()) return;
+            Control focus = control.getDisplay().getFocusControl();
+            if (focus != allSessionsFilter && focus != allSessionsTable) closeAllSessionsPopup();
+        });
+    }
+
+    private void openSelectedSession() {
+        if (allSessionsTable == null || allSessionsTable.isDisposed() || allSessionsTable.getSelectionCount() == 0) return;
+        RecentSession selected = (RecentSession) allSessionsTable.getSelection()[0].getData();
+        closeAllSessionsPopup();
         open.accept(selected);
+    }
+
+    private void closeAllSessionsPopup() {
+        if (allSessionsPopup != null && !allSessionsPopup.isDisposed()) allSessionsPopup.dispose();
+        allSessionsPopup = null;
+        allSessionsTable = null;
+        allSessionsFilter = null;
+        allSessionsTitleColumn = null;
+        allSessionsAgeColumn = null;
     }
 
     private static void showControl(Control control, boolean visible) {
