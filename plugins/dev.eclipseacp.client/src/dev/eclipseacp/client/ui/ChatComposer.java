@@ -18,9 +18,12 @@ import org.eclipse.swt.layout.GridLayout;
 import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Control;
 import org.eclipse.swt.widgets.Label;
+import org.eclipse.swt.widgets.Menu;
+import org.eclipse.swt.widgets.MenuItem;
 import org.eclipse.swt.widgets.Text;
 import org.eclipse.ui.IWorkbenchPage;
 
+import dev.eclipseacp.client.AcpLog;
 import dev.eclipseacp.client.agent.ConfigOption;
 
 /** SWT prompt editor and agent option selectors. Session actions belong to AcpSessionService. */
@@ -40,6 +43,8 @@ final class ChatComposer {
     private IconButton sendButton;
     private IconButton stopButton;
     private IconButton attachButton;
+    private Composite sourceFileBadges;
+    private boolean sourceFilePickerPending;
     private ContextUsageIndicator contextUsage;
     private AgentOptionSelector modelSelector;
     private AgentOptionSelector collaborationModeSelector;
@@ -77,6 +82,15 @@ final class ChatComposer {
             event.gc.drawRoundRectangle(0, 0, bounds.width - 1, bounds.height - 1, 22, 22);
         });
 
+        sourceFileBadges = new Composite(composer, SWT.NONE);
+        sourceFileBadges.setBackground(inputBackground);
+        sourceFileBadges.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
+        GridLayout badgesLayout = new GridLayout(8, false);
+        badgesLayout.marginWidth = badgesLayout.marginHeight = 0;
+        badgesLayout.horizontalSpacing = 5;
+        sourceFileBadges.setLayout(badgesLayout);
+        showControl(sourceFileBadges, false);
+
         prompt = new Text(composer, SWT.MULTI | SWT.WRAP);
         prompt.setBackground(inputBackground);
         prompt.setFont(font);
@@ -95,6 +109,7 @@ final class ChatComposer {
                 composer.getParent().layout(true, true);
             }
             updateSendButton();
+            openSourceFilePickerForTypedAt();
         });
         prompt.addKeyListener(new KeyAdapter() {
             @Override public void keyPressed(KeyEvent event) {
@@ -117,8 +132,7 @@ final class ChatComposer {
         footerLayout.horizontalSpacing = 6;
         footer.setLayout(footerLayout);
 
-        attachButton = new IconButton(footer, icon.apply("plus"), "Attach (not available yet)", () -> { });
-        attachButton.setEnabled(false);
+        attachButton = new IconButton(footer, icon.apply("plus"), "Add context", this::showAddContextMenu);
 
         collaborationModeSelector = new AgentOptionSelector(footer, footerBackground,
                 "Session mode", false, (option, choice) -> changeConfigOption(option, choice, "Session mode"));
@@ -173,6 +187,7 @@ final class ChatComposer {
             saveDraft();
             activeSession = nextSession;
             restoreActiveDraft();
+            refreshSourceFileBadges();
         }
         composer.setEnabled(activeSession != null);
         if (activeSession == null) {
@@ -191,6 +206,8 @@ final class ChatComposer {
         modelSelector.update(AgentConfigOptions.model(activeSession), connected && !busy);
         collaborationModeSelector.update(AgentConfigOptions.sessionMode(activeSession), connected && !busy);
         prompt.setEnabled(connected);
+        attachButton.setEnabled(connected && !busy);
+        refreshSourceFileBadges();
         composer.getParent().layout(true, true);
     }
 
@@ -198,6 +215,7 @@ final class ChatComposer {
         if (!prompt.getText().isEmpty()) prompt.setText("");
         prompt.setEnabled(false);
         slashCommands.close();
+        refreshSourceFileBadges();
         modelSelector.reset();
         collaborationModeSelector.reset();
         contextUsage.setUsage(null);
@@ -224,6 +242,98 @@ final class ChatComposer {
 
     private void sendPrompt(ChatSessionModel session, String draft, String text) {
         sessions.sendPrompt(session, draft, EclipseContext.expand(text, session.project, page));
+    }
+
+    private void showAddContextMenu() {
+        if (activeSession == null || !activeSession.isConnected() || activeSession.isBusy()) return;
+        Menu menu = new Menu(attachButton);
+        MenuItem sourceFile = new MenuItem(menu, SWT.PUSH);
+        sourceFile.setText("@ Source file");
+        sourceFile.addListener(SWT.Selection, event -> {
+            menu.dispose();
+            openSourceFilePicker(activeSession, -1);
+        });
+        var location = attachButton.toDisplay(0, attachButton.getSize().y);
+        menu.setLocation(location);
+        menu.setVisible(true);
+    }
+
+    private void openSourceFilePickerForTypedAt() {
+        if (sourceFilePickerPending || activeSession == null || !activeSession.isConnected() || activeSession.isBusy()) return;
+        int triggerOffset = prompt.getCaretPosition() - 1;
+        if (triggerOffset < 0 || triggerOffset >= prompt.getCharCount() || prompt.getText().charAt(triggerOffset) != '@') return;
+        ChatSessionModel session = activeSession;
+        sourceFilePickerPending = true;
+        prompt.getDisplay().asyncExec(() -> {
+            sourceFilePickerPending = false;
+            if (prompt.isDisposed() || activeSession != session || !session.isConnected() || session.isBusy()) return;
+            openSourceFilePicker(session, triggerOffset);
+        });
+    }
+
+    /** Opens the workspace picker; a non-negative offset removes the typed @ after a choice. */
+    private void openSourceFilePicker(ChatSessionModel session, int triggerOffset) {
+        if (session == null || !session.isConnected() || session.isBusy()) return;
+        try {
+            var file = dialogs.chooseSourceFile(session.project);
+            if (file == null || activeSession != session) return;
+            boolean present = session.sourceFiles.stream()
+                    .anyMatch(existing -> existing.getFullPath().equals(file.getFullPath()));
+            if (!present) session.sourceFiles.add(file);
+            if (triggerOffset >= 0 && triggerOffset < prompt.getCharCount()
+                    && prompt.getText().charAt(triggerOffset) == '@') {
+                String input = prompt.getText();
+                prompt.setText(input.substring(0, triggerOffset) + input.substring(triggerOffset + 1));
+                prompt.setSelection(triggerOffset);
+            }
+            refreshSourceFileBadges();
+        } catch (RuntimeException exception) {
+            AcpLog.error("Could not open the source-file picker", exception);
+        }
+    }
+
+    private void refreshSourceFileBadges() {
+        if (sourceFileBadges == null || sourceFileBadges.isDisposed()) return;
+        for (Control child : sourceFileBadges.getChildren()) child.dispose();
+        if (activeSession != null) {
+            for (var file : activeSession.sourceFiles) createSourceFileBadge(file);
+        }
+        showControl(sourceFileBadges, activeSession != null && !activeSession.sourceFiles.isEmpty());
+        sourceFileBadges.layout(true, true);
+        composer.getParent().layout(true, true);
+    }
+
+    private void createSourceFileBadge(org.eclipse.core.resources.IFile file) {
+        Composite badge = new Composite(sourceFileBadges, SWT.NONE);
+        var badgeBackground = badge.getDisplay().getSystemColor(SWT.COLOR_INFO_BACKGROUND);
+        var badgeBorder = badge.getDisplay().getSystemColor(SWT.COLOR_WIDGET_NORMAL_SHADOW);
+        badge.setBackground(badgeBackground);
+        badge.addPaintListener(event -> {
+            var area = badge.getClientArea();
+            event.gc.setAntialias(SWT.ON);
+            event.gc.setBackground(badgeBackground);
+            event.gc.fillRoundRectangle(area.x, area.y, area.width - 1, area.height - 1, 14, 14);
+            event.gc.setForeground(badgeBorder);
+            event.gc.drawRoundRectangle(area.x, area.y, area.width - 1, area.height - 1, 14, 14);
+        });
+        GridLayout layout = new GridLayout(2, false);
+        layout.marginWidth = 7;
+        layout.marginHeight = 3;
+        layout.horizontalSpacing = 4;
+        badge.setLayout(layout);
+        Label name = new Label(badge, SWT.NONE);
+        name.setBackground(badgeBackground);
+        name.setText("@ " + file.getName());
+        Label remove = new Label(badge, SWT.NONE);
+        remove.setBackground(badgeBackground);
+        remove.setText("×");
+        remove.setToolTipText("Remove " + file.getName());
+        remove.setCursor(remove.getDisplay().getSystemCursor(SWT.CURSOR_HAND));
+        remove.addListener(SWT.MouseUp, event -> {
+            if (activeSession == null) return;
+            activeSession.sourceFiles.removeIf(existing -> existing.getFullPath().equals(file.getFullPath()));
+            refreshSourceFileBadges();
+        });
     }
 
     void prepareInput(ChatSessionModel session, String initialPrompt) {

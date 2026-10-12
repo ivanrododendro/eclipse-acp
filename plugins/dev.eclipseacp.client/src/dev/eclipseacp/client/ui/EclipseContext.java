@@ -2,6 +2,7 @@ package dev.eclipseacp.client.ui;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.nio.charset.StandardCharsets;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -53,6 +54,24 @@ final class EclipseContext {
             case "test" -> "Propose or implement focused tests for the selected code.\n\n" + context;
             default -> context;
         };
+    }
+
+    static String sourceFiles(List<IFile> files) {
+        if (files == null || files.isEmpty()) return "";
+        StringBuilder context = new StringBuilder();
+        for (IFile file : files) {
+            if (file == null || !file.exists()) continue;
+            try (var contents = file.getContents()) {
+                String path = file.getFullPath().toString();
+                String text = new String(contents.readAllBytes(), StandardCharsets.UTF_8);
+                context.append("<eclipse-source-file path=\"").append(path).append("\">\n")
+                        .append(text).append("\n</eclipse-source-file>\n");
+            } catch (Exception exception) {
+                context.append("[Could not read source file ").append(file.getName()).append(": ")
+                        .append(exception.getMessage()).append("]\n");
+            }
+        }
+        return context.toString();
     }
 
     private static String selection(IWorkbenchPage page) {

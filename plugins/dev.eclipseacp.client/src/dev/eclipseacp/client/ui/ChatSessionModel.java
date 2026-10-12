@@ -6,6 +6,7 @@ import java.util.List;
 import java.util.Map;
 
 import org.eclipse.core.resources.IProject;
+import org.eclipse.core.resources.IFile;
 
 import dev.eclipseacp.client.agent.AgentClient;
 import dev.eclipseacp.client.agent.AgentProvider;
@@ -41,6 +42,8 @@ final class ChatSessionModel {
     final WorkspaceFileLinks fileLinks;
     List<SessionInfo> savedSessions = List.of();
     final List<PromptAttachment> attachments = new ArrayList<>();
+    /** Workspace source files explicitly included with the next prompt. */
+    final List<IFile> sourceFiles = new ArrayList<>();
     final Map<String, String> commands = new LinkedHashMap<>();
     final Map<String, ConfigOption> configOptions = new LinkedHashMap<>();
     String sessionId;

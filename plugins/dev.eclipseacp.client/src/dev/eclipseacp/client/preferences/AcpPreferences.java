@@ -27,6 +27,12 @@ public final class AcpPreferences {
     public static final boolean DEFAULT_DEBUG_ACP_MESSAGES = false;
     public static final int MIN_VISIBLE_RECENT_SESSIONS = 1;
     public static final int MAX_VISIBLE_RECENT_SESSIONS = 20;
+    /** Comma-separated extensions hidden from the source-file picker. */
+    public static final String SOURCE_FILE_EXCLUDED_EXTENSIONS = "sourceFileExcludedExtensions";
+    /** Comma-separated directory names hidden from the source-file picker. */
+    public static final String SOURCE_FILE_EXCLUDED_DIRECTORIES = "sourceFileExcludedDirectories";
+    public static final String DEFAULT_SOURCE_FILE_EXCLUDED_EXTENSIONS = "class, jar, png, jpg";
+    public static final String DEFAULT_SOURCE_FILE_EXCLUDED_DIRECTORIES = "target, node_modules, .git, build, dist";
     /** JSON array of MCP server declarations; secrets should use environment-variable expansion, not literals. */
     public static final String MCP_SERVERS_JSON = "mcpServersJson";
 

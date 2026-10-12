@@ -5,6 +5,9 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
+import java.util.Arrays;
+import java.util.Locale;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
@@ -15,9 +18,15 @@ import org.eclipse.jface.window.Window;
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.widgets.FileDialog;
 import org.eclipse.swt.widgets.Shell;
+import org.eclipse.core.resources.IFile;
+import org.eclipse.core.resources.IProject;
+import org.eclipse.core.resources.IResource;
 import org.eclipse.jface.viewers.ArrayContentProvider;
 import org.eclipse.jface.viewers.LabelProvider;
+import org.eclipse.jface.viewers.Viewer;
+import org.eclipse.jface.viewers.ViewerFilter;
 import org.eclipse.ui.dialogs.ListDialog;
+import org.eclipse.ui.dialogs.FilteredResourcesSelectionDialog;
 
 import dev.eclipseacp.client.agent.AuthMethod;
 import dev.eclipseacp.client.agent.ConfigOption;
@@ -26,6 +35,7 @@ import dev.eclipseacp.client.agent.ElicitationRequest;
 import dev.eclipseacp.client.agent.PermissionOption;
 import dev.eclipseacp.client.agent.PermissionRequest;
 import dev.eclipseacp.client.agent.ToolCall;
+import dev.eclipseacp.client.preferences.AcpPreferences;
 
 /** Owns modal interactions for the chat and its agent. */
 final class AcpChatDialogs {
@@ -77,6 +87,45 @@ final class AcpChatDialogs {
             return null;
         }
         return new PromptAttachment(path, mime);
+    }
+
+    IFile chooseSourceFile(IProject project) {
+        Set<String> excludedExtensions = entries(AcpPreferences.store().getString(AcpPreferences.SOURCE_FILE_EXCLUDED_EXTENSIONS), true);
+        Set<String> excludedDirectories = entries(AcpPreferences.store().getString(AcpPreferences.SOURCE_FILE_EXCLUDED_DIRECTORIES), false);
+        FilteredResourcesSelectionDialog dialog = new FilteredResourcesSelectionDialog(shell.get(), false,
+                project, IResource.FILE) {
+            { addListFilter(new SourceFileFilter(excludedExtensions, excludedDirectories)); }
+        };
+        dialog.setTitle("Select source file");
+        dialog.setInitialPattern("*");
+        return dialog.open() == Window.OK && dialog.getFirstResult() instanceof IFile file ? file : null;
+    }
+
+    private static Set<String> entries(String value, boolean extensions) {
+        return Arrays.stream(value.split(",")).map(String::trim).filter(entry -> !entry.isEmpty())
+                .map(entry -> extensions && entry.startsWith(".") ? entry.substring(1) : entry)
+                .map(entry -> entry.toLowerCase(Locale.ROOT)).collect(java.util.stream.Collectors.toUnmodifiableSet());
+    }
+
+    private static final class SourceFileFilter extends ViewerFilter {
+        private final Set<String> extensions;
+        private final Set<String> directories;
+
+        SourceFileFilter(Set<String> extensions, Set<String> directories) {
+            this.extensions = extensions;
+            this.directories = directories;
+        }
+
+        @Override public boolean select(Viewer viewer, Object parentElement, Object element) {
+            if (!(element instanceof IFile file)) return true;
+            String extension = file.getFileExtension();
+            if (extension != null && extensions.contains(extension.toLowerCase(Locale.ROOT))) return false;
+            var path = file.getProjectRelativePath();
+            for (int index = 0; index < path.segmentCount() - 1; index++) {
+                if (directories.contains(path.segment(index).toLowerCase(Locale.ROOT))) return false;
+            }
+            return true;
+        }
     }
 
     CompletableFuture<String> requestElicitation(String sessionLabel, ElicitationRequest request) {

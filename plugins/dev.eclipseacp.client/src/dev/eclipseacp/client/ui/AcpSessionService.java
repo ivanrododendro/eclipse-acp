@@ -280,9 +280,15 @@ final class AcpSessionService {
         if (session == null || !session.isConnected() || session.isBusy() || expanded == null || expanded.isBlank()) return;
         session.beginPrompt(expanded);
         List<PromptAttachment> attachments = List.copyOf(session.attachments);
+        List<org.eclipse.core.resources.IFile> sourceFiles = List.copyOf(session.sourceFiles);
         session.attachments.clear();
+        session.sourceFiles.clear();
         if (!attachments.isEmpty()) {
             session.append("> Attached: " + attachments.stream().map(item -> "`" + item.path().getFileName() + "`")
+                    .collect(java.util.stream.Collectors.joining(", ")) + "\n\n");
+        }
+        if (!sourceFiles.isEmpty()) {
+            session.append("> Source files: " + sourceFiles.stream().map(file -> "`" + file.getName() + "`")
                     .collect(java.util.stream.Collectors.joining(", ")) + "\n\n");
         }
         if (session.firstPromptNeedsTranscriptReload) {
@@ -293,11 +299,14 @@ final class AcpSessionService {
         }
         changed(session);
         AgentClient client = session.client;
-        operations.run(session, () -> isOwned(session, client), () -> client.prompt(expanded, attachments))
+        String sourceContext = EclipseContext.sourceFiles(sourceFiles);
+        String promptWithSources = sourceContext.isEmpty() ? expanded : expanded + "\n\n" + sourceContext;
+        operations.run(session, () -> isOwned(session, client), () -> client.prompt(promptWithSources, attachments))
                 .whenComplete((ignored, failure) -> ui.accept(() -> {
             if (session.client != client) return;
             if (failure != null) {
                 session.attachments.addAll(attachments);
+                session.sourceFiles.addAll(sourceFiles);
                 session.promptDraft = draft == null ? "" : draft;
                 error(session, "Prompt failed", unwrap(failure));
                 presentation.draftReady(session, session.promptDraft);

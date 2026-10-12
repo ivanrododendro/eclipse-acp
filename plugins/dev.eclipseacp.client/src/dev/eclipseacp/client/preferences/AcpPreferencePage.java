@@ -18,7 +18,7 @@ import org.eclipse.ui.IWorkbenchPreferencePage;
 import dev.eclipseacp.client.agent.AgentProvider;
 
 public final class AcpPreferencePage extends PreferencePage implements IWorkbenchPreferencePage {
-    private List providerList; private Text name; private Text command; private Text arguments; private Label providerValidation; private Button hideAgentCommandsInChat; private Button debugAcpMessages; private Spinner visibleRecentSessions; private AgentProviderRegistry registry;
+    private List providerList; private Text name; private Text command; private Text arguments; private Label providerValidation; private Button hideAgentCommandsInChat; private Button debugAcpMessages; private Spinner visibleRecentSessions; private Text sourceFileExcludedExtensions; private Text sourceFileExcludedDirectories; private AgentProviderRegistry registry;
     public AcpPreferencePage() {
         setPreferenceStore(AcpPreferences.store());
     }
@@ -51,6 +51,12 @@ public final class AcpPreferencePage extends PreferencePage implements IWorkbenc
         visibleRecentSessions.setMinimum(AcpPreferences.MIN_VISIBLE_RECENT_SESSIONS);
         visibleRecentSessions.setMaximum(AcpPreferences.MAX_VISIBLE_RECENT_SESSIONS);
         visibleRecentSessions.setSelection(AcpPreferences.visibleRecentSessions(AcpPreferences.store()));
+        new Label(root, SWT.NONE).setText("Source-file extensions to exclude (comma-separated):");
+        sourceFileExcludedExtensions = field(root);
+        sourceFileExcludedExtensions.setText(AcpPreferences.store().getString(AcpPreferences.SOURCE_FILE_EXCLUDED_EXTENSIONS));
+        new Label(root, SWT.NONE).setText("Source-file directories to exclude (comma-separated):");
+        sourceFileExcludedDirectories = field(root);
+        sourceFileExcludedDirectories.setText(AcpPreferences.store().getString(AcpPreferences.SOURCE_FILE_EXCLUDED_DIRECTORIES));
         providerList.addListener(SWT.Selection, e -> loadSelected()); refresh();
         if (registry.hasInvalidStoredConfiguration()) setMessage("The saved provider configuration is invalid. It will remain unchanged until you save a replacement; the original JSON will be kept for recovery.", WARNING);
         return root;
@@ -82,6 +88,8 @@ public final class AcpPreferencePage extends PreferencePage implements IWorkbenc
             store.setValue(AcpPreferences.HIDE_AGENT_COMMANDS_IN_CHAT, hideAgentCommandsInChat.getSelection());
             store.setValue(AcpPreferences.DEBUG_ACP_MESSAGES, debugAcpMessages.getSelection());
             store.setValue(AcpPreferences.VISIBLE_RECENT_SESSIONS, visibleRecentSessions.getSelection());
+            store.setValue(AcpPreferences.SOURCE_FILE_EXCLUDED_EXTENSIONS, sourceFileExcludedExtensions.getText());
+            store.setValue(AcpPreferences.SOURCE_FILE_EXCLUDED_DIRECTORIES, sourceFileExcludedDirectories.getText());
             AcpPreferences.save();
             registry.committed();
             setErrorMessage(null);
@@ -98,17 +106,22 @@ public final class AcpPreferencePage extends PreferencePage implements IWorkbenc
         hideAgentCommandsInChat.setSelection(AcpPreferences.DEFAULT_HIDE_AGENT_COMMANDS_IN_CHAT);
         debugAcpMessages.setSelection(AcpPreferences.DEFAULT_DEBUG_ACP_MESSAGES);
         visibleRecentSessions.setSelection(AcpPreferences.DEFAULT_VISIBLE_RECENT_SESSIONS);
+        sourceFileExcludedExtensions.setText(AcpPreferences.DEFAULT_SOURCE_FILE_EXCLUDED_EXTENSIONS);
+        sourceFileExcludedDirectories.setText(AcpPreferences.DEFAULT_SOURCE_FILE_EXCLUDED_DIRECTORIES);
         showProviderValidation(null);
     }
     @Override public void init(IWorkbench workbench) { }
 
     private record StoredValues(String providersJson, String recoveryJson, String activeProvider,
-            boolean hideAgentCommands, boolean debugMessages, int visibleSessions) {
+            boolean hideAgentCommands, boolean debugMessages, int visibleSessions, String excludedExtensions,
+            String excludedDirectories) {
         static StoredValues read(IPreferenceStore store) {
             return new StoredValues(store.getString(AcpPreferences.PROVIDERS_JSON),
                     store.getString(AcpPreferences.PROVIDERS_JSON_RECOVERY), store.getString(AcpPreferences.ACTIVE_PROVIDER),
                     store.getBoolean(AcpPreferences.HIDE_AGENT_COMMANDS_IN_CHAT),
-                    store.getBoolean(AcpPreferences.DEBUG_ACP_MESSAGES), store.getInt(AcpPreferences.VISIBLE_RECENT_SESSIONS));
+                    store.getBoolean(AcpPreferences.DEBUG_ACP_MESSAGES), store.getInt(AcpPreferences.VISIBLE_RECENT_SESSIONS),
+                    store.getString(AcpPreferences.SOURCE_FILE_EXCLUDED_EXTENSIONS),
+                    store.getString(AcpPreferences.SOURCE_FILE_EXCLUDED_DIRECTORIES));
         }
         void restore(IPreferenceStore store) {
             store.setValue(AcpPreferences.PROVIDERS_JSON, providersJson);
@@ -117,6 +130,8 @@ public final class AcpPreferencePage extends PreferencePage implements IWorkbenc
             store.setValue(AcpPreferences.HIDE_AGENT_COMMANDS_IN_CHAT, hideAgentCommands);
             store.setValue(AcpPreferences.DEBUG_ACP_MESSAGES, debugMessages);
             store.setValue(AcpPreferences.VISIBLE_RECENT_SESSIONS, visibleSessions);
+            store.setValue(AcpPreferences.SOURCE_FILE_EXCLUDED_EXTENSIONS, excludedExtensions);
+            store.setValue(AcpPreferences.SOURCE_FILE_EXCLUDED_DIRECTORIES, excludedDirectories);
         }
     }
 }
