@@ -31,6 +31,7 @@ import org.eclipse.ui.dialogs.FilteredResourcesSelectionDialog;
 import dev.eclipseacp.client.agent.AuthMethod;
 import dev.eclipseacp.client.agent.ConfigOption;
 import dev.eclipseacp.client.agent.PromptAttachment;
+import dev.eclipseacp.client.agent.PromptAttachmentPolicy;
 import dev.eclipseacp.client.agent.ElicitationRequest;
 import dev.eclipseacp.client.agent.PermissionOption;
 import dev.eclipseacp.client.agent.PermissionRequest;
@@ -77,12 +78,16 @@ final class AcpChatDialogs {
         String selected = dialog.open();
         if (selected == null) return null;
         Path path = Path.of(selected);
-        if (Files.size(path) > 10 * 1024 * 1024) {
+        if (!Files.isRegularFile(path)) {
+            MessageDialog.openWarning(shell.get(), "Unsupported attachment", "Choose a regular image or audio file.");
+            return null;
+        }
+        if (Files.size(path) > PromptAttachmentPolicy.MAX_BYTES) {
             MessageDialog.openWarning(shell.get(), "Attachment too large", "Attachments are limited to 10 MiB.");
             return null;
         }
         String mime = Files.probeContentType(path);
-        if (mime == null || !(mime.startsWith("image/") || mime.startsWith("audio/"))) {
+        if (!PromptAttachmentPolicy.isSupportedMimeType(mime)) {
             MessageDialog.openWarning(shell.get(), "Unsupported attachment", "Choose an image or audio file.");
             return null;
         }

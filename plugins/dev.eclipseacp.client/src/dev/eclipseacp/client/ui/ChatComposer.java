@@ -1,6 +1,10 @@
 package dev.eclipseacp.client.ui;
 
 import java.util.ArrayList;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.List;
 import java.util.Map;
 import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
@@ -10,6 +14,8 @@ import org.eclipse.jface.bindings.keys.SWTKeySupport;
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.events.KeyAdapter;
 import org.eclipse.swt.events.KeyEvent;
+import org.eclipse.swt.dnd.Clipboard;
+import org.eclipse.swt.dnd.FileTransfer;
 import org.eclipse.swt.graphics.Color;
 import org.eclipse.swt.graphics.Font;
 import org.eclipse.swt.graphics.Image;
@@ -25,6 +31,8 @@ import org.eclipse.ui.IWorkbenchPage;
 
 import dev.eclipseacp.client.AcpLog;
 import dev.eclipseacp.client.agent.ConfigOption;
+import dev.eclipseacp.client.agent.PromptAttachment;
+import dev.eclipseacp.client.agent.PromptAttachmentPolicy;
 
 /** SWT prompt editor and agent option selectors. Session actions belong to AcpSessionService. */
 final class ChatComposer {
@@ -116,6 +124,8 @@ final class ChatComposer {
                 if ((event.stateMask & SWT.MOD1) != 0 && (event.keyCode == SWT.CR || event.keyCode == SWT.KEYPAD_CR)) {
                     event.doit = false;
                     sendPrompt();
+                } else if (isPasteShortcut(event) && pasteFilesFromClipboard()) {
+                    event.doit = false;
                 }
             }
         });
@@ -253,9 +263,70 @@ final class ChatComposer {
             menu.dispose();
             openSourceFilePicker(activeSession, -1);
         });
+        MenuItem attachment = new MenuItem(menu, SWT.PUSH);
+        attachment.setText("Attach image or audio…");
+        attachment.addListener(SWT.Selection, event -> {
+            menu.dispose();
+            attachSelectedFile();
+        });
         var location = attachButton.toDisplay(0, attachButton.getSize().y);
         menu.setLocation(location);
         menu.setVisible(true);
+    }
+
+    private void attachSelectedFile() {
+        if (activeSession == null || !activeSession.isConnected() || activeSession.isBusy()) return;
+        try {
+            addAttachment(activeSession, dialogs.chooseAttachment());
+        } catch (IOException exception) {
+            AcpLog.error("Could not read the selected attachment", exception);
+        }
+    }
+
+    /** Returns true only when the clipboard supplied file paths, so normal text paste can continue otherwise. */
+    private boolean pasteFilesFromClipboard() {
+        ChatSessionModel session = activeSession;
+        if (session == null || !session.isConnected() || session.isBusy()) return false;
+        Clipboard clipboard = new Clipboard(prompt.getDisplay());
+        try {
+            Object contents = clipboard.getContents(FileTransfer.getInstance());
+            if (!(contents instanceof String[] paths) || paths.length == 0) return false;
+            List<String> rejected = new ArrayList<>();
+            for (String value : paths) {
+                try {
+                    Path path = Path.of(value);
+                    PromptAttachment attachment = attachmentFor(path);
+                    if (attachment == null) rejected.add(path.getFileName().toString());
+                    else addAttachment(session, attachment);
+                } catch (IOException | RuntimeException exception) {
+                    rejected.add(value);
+                }
+            }
+            if (!rejected.isEmpty()) {
+                org.eclipse.jface.dialogs.MessageDialog.openWarning(prompt.getShell(), "Some files were not attached",
+                        "Only image or audio files up to 10 MiB can be attached:\n" + String.join("\n", rejected));
+            }
+            return true;
+        } finally {
+            clipboard.dispose();
+        }
+    }
+
+    private static boolean isPasteShortcut(KeyEvent event) {
+        return (event.stateMask & SWT.MOD1) != 0
+                && (event.keyCode == 'v' || event.keyCode == 'V' || event.character == 'v' || event.character == 'V');
+    }
+
+    private static PromptAttachment attachmentFor(Path path) throws IOException {
+        if (!Files.isRegularFile(path) || Files.size(path) > PromptAttachmentPolicy.MAX_BYTES) return null;
+        String mime = Files.probeContentType(path);
+        return PromptAttachmentPolicy.isSupportedMimeType(mime) ? new PromptAttachment(path, mime) : null;
+    }
+
+    private void addAttachment(ChatSessionModel session, PromptAttachment attachment) {
+        if (attachment == null || session.attachments.stream().anyMatch(existing -> existing.path().equals(attachment.path()))) return;
+        session.attachments.add(attachment);
+        refreshSourceFileBadges();
     }
 
     private void openSourceFilePickerForTypedAt() {
@@ -297,8 +368,10 @@ final class ChatComposer {
         for (Control child : sourceFileBadges.getChildren()) child.dispose();
         if (activeSession != null) {
             for (var file : activeSession.sourceFiles) createSourceFileBadge(file);
+            for (var attachment : activeSession.attachments) createAttachmentBadge(attachment);
         }
-        showControl(sourceFileBadges, activeSession != null && !activeSession.sourceFiles.isEmpty());
+        showControl(sourceFileBadges, activeSession != null
+                && (!activeSession.sourceFiles.isEmpty() || !activeSession.attachments.isEmpty()));
         sourceFileBadges.layout(true, true);
         composer.getParent().layout(true, true);
     }
@@ -332,6 +405,39 @@ final class ChatComposer {
         remove.addListener(SWT.MouseUp, event -> {
             if (activeSession == null) return;
             activeSession.sourceFiles.removeIf(existing -> existing.getFullPath().equals(file.getFullPath()));
+            refreshSourceFileBadges();
+        });
+    }
+
+    private void createAttachmentBadge(PromptAttachment attachment) {
+        Composite badge = new Composite(sourceFileBadges, SWT.NONE);
+        var badgeBackground = badge.getDisplay().getSystemColor(SWT.COLOR_INFO_BACKGROUND);
+        var badgeBorder = badge.getDisplay().getSystemColor(SWT.COLOR_WIDGET_NORMAL_SHADOW);
+        badge.setBackground(badgeBackground);
+        badge.addPaintListener(event -> {
+            var area = badge.getClientArea();
+            event.gc.setAntialias(SWT.ON);
+            event.gc.setBackground(badgeBackground);
+            event.gc.fillRoundRectangle(area.x, area.y, area.width - 1, area.height - 1, 14, 14);
+            event.gc.setForeground(badgeBorder);
+            event.gc.drawRoundRectangle(area.x, area.y, area.width - 1, area.height - 1, 14, 14);
+        });
+        GridLayout layout = new GridLayout(2, false);
+        layout.marginWidth = 7;
+        layout.marginHeight = 3;
+        layout.horizontalSpacing = 4;
+        badge.setLayout(layout);
+        Label name = new Label(badge, SWT.NONE);
+        name.setBackground(badgeBackground);
+        name.setText("↗ " + attachment.path().getFileName());
+        Label remove = new Label(badge, SWT.NONE);
+        remove.setBackground(badgeBackground);
+        remove.setText("×");
+        remove.setToolTipText("Remove " + attachment.path().getFileName());
+        remove.setCursor(remove.getDisplay().getSystemCursor(SWT.CURSOR_HAND));
+        remove.addListener(SWT.MouseUp, event -> {
+            if (activeSession == null) return;
+            activeSession.attachments.removeIf(existing -> existing.path().equals(attachment.path()));
             refreshSourceFileBadges();
         });
     }

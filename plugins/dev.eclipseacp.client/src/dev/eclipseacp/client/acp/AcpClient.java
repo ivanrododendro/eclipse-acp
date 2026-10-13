@@ -30,6 +30,7 @@ import dev.eclipseacp.client.agent.PermissionOption;
 import dev.eclipseacp.client.agent.PermissionRequest;
 import dev.eclipseacp.client.agent.SessionPage;
 import dev.eclipseacp.client.agent.PromptAttachment;
+import dev.eclipseacp.client.agent.PromptAttachmentPolicy;
 import dev.eclipseacp.client.agent.ToolCall;
 import dev.eclipseacp.client.agent.ElicitationRequest;
 import dev.eclipseacp.client.mcp.McpServerConfig;
@@ -256,8 +257,12 @@ public final class AcpClient implements AgentClient, JsonRpcHandler {
         try {
             for (PromptAttachment attachment : attachments) {
                 if (attachment == null || attachment.path() == null) continue;
+                if (!PromptAttachmentPolicy.isSupportedMimeType(attachment.mimeType())) {
+                    return CompletableFuture.failedFuture(new IllegalArgumentException(
+                            "Attachments must be images or audio files"));
+                }
                 byte[] data = Files.readAllBytes(attachment.path());
-                if (data.length > 10 * 1024 * 1024) {
+                if (data.length > PromptAttachmentPolicy.MAX_BYTES) {
                     return CompletableFuture.failedFuture(new IllegalArgumentException("Attachments must be at most 10 MiB"));
                 }
                 binaries.add(new AcpMessageCodec.BinaryContent(attachment.mimeType(), data));
