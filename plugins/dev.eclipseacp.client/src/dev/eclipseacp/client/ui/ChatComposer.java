@@ -313,8 +313,12 @@ final class ChatComposer {
     }
 
     private static boolean isPasteShortcut(KeyEvent event) {
-        return (event.stateMask & SWT.MOD1) != 0
-                && (event.keyCode == 'v' || event.keyCode == 'V' || event.character == 'v' || event.character == 'V');
+        // On Windows SWT may report Ctrl+V as the control character SYN (0x16),
+        // instead of reporting a printable 'v'. Keep the explicit CTRL mask too:
+        // MOD1 is platform dependent, while this code must also work in Windows views.
+        boolean modifier = (event.stateMask & (SWT.MOD1 | SWT.CTRL)) != 0;
+        return modifier && (event.keyCode == 'v' || event.keyCode == 'V' || event.keyCode == 0x16
+                || event.character == 'v' || event.character == 'V' || event.character == 0x16);
     }
 
     private static PromptAttachment attachmentFor(Path path) throws IOException {
