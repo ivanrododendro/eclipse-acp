@@ -121,6 +121,11 @@ final class ChatComposer {
         });
         prompt.addKeyListener(new KeyAdapter() {
             @Override public void keyPressed(KeyEvent event) {
+                if (isPasteKey(event)) {
+                    AcpLog.debug(() -> "Clipboard paste key: keyCode=" + event.keyCode + ", character="
+                            + (int) event.character + ", stateMask=" + event.stateMask + ", matches="
+                            + isPasteShortcut(event));
+                }
                 if ((event.stateMask & SWT.MOD1) != 0 && (event.keyCode == SWT.CR || event.keyCode == SWT.KEYPAD_CR)) {
                     event.doit = false;
                     sendPrompt();
@@ -286,19 +291,35 @@ final class ChatComposer {
     /** Returns true only when the clipboard supplied file paths, so normal text paste can continue otherwise. */
     private boolean pasteFilesFromClipboard() {
         ChatSessionModel session = activeSession;
-        if (session == null || !session.isConnected() || session.isBusy()) return false;
+        if (session == null || !session.isConnected() || session.isBusy()) {
+            AcpLog.debug(() -> "Clipboard file paste ignored: session=" + (session != null)
+                    + ", connected=" + (session != null && session.isConnected())
+                    + ", busy=" + (session != null && session.isBusy()));
+            return false;
+        }
         Clipboard clipboard = new Clipboard(prompt.getDisplay());
         try {
             Object contents = clipboard.getContents(FileTransfer.getInstance());
-            if (!(contents instanceof String[] paths) || paths.length == 0) return false;
+            if (!(contents instanceof String[] paths) || paths.length == 0) {
+                AcpLog.debug(() -> "Clipboard contains no FileTransfer paths; available types="
+                        + String.join(", ", clipboard.getAvailableTypeNames()));
+                return false;
+            }
+            AcpLog.debug(() -> "Clipboard FileTransfer contains " + paths.length + " path(s)");
             List<String> rejected = new ArrayList<>();
             for (String value : paths) {
                 try {
                     Path path = Path.of(value);
                     PromptAttachment attachment = attachmentFor(path);
-                    if (attachment == null) rejected.add(path.getFileName().toString());
-                    else addAttachment(session, attachment);
+                    if (attachment == null) {
+                        AcpLog.debug(() -> "Clipboard file rejected: " + path);
+                        rejected.add(path.getFileName().toString());
+                    } else {
+                        AcpLog.debug(() -> "Clipboard file accepted: " + path + " (" + attachment.mimeType() + ")");
+                        addAttachment(session, attachment);
+                    }
                 } catch (IOException | RuntimeException exception) {
+                    AcpLog.warn("Could not inspect clipboard file: " + value, exception);
                     rejected.add(value);
                 }
             }
@@ -319,6 +340,11 @@ final class ChatComposer {
         boolean modifier = (event.stateMask & (SWT.MOD1 | SWT.CTRL)) != 0;
         return modifier && (event.keyCode == 'v' || event.keyCode == 'V' || event.keyCode == 0x16
                 || event.character == 'v' || event.character == 'V' || event.character == 0x16);
+    }
+
+    private static boolean isPasteKey(KeyEvent event) {
+        return event.keyCode == 'v' || event.keyCode == 'V' || event.keyCode == 0x16
+                || event.character == 'v' || event.character == 'V' || event.character == 0x16;
     }
 
     private static PromptAttachment attachmentFor(Path path) throws IOException {
