@@ -3,6 +3,7 @@ package dev.eclipseacp.client.ui;
 import java.util.List;
 
 import org.eclipse.core.resources.IProject;
+import org.eclipse.jface.action.Action;
 import org.eclipse.jface.resource.ImageDescriptor;
 import org.eclipse.jface.resource.ImageRegistry;
 import org.eclipse.jface.resource.JFaceResources;
@@ -15,6 +16,7 @@ import org.eclipse.swt.widgets.Control;
 import org.eclipse.swt.widgets.Display;
 import org.eclipse.swt.widgets.Label;
 import org.eclipse.ui.part.ViewPart;
+import org.eclipse.ui.actions.ActionFactory;
 
 import dev.eclipseacp.client.acp.AcpClientFactory;
 import dev.eclipseacp.client.preferences.AgentProviderRegistry;
@@ -143,6 +145,12 @@ public final class AcpChatView extends ViewPart {
 
         composer = new ChatComposer(parent, JFaceResources.getFontRegistry().get(JFaceResources.DEFAULT_FONT), getSite().getPage(),
                 sessionService, dialogs, navigator::isChatVisible, this::sendInNewSession, this::lucideIcon);
+        // Workbench key bindings can consume Cmd/Ctrl+V before Text's KeyListener.
+        // Route Edit > Paste and the key binding through the same attachment path.
+        getViewSite().getActionBars().setGlobalActionHandler(ActionFactory.PASTE.getId(), new Action() {
+            @Override public void run() { composer.paste(); }
+        });
+        getViewSite().getActionBars().updateActionBars();
 
         status = new Label(parent, SWT.NONE);
         status.setText("Not connected");

@@ -16,6 +16,9 @@ import org.eclipse.swt.events.KeyAdapter;
 import org.eclipse.swt.events.KeyEvent;
 import org.eclipse.swt.dnd.Clipboard;
 import org.eclipse.swt.dnd.FileTransfer;
+import org.eclipse.swt.dnd.ImageTransfer;
+import org.eclipse.swt.graphics.ImageData;
+import org.eclipse.swt.graphics.ImageLoader;
 import org.eclipse.swt.graphics.Color;
 import org.eclipse.swt.graphics.Font;
 import org.eclipse.swt.graphics.Image;
@@ -129,7 +132,7 @@ final class ChatComposer {
                 if ((event.stateMask & SWT.MOD1) != 0 && (event.keyCode == SWT.CR || event.keyCode == SWT.KEYPAD_CR)) {
                     event.doit = false;
                     sendPrompt();
-                } else if (isPasteShortcut(event) && pasteFilesFromClipboard()) {
+                } else if (isPasteShortcut(event) && pasteFromClipboard()) {
                     event.doit = false;
                 }
             }
@@ -274,6 +277,15 @@ final class ChatComposer {
             menu.dispose();
             attachSelectedFile();
         });
+        MenuItem pasteImage = new MenuItem(menu, SWT.PUSH);
+        pasteImage.setText("Paste image from clipboard");
+        pasteImage.addListener(SWT.Selection, event -> {
+            menu.dispose();
+            if (!pasteFromClipboard()) {
+                org.eclipse.jface.dialogs.MessageDialog.openInformation(prompt.getShell(), "Paste image",
+                        "No supported image or file was found in the clipboard. Copy an image and try again.");
+            }
+        });
         var location = attachButton.toDisplay(0, attachButton.getSize().y);
         menu.setLocation(location);
         menu.setVisible(true);
@@ -288,8 +300,8 @@ final class ChatComposer {
         }
     }
 
-    /** Returns true only when the clipboard supplied file paths, so normal text paste can continue otherwise. */
-    private boolean pasteFilesFromClipboard() {
+    /** Leave normal text paste alone when neither files nor an image are available. */
+    private boolean pasteFromClipboard() {
         ChatSessionModel session = activeSession;
         if (session == null || !session.isConnected() || session.isBusy()) {
             AcpLog.debug(() -> "Clipboard file paste ignored: session=" + (session != null)
@@ -299,9 +311,23 @@ final class ChatComposer {
         }
         Clipboard clipboard = new Clipboard(prompt.getDisplay());
         try {
+            AcpLog.debug(() -> "Clipboard paste requested; available types="
+                    + String.join(", ", clipboard.getAvailableTypeNames()));
             Object contents = clipboard.getContents(FileTransfer.getInstance());
             if (!(contents instanceof String[] paths) || paths.length == 0) {
-                AcpLog.debug(() -> "Clipboard contains no FileTransfer paths; available types="
+                Object image = clipboard.getContents(ImageTransfer.getInstance());
+                if (image instanceof ImageData data) {
+                    try {
+                        addAttachment(session, createClipboardImage(data));
+                        AcpLog.debug(() -> "Clipboard image attached: " + data.width + "x" + data.height);
+                    } catch (IOException | org.eclipse.swt.SWTException exception) {
+                        AcpLog.warn("Could not paste clipboard image", exception);
+                        org.eclipse.jface.dialogs.MessageDialog.openWarning(prompt.getShell(),
+                                "Could not paste image", exception.getMessage());
+                    }
+                    return true;
+                }
+                AcpLog.debug(() -> "Clipboard contains no supported files or image; available types="
                         + String.join(", ", clipboard.getAvailableTypeNames()));
                 return false;
             }
@@ -330,6 +356,32 @@ final class ChatComposer {
             return true;
         } finally {
             clipboard.dispose();
+        }
+    }
+
+    /** Invoked by the workbench Paste command, which may bypass SWT key listeners. */
+    void paste() {
+        if (prompt.isDisposed() || !prompt.isFocusControl() || !prompt.isEnabled()) return;
+        if (!pasteFromClipboard()) prompt.paste();
+    }
+
+    static PromptAttachment createClipboardImage(ImageData data) throws IOException {
+        Path path = Files.createTempFile("eclipse-acp-clipboard-", ".png");
+        path.toFile().deleteOnExit();
+        boolean complete = false;
+        try {
+            ImageLoader loader = new ImageLoader();
+            loader.data = new ImageData[] { data };
+            try (var output = Files.newOutputStream(path)) {
+                loader.save(output, SWT.IMAGE_PNG);
+            }
+            if (Files.size(path) > PromptAttachmentPolicy.MAX_BYTES) {
+                throw new IOException("Clipboard images must be no larger than 10 MiB after PNG encoding.");
+            }
+            complete = true;
+            return new PromptAttachment(path, "image/png", true);
+        } finally {
+            if (!complete) Files.deleteIfExists(path);
         }
     }
 
@@ -468,6 +520,7 @@ final class ChatComposer {
         remove.addListener(SWT.MouseUp, event -> {
             if (activeSession == null) return;
             activeSession.attachments.removeIf(existing -> existing.path().equals(attachment.path()));
+            attachment.deleteTemporaryFile();
             refreshSourceFileBadges();
         });
     }

@@ -303,7 +303,10 @@ final class AcpSessionService {
         String promptWithSources = sourceContext.isEmpty() ? expanded : expanded + "\n\n" + sourceContext;
         operations.run(session, () -> isOwned(session, client), () -> client.prompt(promptWithSources, attachments))
                 .whenComplete((ignored, failure) -> ui.accept(() -> {
-            if (session.client != client) return;
+            if (session.client != client) {
+                attachments.forEach(PromptAttachment::deleteTemporaryFile);
+                return;
+            }
             if (failure != null) {
                 session.attachments.addAll(attachments);
                 session.sourceFiles.addAll(sourceFiles);
@@ -313,6 +316,7 @@ final class AcpSessionService {
             } else if (session.agentMessageOpen) {
                 append(session, "\n\n");
             }
+            if (failure == null) attachments.forEach(PromptAttachment::deleteTemporaryFile);
             session.agentMessageOpen = false;
             changed(session);
             if (failure == null && session.canListSessions()) loadAgentSessions(session);
@@ -419,6 +423,8 @@ final class AcpSessionService {
         session.client = null;
         session.sessionTransitioning = false;
         session.fileLinks.close();
+        session.attachments.forEach(PromptAttachment::deleteTemporaryFile);
+        session.attachments.clear();
         operations.cancel(session);
         return client == null ? CompletableFuture.completedFuture(null) : operations.cleanup(client::close);
     }

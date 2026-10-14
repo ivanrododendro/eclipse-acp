@@ -33,6 +33,43 @@ import dev.eclipseacp.client.preferences.AgentProviderRegistry;
 
 public class AcpSessionServiceTest {
     @Test
+    public void retainsTemporaryImageForRetryAndDeletesItAfterSuccess() throws Exception {
+        Harness h = new Harness();
+        ChatSessionModel session = h.open(project("first"));
+        var path = java.nio.file.Files.createTempFile("acp-retry-test-", ".png");
+        try {
+            session.attachments.add(new PromptAttachment(path, "image/png", true));
+            h.service.sendPrompt(session, "Describe this");
+            h.client().prompt.completeExceptionally(new IOException("Retry needed"));
+            h.drainUi();
+            assertTrue(java.nio.file.Files.exists(path));
+            assertEquals(1, session.attachments.size());
+
+            h.client().prompt = new CompletableFuture<>();
+            h.service.sendPrompt(session, "Describe this");
+            h.client().prompt.complete(null);
+            h.drainUi();
+            assertFalse(java.nio.file.Files.exists(path));
+        } finally {
+            java.nio.file.Files.deleteIfExists(path);
+        }
+    }
+
+    @Test
+    public void closingSessionDeletesUnsentTemporaryImage() throws Exception {
+        Harness h = new Harness();
+        ChatSessionModel session = h.open(project("first"));
+        var path = java.nio.file.Files.createTempFile("acp-close-test-", ".png");
+        try {
+            session.attachments.add(new PromptAttachment(path, "image/png", true));
+            h.service.close(session);
+            assertFalse(java.nio.file.Files.exists(path));
+        } finally {
+            java.nio.file.Files.deleteIfExists(path);
+        }
+    }
+
+    @Test
     public void readsTheActiveProviderAgainForEachNewSession() {
         Harness h = new Harness();
         assertEquals("codex", h.open(project("first")).provider.id());
@@ -582,7 +619,7 @@ public class AcpSessionServiceTest {
         AgentCapabilities capabilities = AgentCapabilities.NONE;
         final CompletableFuture<Void> connection = new CompletableFuture<>();
         final CompletableFuture<Void> newSession = new CompletableFuture<>();
-        final CompletableFuture<Void> prompt = new CompletableFuture<>();
+        CompletableFuture<Void> prompt = new CompletableFuture<>();
         final CompletableFuture<Void> closed = new CompletableFuture<>();
         CompletableFuture<Void> config = new CompletableFuture<>();
         final Map<String, SessionPage> pages = new HashMap<>();

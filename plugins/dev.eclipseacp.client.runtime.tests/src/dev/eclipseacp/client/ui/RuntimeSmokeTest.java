@@ -3,6 +3,7 @@ package dev.eclipseacp.client.ui;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.assertFalse;
 
 import java.io.ByteArrayInputStream;
 import java.nio.charset.StandardCharsets;
@@ -12,11 +13,37 @@ import org.eclipse.core.resources.IProject;
 import org.eclipse.core.resources.ResourcesPlugin;
 import org.eclipse.core.runtime.Platform;
 import org.junit.Test;
+import org.eclipse.swt.graphics.ImageData;
+import org.eclipse.swt.graphics.PaletteData;
 import org.osgi.framework.Bundle;
 import org.osgi.framework.FrameworkUtil;
 
 /** Smoke tests that must run in the real Equinox and workspace runtime. */
 public class RuntimeSmokeTest {
+    @Test
+    public void clipboardImagePreservesPixelsAndTransparencyInTemporaryPng() throws Exception {
+        ImageData original = new ImageData(2, 1, 24, new PaletteData(0xff0000, 0xff00, 0xff));
+        original.setPixel(0, 0, 0x123456);
+        original.setAlpha(0, 0, 128);
+        original.setPixel(1, 0, 0xabcdef);
+        original.setAlpha(1, 0, 255);
+        var attachment = ChatComposer.createClipboardImage(original);
+        try {
+            assertEquals("image/png", attachment.mimeType());
+            assertTrue(attachment.temporary());
+            ImageData decoded = new ImageData(attachment.path().toString());
+            assertEquals(original.width, decoded.width);
+            assertEquals(original.height, decoded.height);
+            assertEquals(original.palette.getRGB(original.getPixel(0, 0)),
+                    decoded.palette.getRGB(decoded.getPixel(0, 0)));
+            assertEquals(128, decoded.getAlpha(0, 0));
+            assertEquals(255, decoded.getAlpha(1, 0));
+        } finally {
+            attachment.deleteTemporaryFile();
+        }
+        assertFalse(java.nio.file.Files.exists(attachment.path()));
+    }
+
     @Test
     public void hostBundleAndPlatformDependenciesResolveInEquinox() {
         Bundle host = FrameworkUtil.getBundle(RuntimeSmokeTest.class);
