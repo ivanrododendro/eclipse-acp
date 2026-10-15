@@ -27,6 +27,11 @@ public final class AcpPreferences {
     public static final boolean DEFAULT_DEBUG_ACP_MESSAGES = false;
     public static final int MIN_VISIBLE_RECENT_SESSIONS = 1;
     public static final int MAX_VISIBLE_RECENT_SESSIONS = 20;
+    /** Maximum size, in MiB, of one newline-delimited ACP JSON-RPC message. */
+    public static final String MAX_JSON_RPC_FRAME_MIB = "maxJsonRpcFrameMiB";
+    public static final int DEFAULT_MAX_JSON_RPC_FRAME_MIB = 10;
+    public static final int MIN_MAX_JSON_RPC_FRAME_MIB = 1;
+    public static final int MAX_MAX_JSON_RPC_FRAME_MIB = 100;
     /** Comma-separated extensions hidden from the source-file picker. */
     public static final String SOURCE_FILE_EXCLUDED_EXTENSIONS = "sourceFileExcludedExtensions";
     /** Comma-separated directory names hidden from the source-file picker. */
@@ -55,5 +60,12 @@ public final class AcpPreferences {
     public static int visibleRecentSessions(IPreferenceStore preferences) {
         int value = preferences.getInt(VISIBLE_RECENT_SESSIONS);
         return Math.clamp(value, MIN_VISIBLE_RECENT_SESSIONS, MAX_VISIBLE_RECENT_SESSIONS);
+    }
+
+    /** Returns a bounded frame limit in characters. */
+    public static int maxJsonRpcFrameCharacters(IPreferenceStore preferences) {
+        int mib = Math.clamp(preferences.getInt(MAX_JSON_RPC_FRAME_MIB),
+                MIN_MAX_JSON_RPC_FRAME_MIB, MAX_MAX_JSON_RPC_FRAME_MIB);
+        return mib * 1024 * 1024;
     }
 }

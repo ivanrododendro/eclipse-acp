@@ -23,6 +23,18 @@ public class AcpPreferencesTest {
     }
 
     @Test
+    public void boundsJsonRpcFrameLimitAndDefaultsToTenMiB() {
+        PreferenceStore preferences = new PreferenceStore();
+        preferences.setDefault(AcpPreferences.MAX_JSON_RPC_FRAME_MIB, AcpPreferences.DEFAULT_MAX_JSON_RPC_FRAME_MIB);
+        assertEquals(10 * 1024 * 1024, AcpPreferences.maxJsonRpcFrameCharacters(preferences));
+
+        preferences.setValue(AcpPreferences.MAX_JSON_RPC_FRAME_MIB, 0);
+        assertEquals(1024 * 1024, AcpPreferences.maxJsonRpcFrameCharacters(preferences));
+        preferences.setValue(AcpPreferences.MAX_JSON_RPC_FRAME_MIB, 999);
+        assertEquals(100 * 1024 * 1024, AcpPreferences.maxJsonRpcFrameCharacters(preferences));
+    }
+
+    @Test
     public void providerChangesStayInTheDraftUntilCommitted() {
         PreferenceStore preferences = providers("codex", "other");
         String originalJson = preferences.getString(AcpPreferences.PROVIDERS_JSON);

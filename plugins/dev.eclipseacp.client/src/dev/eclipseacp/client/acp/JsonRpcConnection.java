@@ -31,7 +31,7 @@ import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 
 final class JsonRpcConnection implements JsonRpcTransport {
-    private static final int MAX_FRAME_CHARACTERS = 1024 * 1024;
+    private static final int DEFAULT_MAX_FRAME_CHARACTERS = 10 * 1024 * 1024;
     private static final int MAX_PENDING_REQUESTS = 128;
     private final Gson gson = new Gson();
     private final BufferedReader reader;
@@ -40,6 +40,7 @@ final class JsonRpcConnection implements JsonRpcTransport {
     private final Consumer<Throwable> errorHandler;
     private final Function<String, Long> requestTimeoutMillis;
     private final DiagnosticSink diagnostics;
+    private final int maxFrameCharacters;
     private final AtomicLong nextId = new AtomicLong();
     private final AtomicBoolean started = new AtomicBoolean();
     private final Map<String, CompletableFuture<JsonObject>> pending = new ConcurrentHashMap<>();
@@ -63,12 +64,19 @@ final class JsonRpcConnection implements JsonRpcTransport {
 
     JsonRpcConnection(Reader reader, Writer writer, JsonRpcHandler handler, Consumer<Throwable> errorHandler,
             Function<String, Long> requestTimeoutMillis, DiagnosticSink diagnostics) {
+        this(reader, writer, handler, errorHandler, requestTimeoutMillis, diagnostics, DEFAULT_MAX_FRAME_CHARACTERS);
+    }
+
+    JsonRpcConnection(Reader reader, Writer writer, JsonRpcHandler handler, Consumer<Throwable> errorHandler,
+            Function<String, Long> requestTimeoutMillis, DiagnosticSink diagnostics, int maxFrameCharacters) {
         this.reader = new BufferedReader(Objects.requireNonNull(reader));
         this.writer = new BufferedWriter(Objects.requireNonNull(writer));
         this.handler = Objects.requireNonNull(handler);
         this.errorHandler = Objects.requireNonNull(errorHandler);
         this.requestTimeoutMillis = Objects.requireNonNull(requestTimeoutMillis);
         this.diagnostics = Objects.requireNonNull(diagnostics);
+        if (maxFrameCharacters < 1) throw new IllegalArgumentException("maxFrameCharacters must be positive");
+        this.maxFrameCharacters = maxFrameCharacters;
     }
 
     @Override
@@ -171,8 +179,8 @@ final class JsonRpcConnection implements JsonRpcTransport {
         while ((character = reader.read()) != -1) {
             if (character == '\n') return frame.toString();
             if (character != '\r') frame.append((char) character);
-            if (frame.length() > MAX_FRAME_CHARACTERS) {
-                throw new IOException("ACP JSON-RPC frame exceeds " + MAX_FRAME_CHARACTERS + " characters");
+            if (frame.length() > maxFrameCharacters) {
+                throw new IOException("ACP JSON-RPC frame exceeds " + maxFrameCharacters + " characters");
             }
         }
         return frame.isEmpty() ? null : frame.toString();
@@ -321,7 +329,7 @@ final class JsonRpcConnection implements JsonRpcTransport {
     }
 
     /** Short protocol operations fail promptly; a prompt may legitimately take much longer. */
-    private static long requestTimeoutMillis(String method) {
+    static long requestTimeoutMillis(String method) {
         return switch (method) {
             case "session/prompt" -> TimeUnit.MINUTES.toMillis(15);
             case "authenticate" -> TimeUnit.MINUTES.toMillis(5);

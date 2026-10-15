@@ -18,6 +18,7 @@ public final class AcpPreferenceInitializer extends AbstractPreferenceInitialize
         preferences.putBoolean(AcpPreferences.DEBUG_ACP_MESSAGES,
                 AcpPreferences.DEFAULT_DEBUG_ACP_MESSAGES);
         preferences.putInt(AcpPreferences.VISIBLE_RECENT_SESSIONS, AcpPreferences.DEFAULT_VISIBLE_RECENT_SESSIONS);
+        preferences.putInt(AcpPreferences.MAX_JSON_RPC_FRAME_MIB, AcpPreferences.DEFAULT_MAX_JSON_RPC_FRAME_MIB);
         preferences.put(AcpPreferences.SOURCE_FILE_EXCLUDED_EXTENSIONS,
                 AcpPreferences.DEFAULT_SOURCE_FILE_EXCLUDED_EXTENSIONS);
         preferences.put(AcpPreferences.SOURCE_FILE_EXCLUDED_DIRECTORIES,
