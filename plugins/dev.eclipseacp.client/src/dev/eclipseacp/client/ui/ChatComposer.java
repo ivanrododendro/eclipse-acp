@@ -1,9 +1,9 @@
 package dev.eclipseacp.client.ui;
 
-import java.util.ArrayList;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.function.BooleanSupplier;
@@ -30,6 +30,8 @@ import org.eclipse.swt.widgets.Label;
 import org.eclipse.swt.widgets.Menu;
 import org.eclipse.swt.widgets.MenuItem;
 import org.eclipse.swt.widgets.Text;
+import org.eclipse.core.resources.IFile;
+import org.eclipse.core.resources.ResourcesPlugin;
 import org.eclipse.ui.IWorkbenchPage;
 
 import dev.eclipseacp.client.AcpLog;
@@ -278,12 +280,12 @@ final class ChatComposer {
             attachSelectedFile();
         });
         MenuItem pasteImage = new MenuItem(menu, SWT.PUSH);
-        pasteImage.setText("Paste image from clipboard");
+        pasteImage.setText("Paste image or file from clipboard");
         pasteImage.addListener(SWT.Selection, event -> {
             menu.dispose();
             if (!pasteFromClipboard()) {
-                org.eclipse.jface.dialogs.MessageDialog.openInformation(prompt.getShell(), "Paste image",
-                        "No supported image or file was found in the clipboard. Copy an image and try again.");
+                org.eclipse.jface.dialogs.MessageDialog.openInformation(prompt.getShell(), "Paste from clipboard",
+                        "No supported image or file was found in the clipboard. Copy an image or workspace file and try again.");
             }
         });
         var location = attachButton.toDisplay(0, attachButton.getSize().y);
@@ -311,6 +313,21 @@ final class ChatComposer {
         }
         Clipboard clipboard = new Clipboard(prompt.getDisplay());
         try {
+            Object resources = clipboard.getContents(org.eclipse.ui.part.ResourceTransfer.getInstance());
+            if (resources instanceof org.eclipse.core.resources.IResource[] copied && copied.length > 0) {
+                for (var resource : copied) {
+                    if (!(resource instanceof IFile file) || !file.exists() || file.getLocation() == null) continue;
+                    try {
+                        PromptAttachment attachment = attachmentFor(file.getLocation().toFile().toPath());
+                        if (attachment != null) addAttachment(session, attachment);
+                        else addSourceFile(session, file);
+                    } catch (IOException exception) {
+                        AcpLog.warn("Could not inspect clipboard workspace file: " + file.getFullPath(), exception);
+                    }
+                }
+                refreshSourceFileBadges();
+                return true;
+            }
             AcpLog.debug(() -> "Clipboard paste requested; available types="
                     + String.join(", ", clipboard.getAvailableTypeNames()));
             Object contents = clipboard.getContents(FileTransfer.getInstance());
@@ -332,26 +349,24 @@ final class ChatComposer {
                 return false;
             }
             AcpLog.debug(() -> "Clipboard FileTransfer contains " + paths.length + " path(s)");
-            List<String> rejected = new ArrayList<>();
             for (String value : paths) {
                 try {
-                    Path path = Path.of(value);
+                    Path path = Path.of(value).toAbsolutePath().normalize();
                     PromptAttachment attachment = attachmentFor(path);
-                    if (attachment == null) {
-                        AcpLog.debug(() -> "Clipboard file rejected: " + path);
-                        rejected.add(path.getFileName().toString());
-                    } else {
+                    if (attachment != null) {
                         AcpLog.debug(() -> "Clipboard file accepted: " + path + " (" + attachment.mimeType() + ")");
                         addAttachment(session, attachment);
+                    } else if (addWorkspaceSourceFile(session, path)) {
+                        AcpLog.debug(() -> "Clipboard workspace source file accepted: " + path);
+                    } else {
+                        addExternalSourceFile(session, path);
+                        refreshSourceFileBadges();
                     }
                 } catch (IOException | RuntimeException exception) {
                     AcpLog.warn("Could not inspect clipboard file: " + value, exception);
-                    rejected.add(value);
+                    org.eclipse.jface.dialogs.MessageDialog.openWarning(prompt.getShell(),
+                            "Could not add file", value + "\n" + exception.getMessage());
                 }
-            }
-            if (!rejected.isEmpty()) {
-                org.eclipse.jface.dialogs.MessageDialog.openWarning(prompt.getShell(), "Some files were not attached",
-                        "Only image or audio files up to 10 MiB can be attached:\n" + String.join("\n", rejected));
             }
             return true;
         } finally {
@@ -375,9 +390,6 @@ final class ChatComposer {
             try (var output = Files.newOutputStream(path)) {
                 loader.save(output, SWT.IMAGE_PNG);
             }
-            if (Files.size(path) > PromptAttachmentPolicy.MAX_BYTES) {
-                throw new IOException("Clipboard images must be no larger than 10 MiB after PNG encoding.");
-            }
             complete = true;
             return new PromptAttachment(path, "image/png", true);
         } finally {
@@ -400,8 +412,8 @@ final class ChatComposer {
     }
 
     private static PromptAttachment attachmentFor(Path path) throws IOException {
-        if (!Files.isRegularFile(path) || Files.size(path) > PromptAttachmentPolicy.MAX_BYTES) return null;
-        String mime = Files.probeContentType(path);
+        if (!Files.isRegularFile(path)) return null;
+        String mime = PromptAttachmentPolicy.mimeType(path);
         return PromptAttachmentPolicy.isSupportedMimeType(mime) ? new PromptAttachment(path, mime) : null;
     }
 
@@ -409,6 +421,34 @@ final class ChatComposer {
         if (attachment == null || session.attachments.stream().anyMatch(existing -> existing.path().equals(attachment.path()))) return;
         session.attachments.add(attachment);
         refreshSourceFileBadges();
+    }
+
+    /** Adds a copied workspace file through the same source-context path used by {@code @}. */
+    private boolean addWorkspaceSourceFile(ChatSessionModel session, Path path) {
+        IFile file = workspaceFileFor(path);
+        if (file == null) return false;
+        boolean present = session.sourceFiles.stream()
+                .anyMatch(existing -> existing.getFullPath().equals(file.getFullPath()));
+        if (!present) session.sourceFiles.add(file);
+        refreshSourceFileBadges();
+        return true;
+    }
+
+    static IFile workspaceFileFor(Path path) {
+        if (path == null || !Files.isRegularFile(path)) return null;
+        IFile[] matches = ResourcesPlugin.getWorkspace().getRoot().findFilesForLocationURI(path.toAbsolutePath().normalize().toUri());
+        for (IFile file : matches) {
+            if (file.exists()) return file;
+        }
+        return null;
+    }
+
+    static void addExternalSourceFile(ChatSessionModel session, Path path) throws IOException {
+        path = path.toAbsolutePath().normalize();
+        // Validate before showing the badge, so unreadable or binary files are not silently ignored.
+        String text = Files.readString(path);
+        if (text.indexOf('\0') >= 0) throw new IOException("This file is not a text source file.");
+        if (!session.externalSourceFiles.contains(path)) session.externalSourceFiles.add(path);
     }
 
     private void openSourceFilePickerForTypedAt() {
@@ -430,9 +470,7 @@ final class ChatComposer {
         try {
             var file = dialogs.chooseSourceFile(session.project);
             if (file == null || activeSession != session) return;
-            boolean present = session.sourceFiles.stream()
-                    .anyMatch(existing -> existing.getFullPath().equals(file.getFullPath()));
-            if (!present) session.sourceFiles.add(file);
+            addSourceFile(session, file);
             if (triggerOffset >= 0 && triggerOffset < prompt.getCharCount()
                     && prompt.getText().charAt(triggerOffset) == '@') {
                 String input = prompt.getText();
@@ -445,20 +483,35 @@ final class ChatComposer {
         }
     }
 
+    private void addSourceFile(ChatSessionModel session, IFile file) {
+        if (file == null || session.sourceFiles.stream()
+                .anyMatch(existing -> existing.getFullPath().equals(file.getFullPath()))) return;
+        session.sourceFiles.add(file);
+    }
+
     private void refreshSourceFileBadges() {
         if (sourceFileBadges == null || sourceFileBadges.isDisposed()) return;
         for (Control child : sourceFileBadges.getChildren()) child.dispose();
         if (activeSession != null) {
             for (var file : activeSession.sourceFiles) createSourceFileBadge(file);
+            for (var file : activeSession.externalSourceFiles) {
+                createSourceFileBadge(file.getFileName().toString(), () -> activeSession.externalSourceFiles.remove(file));
+            }
             for (var attachment : activeSession.attachments) createAttachmentBadge(attachment);
         }
         showControl(sourceFileBadges, activeSession != null
-                && (!activeSession.sourceFiles.isEmpty() || !activeSession.attachments.isEmpty()));
+                && (!activeSession.sourceFiles.isEmpty() || !activeSession.externalSourceFiles.isEmpty()
+                        || !activeSession.attachments.isEmpty()));
         sourceFileBadges.layout(true, true);
         composer.getParent().layout(true, true);
     }
 
     private void createSourceFileBadge(org.eclipse.core.resources.IFile file) {
+        createSourceFileBadge(file.getName(),
+                () -> activeSession.sourceFiles.removeIf(existing -> existing.getFullPath().equals(file.getFullPath())));
+    }
+
+    private void createSourceFileBadge(String fileName, Runnable removeFile) {
         Composite badge = new Composite(sourceFileBadges, SWT.NONE);
         var badgeBackground = badge.getDisplay().getSystemColor(SWT.COLOR_INFO_BACKGROUND);
         var badgeBorder = badge.getDisplay().getSystemColor(SWT.COLOR_WIDGET_NORMAL_SHADOW);
@@ -478,15 +531,15 @@ final class ChatComposer {
         badge.setLayout(layout);
         Label name = new Label(badge, SWT.NONE);
         name.setBackground(badgeBackground);
-        name.setText("@ " + file.getName());
+        name.setText("@ " + fileName);
         Label remove = new Label(badge, SWT.NONE);
         remove.setBackground(badgeBackground);
         remove.setText("×");
-        remove.setToolTipText("Remove " + file.getName());
+        remove.setToolTipText("Remove " + fileName);
         remove.setCursor(remove.getDisplay().getSystemCursor(SWT.CURSOR_HAND));
         remove.addListener(SWT.MouseUp, event -> {
             if (activeSession == null) return;
-            activeSession.sourceFiles.removeIf(existing -> existing.getFullPath().equals(file.getFullPath()));
+            removeFile.run();
             refreshSourceFileBadges();
         });
     }

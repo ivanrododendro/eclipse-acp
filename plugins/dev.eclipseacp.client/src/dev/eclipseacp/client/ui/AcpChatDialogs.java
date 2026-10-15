@@ -73,22 +73,18 @@ final class AcpChatDialogs {
 
     PromptAttachment chooseAttachment() throws IOException {
         FileDialog dialog = new FileDialog(shell.get(), SWT.OPEN);
-        dialog.setText("Attach image or audio");
-        dialog.setFilterExtensions(new String[] { "*.png;*.jpg;*.jpeg;*.gif;*.webp;*.mp3;*.wav;*.ogg", "*.*" });
+        dialog.setText("Attach image, audio, or PDF");
+        dialog.setFilterExtensions(new String[] { "*.png;*.jpg;*.jpeg;*.gif;*.webp;*.mp3;*.wav;*.ogg;*.pdf", "*.*" });
         String selected = dialog.open();
         if (selected == null) return null;
         Path path = Path.of(selected);
         if (!Files.isRegularFile(path)) {
-            MessageDialog.openWarning(shell.get(), "Unsupported attachment", "Choose a regular image or audio file.");
+            MessageDialog.openWarning(shell.get(), "Unsupported attachment", "Choose a regular image, audio, or PDF file.");
             return null;
         }
-        if (Files.size(path) > PromptAttachmentPolicy.MAX_BYTES) {
-            MessageDialog.openWarning(shell.get(), "Attachment too large", "Attachments are limited to 10 MiB.");
-            return null;
-        }
-        String mime = Files.probeContentType(path);
+        String mime = PromptAttachmentPolicy.mimeType(path);
         if (!PromptAttachmentPolicy.isSupportedMimeType(mime)) {
-            MessageDialog.openWarning(shell.get(), "Unsupported attachment", "Choose an image or audio file.");
+            MessageDialog.openWarning(shell.get(), "Unsupported attachment", "Choose an image, audio, or PDF file.");
             return null;
         }
         return new PromptAttachment(path, mime);

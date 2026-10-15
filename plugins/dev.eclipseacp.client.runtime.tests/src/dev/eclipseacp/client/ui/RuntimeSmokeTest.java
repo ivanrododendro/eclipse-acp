@@ -73,4 +73,20 @@ public class RuntimeSmokeTest {
             if (project.exists()) project.delete(true, true, null);
         }
     }
+
+    @Test
+    public void clipboardWorkspaceFileResolvesToTheSameSourceFileUsedByAtMention() throws Exception {
+        IProject project = ResourcesPlugin.getWorkspace().getRoot()
+                .getProject("eclipse-acp-clipboard-test-" + System.nanoTime());
+        try {
+            project.create(null);
+            project.open(null);
+            IFile file = project.getFile("copied-source.java");
+            file.create(new ByteArrayInputStream("class CopiedSource {}".getBytes(StandardCharsets.UTF_8)), true, null);
+
+            assertEquals(file, ChatComposer.workspaceFileFor(file.getLocation().toFile().toPath()));
+        } finally {
+            if (project.exists()) project.delete(true, true, null);
+        }
+    }
 }

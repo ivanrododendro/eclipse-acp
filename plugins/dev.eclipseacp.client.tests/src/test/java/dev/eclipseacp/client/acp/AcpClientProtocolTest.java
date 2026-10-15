@@ -165,6 +165,31 @@ public class AcpClientProtocolTest {
     }
 
     @Test
+    public void pdfAttachmentIsSentAsAnEmbeddedBinaryResource() throws Exception {
+        FakeTransport transport = new FakeTransport();
+        Path pdf = Files.createTempFile("acp-contract-", ".pdf");
+        byte[] pdfBytes = { '%', 'P', 'D', 'F' };
+        AcpClient client = new AcpClient("agent", "", new CapturingListener(), List.of(),
+                (command, arguments, workingDirectory, diagnosticConsumer, diagnosticErrorConsumer) -> new FakeProcess(),
+                (reader, writer, handler, errorHandler) -> transport);
+        try {
+            Files.write(pdf, pdfBytes);
+            client.connect(Path.of("/workspace/project")).join();
+            client.prompt("inspect", List.of(new PromptAttachment(pdf, "application/pdf"))).join();
+
+            var resource = transport.promptParams.getAsJsonArray("prompt").get(1).getAsJsonObject();
+            assertEquals("resource", resource.get("type").getAsString());
+            var embedded = resource.getAsJsonObject("resource");
+            assertEquals(pdf.toUri().toString(), embedded.get("uri").getAsString());
+            assertEquals("application/pdf", embedded.get("mimeType").getAsString());
+            assertEquals(Base64.getEncoder().encodeToString(pdfBytes), embedded.get("blob").getAsString());
+        } finally {
+            client.close();
+            Files.deleteIfExists(pdf);
+        }
+    }
+
+    @Test
     public void deliversUpdateReceivedBeforeNewSessionResponse() {
         FakeTransport transport = new FakeTransport();
         CapturingListener listener = new CapturingListener();

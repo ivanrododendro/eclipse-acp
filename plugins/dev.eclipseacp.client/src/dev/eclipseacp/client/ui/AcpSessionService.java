@@ -281,14 +281,20 @@ final class AcpSessionService {
         session.beginPrompt(expanded);
         List<PromptAttachment> attachments = List.copyOf(session.attachments);
         List<org.eclipse.core.resources.IFile> sourceFiles = List.copyOf(session.sourceFiles);
+        var externalSourceFiles = List.copyOf(session.externalSourceFiles);
         session.attachments.clear();
         session.sourceFiles.clear();
+        session.externalSourceFiles.clear();
         if (!attachments.isEmpty()) {
             session.append("> Attached: " + attachments.stream().map(item -> "`" + item.path().getFileName() + "`")
                     .collect(java.util.stream.Collectors.joining(", ")) + "\n\n");
         }
         if (!sourceFiles.isEmpty()) {
             session.append("> Source files: " + sourceFiles.stream().map(file -> "`" + file.getName() + "`")
+                    .collect(java.util.stream.Collectors.joining(", ")) + "\n\n");
+        }
+        if (!externalSourceFiles.isEmpty()) {
+            session.append("> Source files: " + externalSourceFiles.stream().map(file -> "`" + file.getFileName() + "`")
                     .collect(java.util.stream.Collectors.joining(", ")) + "\n\n");
         }
         if (session.firstPromptNeedsTranscriptReload) {
@@ -299,7 +305,7 @@ final class AcpSessionService {
         }
         changed(session);
         AgentClient client = session.client;
-        String sourceContext = EclipseContext.sourceFiles(sourceFiles);
+        String sourceContext = EclipseContext.sourceFiles(sourceFiles) + EclipseContext.externalSourceFiles(externalSourceFiles);
         String promptWithSources = sourceContext.isEmpty() ? expanded : expanded + "\n\n" + sourceContext;
         operations.run(session, () -> isOwned(session, client), () -> client.prompt(promptWithSources, attachments))
                 .whenComplete((ignored, failure) -> ui.accept(() -> {
@@ -310,6 +316,7 @@ final class AcpSessionService {
             if (failure != null) {
                 session.attachments.addAll(attachments);
                 session.sourceFiles.addAll(sourceFiles);
+                session.externalSourceFiles.addAll(externalSourceFiles);
                 session.promptDraft = draft == null ? "" : draft;
                 error(session, "Prompt failed", unwrap(failure));
                 presentation.draftReady(session, session.promptDraft);

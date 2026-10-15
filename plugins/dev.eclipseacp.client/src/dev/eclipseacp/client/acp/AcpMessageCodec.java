@@ -30,8 +30,8 @@ final class AcpMessageCodec {
         return result;
     }
 
-    /** Prepared bytes only: this codec never reads attachment paths. */
-    record BinaryContent(String mimeType, byte[] data) { }
+    /** Prepared bytes only; the path is used solely as the URI of an embedded resource. */
+    record BinaryContent(java.nio.file.Path path, String mimeType, byte[] data) { }
 
     static JsonObject promptParameters(String sessionId, String text, List<BinaryContent> binaries) {
         JsonObject content = new JsonObject();
@@ -41,9 +41,18 @@ final class AcpMessageCodec {
         prompt.add(content);
         for (BinaryContent attachment : binaries) {
             JsonObject binary = new JsonObject();
-            binary.addProperty("type", attachment.mimeType().startsWith("audio/") ? "audio" : "image");
-            binary.addProperty("mimeType", attachment.mimeType());
-            binary.addProperty("data", java.util.Base64.getEncoder().encodeToString(attachment.data()));
+            if (attachment.mimeType().startsWith("image/") || attachment.mimeType().startsWith("audio/")) {
+                binary.addProperty("type", attachment.mimeType().startsWith("audio/") ? "audio" : "image");
+                binary.addProperty("mimeType", attachment.mimeType());
+                binary.addProperty("data", java.util.Base64.getEncoder().encodeToString(attachment.data()));
+            } else {
+                binary.addProperty("type", "resource");
+                JsonObject resource = new JsonObject();
+                resource.addProperty("uri", attachment.path().toUri().toString());
+                resource.addProperty("mimeType", attachment.mimeType());
+                resource.addProperty("blob", java.util.Base64.getEncoder().encodeToString(attachment.data()));
+                binary.add("resource", resource);
+            }
             prompt.add(binary);
         }
         JsonObject params = new JsonObject();

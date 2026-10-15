@@ -33,6 +33,28 @@ import dev.eclipseacp.client.preferences.AgentProviderRegistry;
 
 public class AcpSessionServiceTest {
     @Test
+    public void copiedExternalHtmlIsSentAsSourceContextAndRetainedForRetry() throws Exception {
+        Harness h = new Harness();
+        ChatSessionModel session = h.open(project("first"));
+        var file = java.nio.file.Files.createTempFile("copied-report-", ".html");
+        try {
+            java.nio.file.Files.writeString(file, "<html>External report</html>");
+            ChatComposer.addExternalSourceFile(session, file);
+            ChatComposer.addExternalSourceFile(session, file);
+            assertEquals(1, session.externalSourceFiles.size());
+            h.service.sendPrompt(session, "Analyze this report");
+            assertTrue(h.client().promptText.contains("<html>External report</html>"));
+            assertTrue(h.client().promptText.contains(file.toString()));
+            assertTrue(session.externalSourceFiles.isEmpty());
+            h.client().prompt.completeExceptionally(new IOException("Retry"));
+            h.drainUi();
+            assertEquals(List.of(file), session.externalSourceFiles);
+        } finally {
+            java.nio.file.Files.deleteIfExists(file);
+        }
+    }
+
+    @Test
     public void retainsTemporaryImageForRetryAndDeletesItAfterSuccess() throws Exception {
         Harness h = new Harness();
         ChatSessionModel session = h.open(project("first"));
@@ -626,6 +648,7 @@ public class AcpSessionServiceTest {
         List<PromptAttachment> attachments;
         ConfigValue configValue;
         String restoredId;
+        String promptText;
         String activeSessionId;
         int promptCount;
         int connectCount;
@@ -649,6 +672,7 @@ public class AcpSessionServiceTest {
             return newSession;
         }
         @Override public CompletableFuture<Void> prompt(String text) {
+            promptText = text;
             promptCount++;
             return prompt;
         }

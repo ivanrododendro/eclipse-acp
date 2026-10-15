@@ -44,6 +44,7 @@ final class ChatSessionModel {
     final List<PromptAttachment> attachments = new ArrayList<>();
     /** Workspace source files explicitly included with the next prompt. */
     final List<IFile> sourceFiles = new ArrayList<>();
+    final List<java.nio.file.Path> externalSourceFiles = new ArrayList<>();
     final Map<String, String> commands = new LinkedHashMap<>();
     final Map<String, ConfigOption> configOptions = new LinkedHashMap<>();
     String sessionId;

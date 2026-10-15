@@ -74,6 +74,20 @@ final class EclipseContext {
         return context.toString();
     }
 
+    static String externalSourceFiles(List<java.nio.file.Path> files) {
+        StringBuilder context = new StringBuilder();
+        for (var file : files) {
+            try {
+                context.append("<eclipse-source-file path=\"").append(file).append("\">\n")
+                        .append(java.nio.file.Files.readString(file)).append("\n</eclipse-source-file>\n");
+            } catch (Exception exception) {
+                context.append("[Could not read source file ").append(file).append(": ")
+                        .append(exception.getMessage()).append("]\n");
+            }
+        }
+        return context.toString();
+    }
+
     private static String selection(IWorkbenchPage page) {
         IEditorPart editor = editor(page);
         TextInfo selection = editor == null ? null : text(editor.getSite().getSelectionProvider().getSelection());

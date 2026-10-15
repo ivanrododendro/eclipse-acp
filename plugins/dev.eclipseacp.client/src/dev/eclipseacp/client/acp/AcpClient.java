@@ -259,13 +259,10 @@ public final class AcpClient implements AgentClient, JsonRpcHandler {
                 if (attachment == null || attachment.path() == null) continue;
                 if (!PromptAttachmentPolicy.isSupportedMimeType(attachment.mimeType())) {
                     return CompletableFuture.failedFuture(new IllegalArgumentException(
-                            "Attachments must be images or audio files"));
+                            "Attachments must be images, audio files, or PDFs"));
                 }
                 byte[] data = Files.readAllBytes(attachment.path());
-                if (data.length > PromptAttachmentPolicy.MAX_BYTES) {
-                    return CompletableFuture.failedFuture(new IllegalArgumentException("Attachments must be at most 10 MiB"));
-                }
-                binaries.add(new AcpMessageCodec.BinaryContent(attachment.mimeType(), data));
+                binaries.add(new AcpMessageCodec.BinaryContent(attachment.path(), attachment.mimeType(), data));
             }
         } catch (IOException exception) {
             return CompletableFuture.failedFuture(exception);
