@@ -3,7 +3,11 @@ package dev.eclipseacp.client.ui;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
+import java.util.List;
+
 import org.junit.Test;
+
+import dev.eclipseacp.client.agent.ToolCall;
 
 public class GfmRendererTest {
     @Test
@@ -56,7 +60,7 @@ public class GfmRendererTest {
         assertTrue(html.contains("class=\"message message-agent\""));
         assertFalse(html.contains("<h2>You</h2>"));
         assertFalse(html.contains("<h2>Agent</h2>"));
-        assertFalse(html.contains("border-top:1px"));
+        assertFalse(html.contains(".message{border-top:1px"));
         assertTrue(html.contains("body{background:var(--bg)"));
         assertTrue(html.contains(".message-agent> :first-child{margin-top:0}"));
         assertTrue(html.contains("ul,ol{margin:10px 0;padding-inline-start:1.5em}"));
@@ -67,7 +71,65 @@ public class GfmRendererTest {
         String html = GfmRenderer.document("## Agent\n\nAnswer", "sans-serif", 10, null, "#a1b2c3");
 
         assertTrue(html.contains("--bg:#a1b2c3"));
-        assertTrue(html.contains("--line:#a1b2c3"));
+        assertTrue(html.contains("--line:rgba(20,28,44,.13)"));
+    }
+
+    @Test
+    public void rendersCodeAsACopyableLanguageCard() {
+        String html = GfmRenderer.document("```java\nrecord Person(String name) {}\n```");
+
+        assertTrue(html.contains("class=\"code-block\""));
+        assertTrue(html.contains("class=\"code-language\">Java</span>"));
+        assertTrue(html.contains("class=\"copy-code\""));
+        assertTrue(html.contains("record Person(String name) {}"));
+    }
+
+    @Test
+    public void rendersAgentEventsAsCompactSemanticCards() {
+        String html = GfmRenderer.document("> **Tool terminal:** Run tests — completed\n\n"
+                + "> **Usage:** totalTokens=42");
+
+        assertTrue(html.contains("class=\"agent-event event-tool\""));
+        assertTrue(html.contains("class=\"agent-event event-meta\""));
+    }
+
+    @Test
+    public void rendersToolCallsAsOneCollapsedAccordionWithACommandPreview() {
+        ToolCall tool = new ToolCall("tool-1", "Execute command", "execute", "completed", List.of(), List.of(),
+                "pwd && rg --files -g '*.class'", "/workspace", "", "ok");
+
+        String html = GfmRenderer.document(ChatMessageFormatter.toolCall(tool));
+
+        assertTrue(html.contains("<details class=\"agent-command\">"));
+        assertFalse(html.contains("<details class=\"agent-command\" open"));
+        assertTrue(html.contains("Tool execute:"));
+        assertTrue(html.contains("pwd &amp;&amp; rg --files -g '*.class'"));
+        assertTrue(html.contains("class=\"tool-expanded\""));
+    }
+
+    @Test
+    public void rendersImagesAsAccessibleLightboxThumbnails() {
+        String html = GfmRenderer.document("![Architecture](https://example.test/architecture.png)");
+
+        assertTrue(html.contains("class=\"transcript-image\""));
+        assertTrue(html.contains("alt=\"Architecture\""));
+        assertTrue(html.contains("loading=\"lazy\""));
+        assertTrue(html.contains("id='image-lightbox'"));
+    }
+
+    @Test
+    public void rendersAnInlinePngFixtureWithoutTreatingItAsAgentContent() {
+        // A valid 1×1 PNG used only to exercise the transcript renderer.
+        String png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/"
+                + "p8uY0QAAAABJRU5ErkJggg==";
+        String html = GfmRenderer.document("## You\n\n![Package Explorer](data:image/png;base64," + png
+                + " \"Render-only fixture\")\n\n## Agent\n\nRendered.");
+
+        assertTrue(html.contains("data:image/png;base64," + png));
+        assertTrue(html.contains("alt=\"Package Explorer\""));
+        assertTrue(html.contains("title=\"Render-only fixture\""));
+        assertTrue(html.contains("class=\"message message-user\""));
+        assertTrue(html.contains("class=\"message message-agent\""));
     }
 
     @Test

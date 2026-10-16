@@ -38,7 +38,7 @@ final class ChatSessionModel {
     boolean acceptingRestoredTranscript;
     boolean restoredAgentMessageOpen;
     final Map<String, ToolCall> toolCalls = new LinkedHashMap<>();
-    final Map<String, List<dev.eclipseacp.client.agent.FileDiff>> renderedToolDiffs = new LinkedHashMap<>();
+    private final Map<String, TranscriptFragment> renderedToolCalls = new LinkedHashMap<>();
     final WorkspaceFileLinks fileLinks;
     List<SessionInfo> savedSessions = List.of();
     final List<PromptAttachment> attachments = new ArrayList<>();
@@ -68,6 +68,29 @@ final class ChatSessionModel {
         transcriptMarkdown.append(text);
     }
 
+    /** Replaces status updates for one tool call in place, keeping a single transcript component. */
+    void upsertToolCall(String id, String markdown) {
+        TranscriptFragment previous = renderedToolCalls.get(id);
+        if (previous == null) {
+            int start = transcriptMarkdown.length();
+            append(markdown);
+            renderedToolCalls.put(id, new TranscriptFragment(start, transcriptMarkdown.length()));
+            return;
+        }
+        int oldEnd = previous.end;
+        int delta = markdown.length() - (oldEnd - previous.start);
+        transcriptMarkdown.replace(previous.start, oldEnd, markdown);
+        previous.end = previous.start + markdown.length();
+        if (delta == 0) return;
+        for (TranscriptFragment fragment : renderedToolCalls.values()) {
+            if (fragment != previous && fragment.start >= oldEnd) {
+                fragment.start += delta;
+                fragment.end += delta;
+            }
+        }
+        if (liveMessageStart >= oldEnd) liveMessageStart += delta;
+    }
+
     void appendRestoredUserText(String text) {
         if (!acceptingRestoredTranscript || text.isEmpty()) return;
         liveMessageStart = transcriptMarkdown.length();
@@ -86,9 +109,17 @@ final class ChatSessionModel {
     }
 
     void beginPrompt(String text) {
+        beginPrompt(text, "");
+    }
+
+    void beginPrompt(String text, String userContextMarkdown) {
         acceptingRestoredTranscript = false;
         restoredAgentMessageOpen = false;
         append("## You\n\n" + text + "\n\n");
+        if (userContextMarkdown != null && !userContextMarkdown.isBlank()) {
+            append(userContextMarkdown);
+            if (!userContextMarkdown.endsWith("\n\n")) append("\n\n");
+        }
         liveMessageStart = transcriptMarkdown.length();
         append("## Agent\n\n");
         agentMessageOpen = true;
@@ -105,4 +136,14 @@ final class ChatSessionModel {
 
     boolean isConnected() { return client != null; }
     boolean isBusy() { return agentMessageOpen || sessionTransitioning; }
+
+    private static final class TranscriptFragment {
+        private int start;
+        private int end;
+
+        private TranscriptFragment(int start, int end) {
+            this.start = start;
+            this.end = end;
+        }
+    }
 }

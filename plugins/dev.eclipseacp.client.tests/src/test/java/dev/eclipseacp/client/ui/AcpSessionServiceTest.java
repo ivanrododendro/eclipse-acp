@@ -329,6 +329,8 @@ public class AcpSessionServiceTest {
         assertTrue(session.attachments.isEmpty());
         assertEquals(List.of(attachment), h.client().attachments);
         assertEquals(1, h.client().promptCount);
+        String transcript = session.transcriptMarkdown.toString();
+        assertTrue(transcript.indexOf("**Attachments:**") < transcript.indexOf("## Agent"));
 
         h.client().prompt.completeExceptionally(new IOException("Prompt rejected"));
         h.drainUi();
@@ -488,12 +490,15 @@ public class AcpSessionServiceTest {
         ChatSessionModel session = h.open(project("first"));
         session.acceptingRestoredTranscript = true;
         AgentListener listener = h.client().listener;
-        ToolCall tool = new ToolCall("search", "Search files", "search", "completed", List.of(),
-                List.of(), "", "", "", "");
+        ToolCall started = new ToolCall("search", "Search files", "search", "in_progress", List.of(),
+                List.of(), "rg --files", "", "", "");
+        ToolCall completed = new ToolCall("search", "Search files", "search", "completed", List.of(),
+                List.of(), "rg --files", "", "", "Found files");
 
         listener.onUserText("First question");
         listener.onAgentText("Before tool");
-        listener.onToolCall(tool);
+        listener.onToolCall(started);
+        listener.onToolCall(completed);
         listener.onAgentText("After tool");
         listener.onUserText("Second question");
         h.drainUi();
@@ -502,13 +507,17 @@ public class AcpSessionServiceTest {
         String transcript = session.transcriptMarkdown.toString();
         int firstUser = transcript.indexOf("First question");
         int beforeTool = transcript.indexOf("Before tool");
-        int toolCall = transcript.indexOf("**Tool search:** Search files");
+        int toolCall = transcript.indexOf("```acp-tool");
         int afterTool = transcript.indexOf("After tool");
         int secondUser = transcript.indexOf("Second question");
         assertTrue(firstUser >= 0);
         assertTrue(firstUser < beforeTool);
         assertTrue(beforeTool < toolCall);
         assertTrue(toolCall < afterTool);
+        assertEquals(toolCall, transcript.lastIndexOf("```acp-tool"));
+        String rendered = GfmRenderer.document(transcript);
+        assertTrue(rendered.contains("class=\"tool-status completed\">completed"));
+        assertFalse(rendered.contains("class=\"tool-status in_progress\""));
         assertTrue(afterTool < secondUser);
         assertEquals(afterTool, transcript.lastIndexOf("After tool"));
     }

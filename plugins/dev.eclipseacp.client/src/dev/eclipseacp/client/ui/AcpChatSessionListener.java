@@ -130,23 +130,11 @@ final class AcpChatSessionListener implements AgentListener {
             if (session.hideAgentCommands) {
                 sessions.setStatus(session, ChatMessageFormatter.toolCallStatus(toolCall));
             } else {
-                appendNewToolDiffs(toolCall);
-                append("\n> **Tool " + toolCall.kind() + ":** " + toolCall.title() + " — " + toolCall.status()
-                        + (toolCall.hasDiffs() ? " (" + toolCall.diffs().size() + " file change(s))" : "")
-                        + "\n\n");
-                if (toolCall.kind().toLowerCase(java.util.Locale.ROOT).contains("terminal")) {
-                    append(ChatMessageFormatter.terminalOutput(toolCall.terminalOutput()));
-                }
+                session.upsertToolCall(toolCall.id(), ChatMessageFormatter.toolCall(toolCall));
+                sessions.transcriptChanged(session);
             }
             sessions.changed(session);
         });
-    }
-
-    private void appendNewToolDiffs(ToolCall toolCall) {
-        if (toolCall.diffs().isEmpty() || toolCall.diffs().equals(session.renderedToolDiffs.get(toolCall.id()))) return;
-        session.renderedToolDiffs.put(toolCall.id(), List.copyOf(toolCall.diffs()));
-        append("\n> **File changes:** " + toolCall.diffs().size() + " file change(s)\n"
-                + ChatMessageFormatter.diffPreview(toolCall.diffs()) + "\n\n");
     }
 
     @Override public void onAvailableCommands(List<AgentCommand> commands) {

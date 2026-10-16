@@ -278,25 +278,16 @@ final class AcpSessionService {
      */
     void sendPrompt(ChatSessionModel session, String draft, String expanded) {
         if (session == null || !session.isConnected() || session.isBusy() || expanded == null || expanded.isBlank()) return;
-        session.beginPrompt(expanded);
         List<PromptAttachment> attachments = List.copyOf(session.attachments);
         List<org.eclipse.core.resources.IFile> sourceFiles = List.copyOf(session.sourceFiles);
         var externalSourceFiles = List.copyOf(session.externalSourceFiles);
+        List<String> sourceFileNames = new java.util.ArrayList<>();
+        sourceFiles.forEach(file -> sourceFileNames.add(file.getName()));
+        externalSourceFiles.forEach(file -> sourceFileNames.add(file.getFileName().toString()));
+        session.beginPrompt(expanded, ChatMessageFormatter.promptContext(attachments, sourceFileNames));
         session.attachments.clear();
         session.sourceFiles.clear();
         session.externalSourceFiles.clear();
-        if (!attachments.isEmpty()) {
-            session.append("> Attached: " + attachments.stream().map(item -> "`" + item.path().getFileName() + "`")
-                    .collect(java.util.stream.Collectors.joining(", ")) + "\n\n");
-        }
-        if (!sourceFiles.isEmpty()) {
-            session.append("> Source files: " + sourceFiles.stream().map(file -> "`" + file.getName() + "`")
-                    .collect(java.util.stream.Collectors.joining(", ")) + "\n\n");
-        }
-        if (!externalSourceFiles.isEmpty()) {
-            session.append("> Source files: " + externalSourceFiles.stream().map(file -> "`" + file.getFileName() + "`")
-                    .collect(java.util.stream.Collectors.joining(", ")) + "\n\n");
-        }
         if (session.firstPromptNeedsTranscriptReload) {
             session.firstPromptNeedsTranscriptReload = false;
             presentation.transcriptReloaded(session);
