@@ -5,7 +5,7 @@ import static dev.eclipseacp.client.acp.AcpMessageCodec.configOptions;
 import static dev.eclipseacp.client.acp.AcpMessageCodec.nonBlank;
 import static dev.eclipseacp.client.acp.AcpMessageCodec.object;
 import static dev.eclipseacp.client.acp.AcpMessageCodec.string;
-import static dev.eclipseacp.client.acp.AcpMessageCodec.textFrom;
+import static dev.eclipseacp.client.acp.AcpMessageCodec.transcriptMarkdownFrom;
 import static dev.eclipseacp.client.acp.AcpMessageCodec.usage;
 
 import java.util.List;
@@ -63,10 +63,10 @@ final class AcpSessionUpdateDispatcher {
         }
 
         if ("user_message_chunk".equals(kind)) {
-            String text = textFrom(update.get("content"));
+            String text = transcriptMarkdownFrom(update.get("content"));
             if (!text.isEmpty()) listener.onUserText(text);
         } else if ("agent_message_chunk".equals(kind)) {
-            String text = textFrom(update.get("content"));
+            String text = transcriptMarkdownFrom(update.get("content"));
             if (!text.isEmpty()) {
                 if (SILENT_HEARTBEAT.matcher(text).matches()) {
                     diagnostics.info("Ignoring non-user-facing DONT_NOTIFY heartbeat: sessionId='" + updateSessionId + "'");

@@ -523,6 +523,38 @@ public class AcpSessionServiceTest {
     }
 
     @Test
+    public void combinesConsecutiveRestoredUserChunksIntoOneMessage() {
+        Harness h = new Harness();
+        ChatSessionModel session = h.open(project("first"));
+        session.acceptingRestoredTranscript = true;
+        AgentListener listener = h.client().listener;
+
+        listener.onUserText("Describe this image: ");
+        listener.onUserText("![Fixture](data:image/png;base64,abc)");
+        listener.onAgentText("It is only a rendering fixture.");
+        h.drainUi();
+        while (!h.timers.isEmpty()) h.timers.remove().run();
+
+        assertEquals("## You\n\nDescribe this image: \n\n![Fixture](data:image/png;base64,abc)\n\n"
+                + "## Agent\n\nIt is only a rendering fixture.", session.transcriptMarkdown.toString());
+        assertEquals(1, occurrences(session.transcriptMarkdown.toString(), "## You"));
+        assertEquals(1, occurrences(session.transcriptMarkdown.toString(), "## Agent"));
+    }
+
+    @Test
+    public void keepsUsageUpdatesOutOfTheTranscript() {
+        Harness h = new Harness();
+        ChatSessionModel session = h.open(project("first"));
+
+        h.client().listener.onUsage(new dev.eclipseacp.client.agent.Usage(64_000L, 258_400L, null, null));
+        h.drainUi();
+
+        assertEquals(new dev.eclipseacp.client.agent.Usage(64_000L, 258_400L, null, null), session.usage);
+        assertFalse(session.transcriptMarkdown.toString().contains("Usage:"));
+        assertEquals("", session.transcriptMarkdown.toString());
+    }
+
+    @Test
     public void ignoresQueuedEventsForAReplacedChat() {
         Harness h = new Harness();
         ChatSessionModel old = h.open(project("first"));
@@ -556,6 +588,10 @@ public class AcpSessionServiceTest {
         session.appendAgentText("New answer");
         assertFalse(session.transcriptMarkdown.toString().contains("Late replay"));
         assertTrue(session.transcriptMarkdown.toString().endsWith("## You\n\nNew question\n\n## Agent\n\nNew answer"));
+    }
+
+    private static int occurrences(String text, String needle) {
+        return text.split(java.util.regex.Pattern.quote(needle), -1).length - 1;
     }
 
     private static SessionInfo info(String id, String cwd) {

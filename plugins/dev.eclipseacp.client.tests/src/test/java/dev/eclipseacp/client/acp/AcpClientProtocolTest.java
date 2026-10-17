@@ -262,6 +262,51 @@ public class AcpClientProtocolTest {
     }
 
     @Test
+    public void forwardsRestoredUserImagesAsMarkdownImages() {
+        CapturingListener listener = new CapturingListener();
+        AcpClient client = new AcpClient("unused", "", listener);
+        var content = new com.google.gson.JsonArray();
+        JsonObject text = new JsonObject();
+        text.addProperty("type", "text");
+        text.addProperty("text", "Look here: ");
+        content.add(text);
+        JsonObject image = new JsonObject();
+        image.addProperty("type", "image");
+        image.addProperty("mimeType", "image/png");
+        image.addProperty("data", "AQID");
+        content.add(image);
+        JsonObject update = new JsonObject();
+        update.addProperty("sessionUpdate", "user_message_chunk");
+        update.add("content", content);
+        JsonObject params = new JsonObject();
+        params.addProperty("sessionId", "session-1");
+        params.add("update", update);
+
+        client.onNotification("session/update", params);
+
+        assertEquals("Look here: \n\n![Image](data:image/png;base64,AQID)", listener.userText);
+    }
+
+    @Test
+    public void convertsCodexImageLinksWhenReplayingAUserMessage() {
+        CapturingListener listener = new CapturingListener();
+        AcpClient client = new AcpClient("unused", "", listener);
+        JsonObject content = new JsonObject();
+        content.addProperty("type", "text");
+        content.addProperty("text", "Look here: [@image](data:image/png;base64,AQID)");
+        JsonObject update = new JsonObject();
+        update.addProperty("sessionUpdate", "user_message_chunk");
+        update.add("content", content);
+        JsonObject params = new JsonObject();
+        params.addProperty("sessionId", "session-1");
+        params.add("update", update);
+
+        client.onNotification("session/update", params);
+
+        assertEquals("Look here: \n\n![Image](data:image/png;base64,AQID)\n\n", listener.userText);
+    }
+
+    @Test
     public void doesNotForwardToolContentMislabelledAsAnAgentMessageChunk() {
         CapturingListener listener = new CapturingListener();
         AcpClient client = new AcpClient("unused", "", listener);
@@ -414,8 +459,10 @@ public class AcpClientProtocolTest {
 
     private static class CapturingListener implements AgentListener {
         private String text;
+        private String userText;
 
         @Override public void onAgentText(String value) { text = value; }
+        @Override public void onUserText(String value) { userText = value; }
         @Override public void onStatus(String status) { }
         @Override public void onError(String message, Throwable error) { }
         @Override public CompletableFuture<String> requestPermission(String title, List<PermissionOption> options) {

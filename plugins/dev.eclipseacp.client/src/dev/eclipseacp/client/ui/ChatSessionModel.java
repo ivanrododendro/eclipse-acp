@@ -36,6 +36,10 @@ final class ChatSessionModel {
     boolean firstPromptNeedsTranscriptReload = true;
     boolean loadsSessionTranscript;
     boolean acceptingRestoredTranscript;
+    /** True while session/load is still replaying chunks for the same user message. */
+    boolean restoredUserMessageOpen;
+    /** True when the last restored user chunk was a standalone Markdown image. */
+    boolean restoredUserImageOpen;
     boolean restoredAgentMessageOpen;
     final Map<String, ToolCall> toolCalls = new LinkedHashMap<>();
     private final Map<String, TranscriptFragment> renderedToolCalls = new LinkedHashMap<>();
@@ -93,16 +97,26 @@ final class ChatSessionModel {
 
     void appendRestoredUserText(String text) {
         if (!acceptingRestoredTranscript || text.isEmpty()) return;
-        liveMessageStart = transcriptMarkdown.length();
-        append("## You\n\n" + text + "\n\n");
+        if (!restoredUserMessageOpen) {
+            liveMessageStart = transcriptMarkdown.length();
+            append("## You\n\n");
+            restoredUserMessageOpen = true;
+        } else if (isStandaloneMarkdownImage(text) || restoredUserImageOpen) {
+            append("\n\n");
+        }
+        append(text);
+        restoredUserImageOpen = isStandaloneMarkdownImage(text);
         restoredAgentMessageOpen = false;
     }
 
     void appendAgentText(String text) {
         if (text.isEmpty()) return;
         if (acceptingRestoredTranscript && !restoredAgentMessageOpen) {
+            if (restoredUserMessageOpen) append("\n\n");
             liveMessageStart = transcriptMarkdown.length();
             append("## Agent\n\n");
+            restoredUserMessageOpen = false;
+            restoredUserImageOpen = false;
             restoredAgentMessageOpen = true;
         }
         append(text);
@@ -114,6 +128,8 @@ final class ChatSessionModel {
 
     void beginPrompt(String text, String userContextMarkdown) {
         acceptingRestoredTranscript = false;
+        restoredUserMessageOpen = false;
+        restoredUserImageOpen = false;
         restoredAgentMessageOpen = false;
         append("## You\n\n" + text + "\n\n");
         if (userContextMarkdown != null && !userContextMarkdown.isBlank()) {
@@ -123,6 +139,11 @@ final class ChatSessionModel {
         liveMessageStart = transcriptMarkdown.length();
         append("## Agent\n\n");
         agentMessageOpen = true;
+    }
+
+    private static boolean isStandaloneMarkdownImage(String text) {
+        String trimmed = text.trim();
+        return trimmed.startsWith("![") && trimmed.endsWith(")") && !trimmed.contains("\n");
     }
 
     boolean canListSessions() {

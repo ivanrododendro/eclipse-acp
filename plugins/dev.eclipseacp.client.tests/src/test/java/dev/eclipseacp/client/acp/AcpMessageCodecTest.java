@@ -152,6 +152,50 @@ public class AcpMessageCodecTest {
     }
 
     @Test
+    public void putsRestoredImageContentOnItsOwnMarkdownBlock() {
+        String markdown = AcpMessageCodec.transcriptMarkdownFrom(JsonParser.parseString("""
+                [{"type":"text","text":"Look at this: "},
+                 {"type":"image","mimeType":"image/png","data":"AQID"}]
+                """));
+
+        assertEquals("Look at this: \n\n![Image](data:image/png;base64,AQID)", markdown);
+    }
+
+    @Test
+    public void preservesADataUrlProvidedByTheRestoringAgent() {
+        String markdown = AcpMessageCodec.transcriptMarkdownFrom(JsonParser.parseString("""
+                {"type":"image","data":"data:image/png;base64,AQID"}
+                """));
+
+        assertEquals("![Image](data:image/png;base64,AQID)", markdown);
+    }
+
+    @Test
+    public void convertsCodexRestoredImageLinksToMarkdownImages() {
+        String markdown = AcpMessageCodec.transcriptMarkdownFrom(JsonParser.parseString("""
+                {"type":"text","text":"Look here: [@image](data:image/png;base64,AQID)"}
+                """));
+
+        assertEquals("Look here: \n\n![Image](data:image/png;base64,AQID)\n\n", markdown);
+    }
+
+    @Test
+    public void leavesOrdinaryImageMentionsAndRemoteLinksUnchanged() {
+        String markdown = AcpMessageCodec.transcriptMarkdownFrom(JsonParser.parseString("""
+                {"type":"text","text":"@image [@image](https://example.test/image.png)"}
+                """));
+
+        assertEquals("@image [@image](https://example.test/image.png)", markdown);
+    }
+
+    @Test
+    public void ignoresInvalidImageContentWhenRestoringTheTranscript() {
+        assertEquals("", AcpMessageCodec.transcriptMarkdownFrom(JsonParser.parseString("""
+                {"type":"image","mimeType":"application/pdf","data":"AQID"}
+                """)));
+    }
+
+    @Test
     public void keepsAbsentUsageMetricsDistinctFromZero() {
         var usage = AcpMessageCodec.usage(JsonParser.parseString("""
                 {"inputTokens":0,"used":42,"size":100,"cost":"0.01"}

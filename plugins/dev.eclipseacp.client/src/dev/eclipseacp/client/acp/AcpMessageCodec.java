@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.regex.Pattern;
 
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
@@ -21,6 +22,12 @@ import dev.eclipseacp.client.agent.PermissionOption;
 
 /** Stateless ACP message conversion, independent of transport, lifecycle and Eclipse. */
 final class AcpMessageCodec {
+    private static final Pattern INLINE_IMAGE_DATA_URL = Pattern.compile(
+            "data:image/[A-Za-z0-9.+-]+;base64,[A-Za-z0-9+/=_-]+", Pattern.CASE_INSENSITIVE);
+    private static final Pattern RESTORED_INLINE_IMAGE_LINK = Pattern.compile(
+            "\\[@image\\]\\((data:image/[A-Za-z0-9.+-]+;base64,[A-Za-z0-9+/=_-]+)\\)",
+            Pattern.CASE_INSENSITIVE);
+
     private AcpMessageCodec() { }
 
     static JsonObject elicitationResult(String answer) {
@@ -208,6 +215,82 @@ final class AcpMessageCodec {
             text.append(textFrom(child));
         }
         return text.toString();
+    }
+
+    /**
+     * Converts ACP chat content to Markdown suitable for the transcript. Unlike
+     * {@link #textFrom(JsonElement)}, this retains inline image blocks: a loaded
+     * session replays the original user prompt, including its attachments.
+     */
+    static String transcriptMarkdownFrom(JsonElement element) {
+        if (element == null || element.isJsonNull()) return "";
+        if (element.isJsonPrimitive()) {
+            JsonPrimitive value = element.getAsJsonPrimitive();
+            return value.isString() ? value.getAsString() : "";
+        }
+        if (element.isJsonObject()) {
+            JsonObject object = element.getAsJsonObject();
+            String type = string(object, "type");
+            if ("image".equals(type)) return imageMarkdown(object);
+            if ("text".equals(type) || !object.has("type")) {
+                if (object.has("text") && object.get("text").isJsonPrimitive()) {
+                    return transcriptText(object.get("text").getAsString());
+                }
+            }
+            // Keep the same compatibility for wrapper objects as textFrom, but
+            // never turn declared non-message content (for example tool results)
+            // into transcript text.
+            return object.has("type") && !"image".equals(type) && !"text".equals(type)
+                    ? "" : transcriptMarkdownFrom(object.get("content"));
+        }
+        StringBuilder markdown = new StringBuilder();
+        boolean previousWasImage = false;
+        for (JsonElement child : element.getAsJsonArray()) {
+            String part = transcriptMarkdownFrom(child);
+            if (part.isEmpty()) continue;
+            boolean image = isImageContent(child);
+            if ((image && markdown.length() > 0) || previousWasImage) appendParagraphBreak(markdown);
+            markdown.append(part);
+            previousWasImage = image;
+        }
+        return markdown.toString();
+    }
+
+    private static boolean isImageContent(JsonElement element) {
+        return element != null && element.isJsonObject()
+                && "image".equals(string(element.getAsJsonObject(), "type"));
+    }
+
+    private static void appendParagraphBreak(StringBuilder markdown) {
+        if (!markdown.toString().endsWith("\n\n")) markdown.append("\n\n");
+    }
+
+    private static String transcriptText(String text) {
+        if (text == null || text.isEmpty()) return "";
+        // codex-acp reconstructs persisted input_image items as a text link. It
+        // deliberately uses [@image](...), so a generic Markdown client displays
+        // an @image link. The data URL is the original image and can be rendered
+        // by this transcript as the equivalent image node.
+        return RESTORED_INLINE_IMAGE_LINK.matcher(text).replaceAll("\n\n![Image]($1)\n\n");
+    }
+
+    private static String imageMarkdown(JsonObject image) {
+        String mimeType = string(image, "mimeType");
+        String data = string(image, "data");
+        String source = imageSource(mimeType, data);
+        if (source.isBlank()) source = imageSource(mimeType, string(image, "uri"));
+        return source.isBlank() ? "" : "![Image](" + source + ")";
+    }
+
+    private static String imageSource(String mimeType, String value) {
+        if (value == null || value.isBlank()) return "";
+        // Some agents replay the original data URL rather than raw Base64.
+        // Prefixing it a second time leaves only the "Image" alt text visible.
+        if (value.regionMatches(true, 0, "data:", 0, 5)) {
+            return INLINE_IMAGE_DATA_URL.matcher(value).matches() ? value : "";
+        }
+        if (!mimeType.startsWith("image/")) return "";
+        return "data:" + mimeType + ";base64," + value;
     }
 
     static JsonObject object(JsonElement element) {
