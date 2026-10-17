@@ -18,6 +18,8 @@ import org.eclipse.swt.dnd.Clipboard;
 import org.eclipse.swt.dnd.FileTransfer;
 import org.eclipse.swt.dnd.ImageTransfer;
 import org.eclipse.swt.graphics.ImageData;
+import org.eclipse.swt.graphics.PaletteData;
+import org.eclipse.swt.graphics.RGB;
 import org.eclipse.swt.graphics.ImageLoader;
 import org.eclipse.swt.graphics.Color;
 import org.eclipse.swt.graphics.Font;
