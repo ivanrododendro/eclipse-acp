@@ -371,7 +371,7 @@ final class ChatComposer {
         boolean complete = false;
         try {
             ImageLoader loader = new ImageLoader();
-            loader.data = new ImageData[] { data };
+            loader.data = new ImageData[] { normalizeForPng(data) };
             try (var output = Files.newOutputStream(path)) {
                 loader.save(output, SWT.IMAGE_PNG);
             }
@@ -383,6 +383,24 @@ final class ChatComposer {
         } finally {
             if (!complete) Files.deleteIfExists(path);
         }
+    }
+
+    /**
+     * Converts potentially platform-native clipboard pixels to a stable direct RGBA layout.
+     * SWT clipboard ImageData may use a palette or byte order that ImageLoader does not
+     * round-trip identically on every platform.
+     */
+    private static ImageData normalizeForPng(ImageData source) {
+        PaletteData palette = new PaletteData(0x00ff0000, 0x0000ff00, 0x000000ff);
+        ImageData normalized = new ImageData(source.width, source.height, 32, palette);
+        for (int y = 0; y < source.height; y++) {
+            for (int x = 0; x < source.width; x++) {
+                RGB color = source.palette.getRGB(source.getPixel(x, y));
+                normalized.setPixel(x, y, palette.getPixel(color));
+                normalized.setAlpha(x, y, source.getAlpha(x, y));
+            }
+        }
+        return normalized;
     }
 
     private static boolean isPasteShortcut(KeyEvent event) {
